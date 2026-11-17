@@ -333,6 +333,9 @@ skills se copian en `~/claude-code/.claude/skills/` y las instrucciones en
 `./start.sh test` integra una prueba de hardware y salud por SSH. La primera
 ejecución crea un archivo local con permisos `0600`:
 
+> Si estás evaluando una unidad nueva o usada antes de pagar, sigue la guía
+> **[Cómo comprobar un DGX Spark antes de comprarlo](docs/comprobar-spark.md)**.
+
 ```text
 config/dgx-health-check/dgx-spark.env
 ```
@@ -553,6 +556,7 @@ Modelo completo en [Seguridad](docs/seguridad.md).
 ## Documentación adicional
 
 - **[Quickstart: desde GitHub hasta el primer despliegue](docs/quickstart.md)**
+- **[Cómo comprobar un DGX Spark antes de comprarlo](docs/comprobar-spark.md)**
 - [Guía de uso por secciones](docs/guia-de-uso.md)
 - [Configuración: variables, secretos y servicios opcionales](docs/configuracion.md)
 - [Referencia completa de la API](docs/api.md)

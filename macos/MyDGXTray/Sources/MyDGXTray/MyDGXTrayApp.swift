@@ -18,7 +18,33 @@ struct MyDGXTrayApp: App {
             }
             return
         }
+        if arguments.contains("--check-for-updates") || arguments.contains("--install-update") {
+            let install = arguments.contains("--install-update")
+            Task { @MainActor in
+                let updater = AppUpdater.shared
+                await updater.check()
+                print("versión actual: \(updater.currentVersion)")
+                switch updater.state {
+                case .available(let release):
+                    print("disponible: \(release.version) (\(release.tag))")
+                    guard install else { exit(0) }
+                    await updater.install(release)
+                    if case .failed(let error) = updater.state { print("error: \(error)") }
+                    exit(1)
+                case .upToDate:
+                    print("al día")
+                    exit(0)
+                case .failed(let error):
+                    print("error: \(error)")
+                    exit(1)
+                default:
+                    exit(1)
+                }
+            }
+            return
+        }
         AppNotifications.requestAuthorization()
+        AppUpdater.shared.startPeriodicChecks()
         model.startPolling(
             autoConnect: !CommandLine.arguments.contains("--deploy-active")
         )

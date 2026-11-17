@@ -99,7 +99,12 @@ Si ya tienes una clave SSH autorizada, marca **Ya tengo una clave SSH** y elíge
 la contraseña pasa a ser opcional. El nombre del equipo se rellena con el modelo
 detectado y puedes cambiarlo.
 
-![Paso 2: inicio de sesión y comprobaciones](images/setup-connect.png)
+![Paso 2: usuario y contraseña del Spark](images/setup-connect.png)
+
+Con una clave propia, la lista marca **no hacía falta** en la autorización y debajo
+aparece lo detectado: equipo, sistema, GPU y estado de MyDGX.
+
+![Paso 2: comprobaciones completadas con una clave SSH existente](images/setup-connect-checks.png)
 
 ## 4. Paso 3 · Instalar
 
@@ -115,16 +120,15 @@ funcionando, verás **Conectar** (y **Reinstalar** para actualizarlo).
 Si algo falla, pulsa **Ver registro detallado** o **Reintentar**: lo ya instalado
 se conserva.
 
-![Paso 3: instalación con progreso por fases](images/setup-install.png)
+![Paso 3: MyDGX ya instalado, con Conectar y Reinstalar](images/setup-install.png)
 
 ## 5. Paso 4 · Listo
 
 El asistente muestra un resumen del equipo. Pulsa **Abrir Dashboard** o
-**Terminar**; el menú de MyDGXTray ya aparece completo.
+**Terminar**; el menú de MyDGXTray ya aparece completo. Desde él puedes abrir Open
+WebUI, ComfyUI, Terminal SSH y las aplicaciones web de los perfiles.
 
 ![Paso 4: Spark listo](images/setup-done.png)
- Desde él puedes abrir Open
-WebUI, ComfyUI, Terminal SSH y las aplicaciones web de los perfiles.
 
 Si el administrador activó una contraseña web, introdúcela en la pantalla de
 inicio de sesión del dashboard.
@@ -133,7 +137,9 @@ inicio de sesión del dashboard.
 
 Abre **Preferencias** y pulsa la **varita mágica**: es el mismo asistente. Para un
 servidor remoto escribe en el paso 1 su dominio o IP pública y su puerto SSH.
-Después puedes añadir una **IP o hostname público** con el **puerto público/NAT**
+Si el Spark ya estaba añadido, el asistente lo reconoce por su huella SSH, su
+nombre de host o su dirección y puerto. En ese caso actualiza el perfil existente
+en vez de duplicarlo. Después puedes añadir una **IP o hostname público** con el **puerto público/NAT**
 en Preferencias; el Tray prueba primero la LAN y cambia a Internet si no
 responde. Es preferible acceder mediante VPN. Si publicas SSH directamente, usa
 autenticación por clave, desactiva contraseñas después de verificar el acceso y

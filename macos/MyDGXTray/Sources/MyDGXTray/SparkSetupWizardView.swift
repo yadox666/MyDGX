@@ -426,6 +426,15 @@ private struct ConnectStepView: View {
                 FactsCard(facts: facts)
             }
 
+            if let existing = wizard.existingProfile {
+                Label(
+                    "Este Spark ya estaba en MyDGX como «\(existing.alias)». Se actualizará ese perfil en vez de crear otro.",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+                .font(.callout)
+                .foregroundStyle(.blue)
+            }
+
             if !wizard.hostFingerprint.isEmpty {
                 Label("Huella del Spark guardada: \(wizard.hostFingerprint)", systemImage: "lock.shield")
                     .font(.caption.monospaced())

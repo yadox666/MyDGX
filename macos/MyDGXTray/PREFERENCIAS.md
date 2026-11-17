@@ -16,6 +16,9 @@ La columna izquierda ofrece estas acciones:
 - **−**: elimina el perfil seleccionado. Debe permanecer al menos uno.
 - **Varita**: abre el Asistente de instalación Spark (buscar, conectar, instalar y
   listo) para añadir otro Spark.
+- **Aplicación › Buscar actualizaciones**: consulta las Releases de GitHub. Si hay
+  una versión nueva, **Descargar e instalar** la verifica (SHA-256 y firma), deja
+  la versión anterior en la Papelera y reinicia la app.
 - **Usar este equipo**: convierte el perfil en el equipo activo. La telemetría,
   enlaces, perfiles de inferencia y acciones remotas usarán este equipo.
 

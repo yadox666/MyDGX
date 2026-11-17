@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var updater = AppUpdater.shared
     @State private var draft: MyDGXConfiguration
     @State private var selectedID: String?
     @State private var apiKey = ""
@@ -174,6 +175,7 @@ struct SettingsView: View {
                 Text("macOS puede solicitar autorización en Ajustes del Sistema → Ítems de inicio.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                UpdateRow(updater: updater, model: model)
             }
 
             Section("Perfil") {
@@ -444,5 +446,80 @@ struct SettingsView: View {
         guard alert.runModal() == .alertFirstButtonReturn, save() else { return }
         message = "Despliegue iniciado; consulta el progreso en esta sección."
         model.deployConnection(id: profile.id)
+    }
+}
+
+struct UpdateRow: View {
+    @ObservedObject var updater: AppUpdater
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Versión \(updater.currentVersion)")
+                Spacer()
+                if let release = updater.availableRelease {
+                    Link("Novedades", destination: release.pageURL)
+                    Button("Descargar e instalar \(release.version)") { confirmInstall(release) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.operationInProgress)
+                } else {
+                    Button("Buscar actualizaciones") { Task { await updater.check() } }
+                        .disabled(updater.isBusy)
+                }
+            }
+            status
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .onAppear { updater.checkIfStale() }
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        switch updater.state {
+        case .idle:
+            Text("Las versiones se descargan de GitHub (\(AppUpdater.repository)) y se verifican con SHA-256 y codesign.")
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Buscando actualizaciones…")
+            }
+        case .upToDate:
+            Text("MyDGXTray está al día\(checkedSuffix).")
+        case .available(let release):
+            Text("Hay una versión nueva: \(release.version). Se cerrará y volverá a abrir MyDGXTray; la configuración no cambia.")
+        case .downloading(let fraction):
+            HStack(spacing: 6) {
+                ProgressView(value: fraction).frame(width: 160)
+                Text("Descargando… \(Int(fraction * 100)) %")
+            }
+        case .installing:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Verificando e instalando…")
+            }
+        case .failed(let error):
+            Text(error).foregroundStyle(.red)
+        }
+    }
+
+    private var checkedSuffix: String {
+        guard let date = updater.lastChecked else { return "" }
+        return " (comprobado a las \(date.formatted(date: .omitted, time: .shortened)))"
+    }
+
+    private func confirmInstall(_ release: AppUpdater.Release) {
+        let alert = NSAlert()
+        alert.messageText = "¿Actualizar MyDGXTray a \(release.version)?"
+        alert.informativeText = """
+        Se descargará \(release.archiveName) desde GitHub, se comprobará su SHA-256 y su firma, \
+        y la versión \(updater.currentVersion) irá a la Papelera. MyDGXTray se reiniciará; \
+        el túnel SSH y la configuración se conservan.
+        """
+        alert.addButton(withTitle: "Actualizar y reiniciar")
+        alert.addButton(withTitle: "Cancelar")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task { await updater.install(release) }
     }
 }

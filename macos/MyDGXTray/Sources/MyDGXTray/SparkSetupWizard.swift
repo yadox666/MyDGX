@@ -100,6 +100,8 @@ final class SparkSetupWizard: ObservableObject {
     @Published private(set) var connecting = false
     @Published private(set) var hostFingerprint = ""
     @Published private(set) var facts: SparkSetup.SparkFacts?
+    /// Profile that already points at this Spark; the assistant updates it instead of adding another.
+    @Published private(set) var existingProfile: ConnectionProfile?
 
     // Step 3
     @Published private(set) var installing = false
@@ -372,7 +374,18 @@ final class SparkSetupWizard: ObservableObject {
                 let inspected = try await SparkSetup.inspect(profile: profile)
                 facts = inspected
                 let guessedAlias = suggestedAlias(for: selected)
-                if alias == guessedAlias || alias.isEmpty {
+                let previousMatch = existingProfile
+                existingProfile = await matchingProfile(
+                    host: profile.ssh.host,
+                    port: profile.ssh.port,
+                    hostname: inspected.hostname,
+                    fingerprints: scan.allFingerprints
+                )
+                if let existingProfile {
+                    if alias == guessedAlias || alias.isEmpty || alias == previousMatch?.alias {
+                        alias = existingProfile.alias
+                    }
+                } else if alias == guessedAlias || alias.isEmpty || alias == previousMatch?.alias {
                     alias = uniqueAlias("\(inspected.device.brand) \(inspected.device.model)")
                 }
                 mark("inspect", .done)
@@ -638,11 +651,71 @@ final class SparkSetupWizard: ObservableObject {
 
     private func finalProfile(for candidate: Candidate) -> ConnectionProfile {
         var profile = buildProfile(for: candidate)
+        if let existingProfile {
+            profile = Self.merge(existing: existingProfile, verified: profile)
+        }
         if let facts {
             profile.detectedDeviceModel = "\(facts.device.brand) \(facts.device.model)"
             profile.detectedDeviceVariant = facts.device.variant
         }
         return profile
+    }
+
+    /// Same SSH host key, same hostname or same host:port as a saved profile means the same Spark.
+    private func matchingProfile(
+        host: String,
+        port: Int,
+        hostname: String,
+        fingerprints: Set<String>
+    ) async -> ConnectionProfile? {
+        let names = Set([host, hostname].map(Self.normalizedHost).filter { !$0.isEmpty })
+        let profiles = model.configuration.connections.filter {
+            $0.id != profileID && $0.kind != .axforge && !$0.ssh.host.isEmpty
+        }
+        for profile in profiles {
+            let endpoints = [(profile.ssh.host, profile.ssh.port), (profile.ssh.publicHost, profile.ssh.publicPort)]
+                .filter { !$0.0.isEmpty }
+            for (knownHost, knownPort) in endpoints
+            where !(await SparkSetup.knownFingerprints(host: knownHost, port: knownPort))
+                .isDisjoint(with: fingerprints) {
+                return profile
+            }
+        }
+        return profiles.first { profile in
+            if profile.ssh.host.caseInsensitiveCompare(host) == .orderedSame, profile.ssh.port == port {
+                return true
+            }
+            let known = [profile.ssh.host, profile.apiHost].map(Self.normalizedHost)
+            return known.contains { !$0.isEmpty && !Self.isIPAddress($0) && names.contains($0) }
+        }
+    }
+
+    /// Keeps the saved profile's settings and takes the SSH access the assistant just verified.
+    static func merge(existing: ConnectionProfile, verified: ConnectionProfile) -> ConnectionProfile {
+        var merged = existing
+        merged.alias = verified.alias
+        merged.ssh.user = verified.ssh.user
+        merged.ssh.identityFile = verified.ssh.identityFile
+        if merged.ssh.host.isEmpty || (isIPAddress(merged.ssh.host) && merged.ssh.host != verified.ssh.host) {
+            if merged.apiHost == merged.ssh.host || merged.apiHost.isEmpty {
+                merged.apiHost = verified.apiHost
+            }
+            merged.ssh.host = verified.ssh.host
+            merged.ssh.port = verified.ssh.port
+        }
+        return merged
+    }
+
+    private static func normalizedHost(_ value: String) -> String {
+        var host = value.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        if host.hasSuffix(".local") { host.removeLast(".local".count) }
+        return ["localhost", "127.0.0.1", "::1"].contains(host) ? "" : host
+    }
+
+    private static func isIPAddress(_ value: String) -> Bool {
+        var v4 = in_addr()
+        var v6 = in6_addr()
+        return inet_pton(AF_INET, value, &v4) == 1 || inet_pton(AF_INET6, value, &v6) == 1
     }
 
     private func sanitizedAlias(_ value: String) -> String {

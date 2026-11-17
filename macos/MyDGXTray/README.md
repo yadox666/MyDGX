@@ -58,6 +58,23 @@ Mientras la Release esté firmada de forma ad hoc, macOS la bloquea en el primer
 arranque. Ábrela una vez, ve a **Ajustes del Sistema › Privacidad y seguridad** y
 pulsa **Abrir igualmente**.
 
+### Actualizar desde la app
+
+En **Preferencias › Aplicación** aparece la versión instalada y el botón
+**Buscar actualizaciones**. La app también lo comprueba al arrancar y una vez al
+día; si hay una Release `tray-v*` más nueva, el menú muestra **Actualización
+disponible** y Preferencias ofrece **Descargar e instalar**. La app descarga el
+zip por HTTPS y comprueba su `.sha256`. Después verifica el identificador del
+paquete, la versión y la firma con `codesign --verify --deep --strict`. Si todo
+cuadra, envía la versión actual a la Papelera, coloca la nueva en el mismo sitio
+y se reinicia. La carpeta de la app tiene que tener permiso de escritura, como
+`/Applications` para un administrador. Desde la terminal:
+
+```bash
+MyDGXTray.app/Contents/MacOS/MyDGXTray --check-for-updates   # solo informa
+MyDGXTray.app/Contents/MacOS/MyDGXTray --install-update      # instala si hay versión nueva
+```
+
 ### Empaquetar una Release
 
 ```bash

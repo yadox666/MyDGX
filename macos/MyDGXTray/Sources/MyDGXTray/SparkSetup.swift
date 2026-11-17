@@ -51,11 +51,27 @@ enum SparkSetup {
         }
 
         var device: DeviceGuess {
-            let model = product.isEmpty ? "DGX Spark" : product
             let guess = SparkSetup.guessDevice(from: "\(vendor) \(product) \(hostname)")
             let brand = vendor.isEmpty ? guess.brand : SparkSetup.prettyVendor(vendor)
+            let model = SparkSetup.prettyProduct(product, brand: brand)
+                ?? (guess.brand == brand ? guess.model : "DGX Spark")
             return DeviceGuess(brand: brand, model: model, variant: guess.variant)
         }
+    }
+
+    /// Turns DMI names like "NVIDIA_DGX_Spark" into "DGX Spark"; nil for OEM placeholders.
+    static func prettyProduct(_ product: String, brand: String) -> String? {
+        var words = product
+            .replacingOccurrences(of: "_", with: " ")
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+        while let first = words.first,
+              first.caseInsensitiveCompare(brand) == .orderedSame || first.lowercased() == "nvidia" {
+            words.removeFirst()
+        }
+        let name = words.joined(separator: " ")
+        let placeholders = ["", "default string", "system product name", "to be filled by o.e.m.", "not specified"]
+        return placeholders.contains(name.lowercased()) ? nil : name
     }
 
     // MARK: Step 1 · find the Spark
@@ -118,7 +134,10 @@ enum SparkSetup {
     // MARK: Step 2 · SSH access
 
     /// Fetches the Spark's host keys so the user can trust them before sending any password.
-    static func scanHostKeys(host: String, port: Int) async throws -> (keys: String, fingerprint: String) {
+    static func scanHostKeys(
+        host: String,
+        port: Int
+    ) async throws -> (keys: String, fingerprint: String, allFingerprints: Set<String>) {
         let scan = try await run(
             "/usr/bin/ssh-keyscan",
             ["-T", "5", "-t", "ed25519,ecdsa,rsa", "-p", String(port), host],
@@ -129,17 +148,45 @@ enum SparkSetup {
             .filter { !$0.hasPrefix("#") && !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .joined(separator: "\n")
         guard !keys.isEmpty else { throw SetupError.hostUnreachable }
-        let fingerprints = try await run(
+        let lines = try await fingerprintLines(keys)
+        let preferred = lines.first(where: { $0.contains("ED25519") }) ?? lines.first ?? ""
+        let fingerprint = preferred.split(separator: " ").dropFirst().first.map(String.init) ?? ""
+        guard fingerprint.hasPrefix("SHA256:") else { throw SetupError.hostUnreachable }
+        return (keys + "\n", fingerprint, fingerprintSet(lines))
+    }
+
+    /// Fingerprints that ~/.MyDGX/known_hosts already trusts for host:port.
+    static func knownFingerprints(host: String, port: Int) async -> Set<String> {
+        let name = port == 22 ? host : "[\(host)]:\(port)"
+        guard FileManager.default.fileExists(atPath: SupportLayout.knownHosts.path),
+              let found = try? await run(
+                  "/usr/bin/ssh-keygen",
+                  ["-F", name, "-f", SupportLayout.knownHosts.path],
+                  timeout: 10
+              ),
+              found.status == 0 else { return [] }
+        let keys = found.output
+            .split(whereSeparator: \.isNewline)
+            .filter { !$0.hasPrefix("#") }
+            .joined(separator: "\n")
+        guard let lines = try? await fingerprintLines(keys) else { return [] }
+        return fingerprintSet(lines)
+    }
+
+    private static func fingerprintLines(_ keys: String) async throws -> [String] {
+        let result = try await run(
             "/usr/bin/ssh-keygen",
             ["-lf", "-"],
             input: Data((keys + "\n").utf8),
             timeout: 10
         )
-        let lines = fingerprints.output.split(whereSeparator: \.isNewline).map(String.init)
-        let preferred = lines.first(where: { $0.contains("ED25519") }) ?? lines.first ?? ""
-        let fingerprint = preferred.split(separator: " ").dropFirst().first.map(String.init) ?? ""
-        guard fingerprint.hasPrefix("SHA256:") else { throw SetupError.hostUnreachable }
-        return (keys + "\n", fingerprint)
+        return result.output.split(whereSeparator: \.isNewline).map(String.init)
+    }
+
+    private static func fingerprintSet(_ lines: [String]) -> Set<String> {
+        Set(lines.compactMap { line in
+            line.split(separator: " ").dropFirst().first.map(String.init)
+        }.filter { $0.hasPrefix("SHA256:") })
     }
 
     /// Stores the scanned host keys in ~/.MyDGX/known_hosts unless the host is already known.

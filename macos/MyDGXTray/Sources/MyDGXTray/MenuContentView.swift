@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MenuContentView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var updater = AppUpdater.shared
 
     var body: some View {
         if model.needsSetup {
@@ -259,6 +260,14 @@ struct MenuContentView: View {
             model.openSettings()
         } label: {
             Label("Preferencias…", systemImage: "gearshape")
+        }
+
+        if let release = updater.availableRelease {
+            Button {
+                model.openSettings()
+            } label: {
+                Label("Actualización disponible: \(release.version)…", systemImage: "arrow.down.circle")
+            }
         }
 
         Button {

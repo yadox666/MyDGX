@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Create a Claude Code workspace configured for the MyDGX gateway."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import urllib.error
+from pathlib import Path
+
+from opencode_workspace import (
+    NVD_MCP,
+    PLAYWRIGHT_MCP,
+    SHODAN_MCP,
+    SKILLS_SOURCE,
+    discover,
+    max_output_tokens,
+    select_model,
+)
+
+TIMEOUT_MS = 1_800_000
+MODEL_TIERS = ("FABLE", "OPUS", "SONNET", "HAIKU")
+
+INSTRUCTIONS = """\
+# MyDGX · Claude Code
+
+You are using models served through the private MyDGX gateway.
+
+Never read or quote .env files, credentials, tokens, keys, cookies, session data,
+or private key material. Stay inside the workspace where Claude Code was
+launched. Do not use external directories. Do not launch subagents. If a tool
+fails or returns empty, report it once instead of repeating the same call.
+
+Browser, Shodan, and NVD tools exist only in the active profile. Discover which
+tools are connected before using them. Use NVD for published CVE records and
+never invent CVE identifiers. Only perform security testing against systems for
+which the user has explicit authorization.
+
+For security assessments, load the authorized-pentest skill before starting.
+Load blackbox-wordpress only for an authorized WordPress initial-access
+reconstruction. Skills never expand the scope or authorization in scope.md.
+"""
+
+SECRET_READS = [
+    "Read(**/.env)",
+    "Read(**/.env.*)",
+    "Read(**/*.pem)",
+    "Read(**/*.key)",
+    "Read(**/id_rsa*)",
+    "Read(**/id_ed25519*)",
+    "Read(~/.ssh/**)",
+    "Read(~/.aws/**)",
+    "Read(~/.MyDGX/**)",
+]
+
+
+def playwright_args(workspace: Path) -> list[str]:
+    args = ["-y", PLAYWRIGHT_MCP, "--headless", "--no-sandbox"]
+    chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    browser = os.environ.get("MYDGX_PLAYWRIGHT_BROWSER", "").strip()
+    if not browser and chrome.is_file():
+        browser = "chrome"
+    if browser:
+        profile = workspace / ".claude" / "playwright-profile"
+        profile.mkdir(parents=True, exist_ok=True)
+        args.extend(["--browser", browser, "--user-data-dir", str(profile)])
+    else:
+        args.append("--isolated")
+    return args
+
+
+def write_mcp(workspace: Path) -> Path:
+    servers: dict = {
+        "playwright": {
+            "command": "npx",
+            "args": playwright_args(workspace),
+            "env": {
+                "PLAYWRIGHT_BROWSERS_PATH": "${PLAYWRIGHT_BROWSERS_PATH}",
+                "HOME": "${HOME}",
+            },
+        },
+        "nvd": {
+            "command": "npx",
+            "args": ["-y", NVD_MCP],
+            "env": {
+                "MCP_TRANSPORT_TYPE": "stdio",
+                "NVD_API_KEY": "${NVD_API_KEY:-}",
+                "NVD_REQUEST_TIMEOUT_MS": "30000",
+            },
+        },
+    }
+    if os.environ.get("SHODAN_API_KEY"):
+        servers["shodan"] = {
+            "command": "npx",
+            "args": ["-y", SHODAN_MCP],
+            "env": {"SHODAN_API_KEY": "${SHODAN_API_KEY}"},
+        }
+    path = workspace / ".claude" / "mydgx-mcp.json"
+    path.write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def write_config(workspace: Path, base_url: str, selected: dict, active: bool) -> Path:
+    config_dir = workspace / ".claude"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    model = selected["id"]
+    env = {
+        "ANTHROPIC_BASE_URL": base_url.removesuffix("/v1").rstrip("/"),
+        "ANTHROPIC_MODEL": model,
+        "CLAUDE_CODE_SUBAGENT_MODEL": model,
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(max_output_tokens(selected["context"], "MYDGX_CLAUDE_MAX_OUTPUT_TOKENS")),
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(selected["context"]),
+        "API_TIMEOUT_MS": str(TIMEOUT_MS),
+        # Claude Code varía esta cabecera en cada petición e invalida la caché
+        # KV de llama.cpp/vLLM.
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "DISABLE_AUTOUPDATER": "1",
+        "DISABLE_TELEMETRY": "1",
+        "DISABLE_ERROR_REPORTING": "1",
+        # La memoria automática se guarda en ~/.claude, fuera del workspace.
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        # El coste se calcula con precios de Anthropic; no aplica al gateway local.
+        "DISABLE_COST_WARNINGS": "1",
+    }
+    env.update({f"ANTHROPIC_DEFAULT_{tier}_MODEL": model for tier in MODEL_TIERS})
+
+    deny = ["WebFetch", "WebSearch", "Task", "Agent", "Workflow", "EnterWorktree", *SECRET_READS]
+    if active:
+        permissions = {
+            "defaultMode": "acceptEdits",
+            "allow": ["Read", "Edit", "Write", "Glob", "Grep", "mcp__playwright", "mcp__nvd", "mcp__shodan"],
+            "ask": ["Bash"],
+            "deny": deny,
+        }
+    else:
+        permissions = {
+            "defaultMode": "plan",
+            "allow": ["Read", "Glob", "Grep"],
+            "deny": [*deny, "Bash", "Edit", "Write", "NotebookEdit"],
+        }
+    permissions["disableBypassPermissionsMode"] = "disable"
+
+    config = {
+        "$schema": "https://json.schemastore.org/claude-code-settings.json",
+        "model": model,
+        "env": env,
+        "permissions": permissions,
+        "autoMemoryEnabled": False,
+        "enableAllProjectMcpServers": False,
+    }
+    # Fuera de settings.json: Claude Code ignora los allow de proyecto hasta
+    # aceptar el diálogo de confianza; --settings los aplica siempre.
+    path = config_dir / "mydgx-settings.json"
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def create_workspace(workspace: Path) -> None:
+    config_dir = workspace / ".claude"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "CLAUDE.md").write_text(INSTRUCTIONS, encoding="utf-8")
+    if not SKILLS_SOURCE.is_dir():
+        raise SystemExit(f"ERROR: no se encontraron las plantillas de skills en {SKILLS_SOURCE}")
+    skills_target = config_dir / "skills"
+    skills_target.mkdir(parents=True, exist_ok=True)
+    for source in SKILLS_SOURCE.iterdir():
+        if source.is_dir():
+            shutil.copytree(source, skills_target / source.name, dirs_exist_ok=True)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--workspace", required=True, type=Path)
+    parser.add_argument("--base-url", required=True)
+    parser.add_argument("--model", default="")
+    parser.add_argument("--active", action="store_true")
+    parser.add_argument("--assets-only", action="store_true")
+    args = parser.parse_args()
+
+    workspace = args.workspace.resolve()
+    create_workspace(workspace)
+    if args.assets_only:
+        print(workspace)
+        return 0
+    try:
+        models = discover(args.base_url, os.environ.get("MYDGX_GATEWAY_API_KEY", ""))
+    except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"ERROR: no se pudo configurar Claude Code desde {args.base_url}: {exc}") from exc
+    selected = select_model(models, args.model)
+    settings = write_config(workspace, args.base_url, selected, args.active)
+    mcp = write_mcp(workspace) if args.active else ""
+    print(f"{selected['id']}\t{settings}\t{mcp}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

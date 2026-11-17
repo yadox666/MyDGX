@@ -1,0 +1,18760 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import binascii
+import concurrent.futures
+import hashlib
+import hmac
+import html
+import importlib.metadata
+import json
+import math
+import os
+import signal
+import re
+import shutil
+import socket
+import sqlite3
+import struct
+import subprocess
+import sys
+import time
+import unicodedata
+import uuid
+import zlib
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from html.parser import HTMLParser
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Callable, Literal
+from urllib.parse import urlparse
+
+# huggingface_hub 1.x sustituye hf_transfer por el cliente Xet. Esta variable
+# debe estar activa antes de importar la librería.
+os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+
+import httpx
+import psutil
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SYSTEM_REPAIR_SCRIPT = Path("/usr/local/libexec/mydgx-system-repair")
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
+
+    app_name: str = "MyDGX"
+    host: str = "127.0.0.1"
+    port: int = 8088
+    trusted_hosts: str = ""
+    profile_apps_root: str = ""
+    profile_apps: str = ""
+    database_path: str = str(ROOT / "data" / "mydgx.db")
+    metrics_interval_seconds: int = 5
+    metrics_retention_hours: int = 168
+    log_retention_days: int = 30
+    ollama_url: str = "http://127.0.0.1:11434"
+    openwebui_url: str = "http://127.0.0.1:3000"
+    openwebui_public_url: str = ""
+    openwebui_tool_api_key: str | None = None
+    dgx_dashboard_url: str = "http://127.0.0.1:11000"
+    hf_home: str = str(Path.home() / ".cache" / "huggingface")
+    hf_token: str | None = None
+    hf_download_workers: int = 4
+    mydgx_api_key: str | None = None
+    mydgx_dashboard_password: str | None = None
+    mydgx_session_ttl_minutes: int = 60
+    enable_system_updates: bool = False
+    enable_service_control: bool = False
+    managed_services: str = "mydgx,mydgx-gateway,mydgx-searxng,mydgx-comfyui,mydgx-whisper,ollama,docker,open-webui"
+    llama_cpp_server_path: str = "llama-server"
+    llama_cpp_b10679_path: str = ""
+    llama_cpp_b11429_path: str = ""
+    enable_profile_autostart: bool = True
+    default_profile_id: str = ""
+    profile_bind_host: str = "127.0.0.1"
+    profile_start_timeout_seconds: int = 180
+    profile_restore_retry_seconds: int = 300
+    gateway_enabled: bool = True
+    gateway_host: str = "127.0.0.1"
+    gateway_port: int = 4000
+    gateway_api_key: str | None = None
+    gateway_request_timeout_seconds: int = 600
+    gateway_max_request_mb: int = 32
+    gateway_litellm_port: int = 4001
+    gateway_cors_origins: str = ""
+    spark_cluster_size: int = 1
+    spark_memory_bandwidth_gbps: int = 273
+    vllm_url: str = "http://127.0.0.1:8000"
+    sglang_url: str = "http://127.0.0.1:30000"
+    trtllm_url: str = "http://127.0.0.1:8001"
+    lmstudio_url: str = "http://127.0.0.1:1234"
+    comfyui_url: str = "http://127.0.0.1:8188"
+    comfyui_public_url: str = ""
+    whisper_url: str = "http://127.0.0.1:9000"
+    tts_url: str = "http://127.0.0.1:9010"
+    riva_url: str = "http://127.0.0.1:8002"
+    multimodal_max_upload_mb: int = 64
+    device_variant_override: str = ""
+    assistant_enabled: bool = True
+    assistant_model: str = "llama3.2:3b"
+    assistant_fallback_to_available: bool = True
+    assistant_min_fallback_parameters_b: float = 3.0
+    assistant_max_tool_rounds: int = 6
+    assistant_action_ttl_seconds: int = 300
+    benchmark_enabled: bool = True
+    benchmark_auto_new_models: bool = True
+    benchmark_repetitions: int = 3
+    benchmark_telemetry_interval_seconds: float = 1.0
+    benchmark_quiet_seconds: int = 120
+    benchmark_queue_poll_seconds: int = 20
+    benchmark_queue_max_age_hours: int = 24
+    benchmark_release_idle_ollama: bool = True
+
+    @property
+    def service_names(self) -> list[str]:
+        valid = re.compile(r"^[A-Za-z0-9_.@-]+$")
+        configured = [
+            name
+            for raw in self.managed_services.split(",")
+            if (name := raw.strip()) and valid.fullmatch(name)
+        ]
+        return list(dict.fromkeys(["mydgx", "mydgx-gateway", *configured]))
+
+
+settings = Settings()
+
+
+def huggingface_token() -> str | None:
+    token = (settings.hf_token or "").strip()
+    return token or None
+
+
+def huggingface_cache_dir() -> Path:
+    return Path(settings.hf_home).expanduser() / "hub"
+
+
+def huggingface_card_cache_dir() -> Path:
+    """Model cards fetched only to describe a repo; outside hub/ so they never count as a downloaded model."""
+    return Path(settings.hf_home).expanduser() / "mydgx-cards"
+
+
+def huggingface_download_workers() -> int:
+    return max(1, min(16, int(settings.hf_download_workers)))
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(payload))
+        + kind
+        + payload
+        + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+    )
+
+
+def generated_vision_fixture() -> bytes:
+    """Build the immutable v1 fixture without files, libraries, or network."""
+    width, height = 256, 192
+    rows: list[bytes] = []
+    for y in range(height):
+        row = bytearray()
+        for x in range(width):
+            color = (248, 248, 244)
+            if 24 <= x < 104 and 48 <= y < 128:
+                color = (220, 35, 45)
+            if (x - 184) ** 2 + (y - 88) ** 2 <= 40 ** 2:
+                color = (35, 90, 220)
+            row.extend(color)
+        rows.append(b"\x00" + bytes(row))
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(b"".join(rows), level=9))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+BENCHMARK_PROTOCOL_ID = "mydgx-text-generation-v1"
+BENCHMARK_SCORE_ALGORITHM = "spark-text-v2"
+BENCHMARK_PROTOCOL: dict[str, Any] = {
+    "id": BENCHMARK_PROTOCOL_ID,
+    "version": 1,
+    "name": "MyDGX Text Generation v1",
+    "modality": "text-generation",
+    "warmups": 1,
+    "defaults": {
+        "temperature": 0,
+        "top_p": 1,
+        "seed": 42,
+        "parallel": 1,
+    },
+    "cases": [
+        {
+            "id": "interactive",
+            "name": "Latencia interactiva",
+            "max_tokens": 64,
+            "prompt": (
+                "Responde únicamente con una lista numerada de ocho recomendaciones breves "
+                "para optimizar una aplicación Python local. No uses introducción ni conclusión."
+            ),
+        },
+        {
+            "id": "throughput",
+            "name": "Throughput sostenido",
+            "max_tokens": 192,
+            "prompt": (
+                "Explica de forma técnica y estructurada cómo funciona la memoria unificada en "
+                "un sistema de inferencia local. Incluye ancho de banda, caché KV, cuantización, "
+                "batching y concurrencia. Escribe cinco secciones con contenido concreto."
+            ),
+        },
+        {
+            "id": "code",
+            "name": "Generación de código",
+            "max_tokens": 160,
+            "prompt": (
+                "Escribe una función Python pura llamada rolling_average(values, window) con "
+                "validación de argumentos, complejidad O(n), type hints y docstring. Devuelve "
+                "solo el bloque de código."
+            ),
+        },
+    ],
+}
+ASR_BENCHMARK_PROTOCOL_ID = "mydgx-asr-v1"
+ASR_BENCHMARK_SCORE_ALGORITHM = "asr-quality-v1"
+ASR_BENCHMARK_PROTOCOL: dict[str, Any] = {
+    "id": ASR_BENCHMARK_PROTOCOL_ID,
+    "version": 1,
+    "name": "MyDGX Whisper ASR v1",
+    "modality": "automatic-speech-recognition",
+    "warmups": 1,
+    "defaults": {
+        "language": "en",
+        "response_format": "verbose_json",
+        "temperature": 0,
+        "parallel": 1,
+    },
+    "cases": [
+        {
+            "id": "armstrong-en",
+            "name": "Armstrong English",
+            "fixture": "armstrong-en",
+        },
+    ],
+}
+IMAGE_BENCHMARK_PROTOCOL_ID = "mydgx-image-generation-v1"
+IMAGE_BENCHMARK_SCORE_ALGORITHM = "flux-image-reproducibility-v1"
+IMAGE_BENCHMARK_PROTOCOL: dict[str, Any] = {
+    "id": IMAGE_BENCHMARK_PROTOCOL_ID,
+    "version": 1,
+    "name": "MyDGX Image Generation v1",
+    "modality": "image-generation",
+    "warmups": 1,
+    "defaults": {
+        "seed": 424242,
+        "width": 512,
+        "height": 512,
+        "steps": 4,
+        "sampler": "euler",
+        "scheduler": "simple",
+        "parallel": 1,
+    },
+    "cases": [
+        {
+            "id": "flux-still-life",
+            "name": "FLUX reproducible still life",
+            "prompt": (
+                "A studio photograph of a red ceramic mug beside a green pear on a "
+                "plain wooden table, soft window light, centered composition"
+            ),
+            "seed": 424242,
+            "width": 512,
+            "height": 512,
+            "steps": 4,
+        },
+    ],
+}
+VIDEO_BENCHMARK_PROTOCOL_ID = "mydgx-video-generation-v1"
+VIDEO_BENCHMARK_SCORE_ALGORITHM = "wan-video-reproducibility-v1"
+VIDEO_BENCHMARK_PROTOCOL: dict[str, Any] = {
+    "id": VIDEO_BENCHMARK_PROTOCOL_ID,
+    "version": 1,
+    "name": "MyDGX Video Generation v1",
+    "modality": "video-generation",
+    "warmups": 1,
+    "workflow": "config/comfyui/video-workflow-api.json",
+    "defaults": {
+        "seed": 424242,
+        "width": 832,
+        "height": 480,
+        "frames": 33,
+        "steps": 30,
+        "fps": 24,
+        "sampler": "uni_pc",
+        "scheduler": "simple",
+        "parallel": 1,
+    },
+    "cases": [
+        {
+            "id": "wan-natural-motion",
+            "name": "Wan reproducible natural motion",
+            "prompt": (
+                "A locked-off cinematic shot of a red paper windmill rotating steadily "
+                "on a plain wooden table, soft daylight, fixed camera, natural motion"
+            ),
+            "seed": 424242,
+            "width": 832,
+            "height": 480,
+            "frames": 33,
+            "steps": 30,
+            "fps": 24,
+        },
+    ],
+}
+EMBEDDINGS_BENCHMARK_PROTOCOL_ID = "mydgx-embeddings-v1"
+EMBEDDINGS_BENCHMARK_SCORE_ALGORITHM = "embedding-semantic-margin-v1"
+EMBEDDINGS_BENCHMARK_PROTOCOL: dict[str, Any] = {
+    "id": EMBEDDINGS_BENCHMARK_PROTOCOL_ID,
+    "version": 1,
+    "name": "MyDGX Embeddings v1",
+    "modality": "embeddings",
+    "warmups": 1,
+    "defaults": {"parallel": 1, "encoding_format": "float"},
+    "cases": [
+        {
+            "id": "semantic-pairs-en-v1",
+            "name": "Semantic pairs English v1",
+            "texts": [
+                "A red bicycle is parked beside the library.",
+                "The crimson bike stands next to the public library.",
+                "A database index can speed up selective queries.",
+                "Selective database queries are often faster with an index.",
+                "The orchestra rehearsed a symphony before the concert.",
+                "Fresh bread was cooling on the kitchen counter.",
+            ],
+            "positive_pairs": [[0, 1], [2, 3]],
+            "negative_pairs": [[0, 4], [0, 5], [2, 4], [2, 5]],
+            "required_margin": 0.15,
+        },
+    ],
+}
+RERANKING_BENCHMARK_PROTOCOL_ID = "mydgx-reranking-v1"
+RERANKING_BENCHMARK_SCORE_ALGORITHM = "reranking-ndcg-mrr-v1"
+RERANKING_BENCHMARK_PROTOCOL: dict[str, Any] = {
+    "id": RERANKING_BENCHMARK_PROTOCOL_ID,
+    "version": 1,
+    "name": "MyDGX Reranking v1",
+    "modality": "reranking",
+    "warmups": 1,
+    "defaults": {"parallel": 1},
+    "cases": [
+        {
+            "id": "database-index-v1",
+            "name": "Database index ordering v1",
+            "query": "How can an index improve a selective database query?",
+            "documents": [
+                "An index lets the database locate matching rows without scanning the full table.",
+                "Indexes can accelerate selective lookups, though writes require index maintenance.",
+                "A symphony orchestra contains string, woodwind, brass, and percussion sections.",
+                "Bread dough rises when yeast produces carbon dioxide.",
+            ],
+            "expected_order": [0, 1, 2, 3],
+        },
+        {
+            "id": "local-inference-v1",
+            "name": "Local inference ordering v1",
+            "query": "What reduces memory use when running a language model locally?",
+            "documents": [
+                "Quantizing model weights to fewer bits usually reduces local inference memory use.",
+                "A smaller context can also reduce the memory occupied by the KV cache.",
+                "Database transactions provide atomicity and isolation.",
+                "Window light produces soft shadows in a photograph.",
+            ],
+            "expected_order": [0, 1, 2, 3],
+        },
+    ],
+}
+VISION_BENCHMARK_PROTOCOL_ID = "mydgx-vision-v1"
+VISION_BENCHMARK_SCORE_ALGORITHM = "vision-concept-recall-v1"
+VISION_FIXTURE_SHA256 = hashlib.sha256(generated_vision_fixture()).hexdigest()
+VISION_BENCHMARK_PROTOCOL: dict[str, Any] = {
+    "id": VISION_BENCHMARK_PROTOCOL_ID,
+    "version": 1,
+    "name": "MyDGX Vision v1",
+    "modality": "vision",
+    "warmups": 1,
+    "fixture": {
+        "id": "shapes-v1",
+        "generator": "mydgx-rgb-shapes-v1",
+        "mime_type": "image/png",
+        "width": 256,
+        "height": 192,
+        "sha256": VISION_FIXTURE_SHA256,
+    },
+    "defaults": {"temperature": 0, "top_p": 1, "seed": 42, "parallel": 1},
+    "cases": [
+        {
+            "id": "objects-and-colors",
+            "name": "Objects and colors",
+            "prompt": (
+                "Name the two colored geometric shapes and their colors. "
+                "Answer briefly in English."
+            ),
+            "expected_answer": "A red square and a blue circle.",
+            "expected_concepts": [
+                ["red square", "square is red", "red rectangle"],
+                ["blue circle", "circle is blue", "blue disk", "blue disc"],
+            ],
+        },
+        {
+            "id": "spatial-order",
+            "name": "Spatial order",
+            "prompt": (
+                "Which shape is on the left and which is on the right? "
+                "Answer briefly in English."
+            ),
+            "expected_answer": "The red square is left of the blue circle.",
+            "expected_concepts": [
+                ["red square is on the left", "red square on the left", "square is left"],
+                ["blue circle is on the right", "blue circle on the right", "circle is right"],
+            ],
+        },
+    ],
+}
+TTS_BENCHMARK_PROTOCOL_ID = "mydgx-tts-v1"
+TTS_BENCHMARK_SCORE_ALGORITHM = "tts-roundtrip-intelligibility-v1"
+TTS_BENCHMARK_PROTOCOL: dict[str, Any] = {
+    "id": TTS_BENCHMARK_PROTOCOL_ID,
+    "version": 1,
+    "name": "MyDGX Local TTS v1",
+    "modality": "text-to-speech",
+    "warmups": 1,
+    "defaults": {"response_format": "wav", "parallel": 1},
+    "cases": [
+        {
+            "id": "pangram-en",
+            "name": "Public English pangram",
+            "language": "en",
+            "text": "The quick brown fox jumps over the lazy dog.",
+            "source": "traditional public-domain pangram",
+        },
+        {
+            "id": "numbers-en",
+            "name": "Public numeric phrase",
+            "language": "en",
+            "text": "Today is Monday. The package contains three red books and seven blue pens.",
+            "source": "MyDGX CC0 benchmark text",
+        },
+    ],
+}
+BENCHMARK_PROTOCOLS = {
+    BENCHMARK_PROTOCOL_ID: BENCHMARK_PROTOCOL,
+    ASR_BENCHMARK_PROTOCOL_ID: ASR_BENCHMARK_PROTOCOL,
+    IMAGE_BENCHMARK_PROTOCOL_ID: IMAGE_BENCHMARK_PROTOCOL,
+    VIDEO_BENCHMARK_PROTOCOL_ID: VIDEO_BENCHMARK_PROTOCOL,
+    EMBEDDINGS_BENCHMARK_PROTOCOL_ID: EMBEDDINGS_BENCHMARK_PROTOCOL,
+    RERANKING_BENCHMARK_PROTOCOL_ID: RERANKING_BENCHMARK_PROTOCOL,
+    VISION_BENCHMARK_PROTOCOL_ID: VISION_BENCHMARK_PROTOCOL,
+    TTS_BENCHMARK_PROTOCOL_ID: TTS_BENCHMARK_PROTOCOL,
+}
+BENCHMARK_SCORE_ALGORITHMS = {
+    BENCHMARK_PROTOCOL_ID: BENCHMARK_SCORE_ALGORITHM,
+    ASR_BENCHMARK_PROTOCOL_ID: ASR_BENCHMARK_SCORE_ALGORITHM,
+    IMAGE_BENCHMARK_PROTOCOL_ID: IMAGE_BENCHMARK_SCORE_ALGORITHM,
+    VIDEO_BENCHMARK_PROTOCOL_ID: VIDEO_BENCHMARK_SCORE_ALGORITHM,
+    EMBEDDINGS_BENCHMARK_PROTOCOL_ID: EMBEDDINGS_BENCHMARK_SCORE_ALGORITHM,
+    RERANKING_BENCHMARK_PROTOCOL_ID: RERANKING_BENCHMARK_SCORE_ALGORITHM,
+    VISION_BENCHMARK_PROTOCOL_ID: VISION_BENCHMARK_SCORE_ALGORITHM,
+    TTS_BENCHMARK_PROTOCOL_ID: TTS_BENCHMARK_SCORE_ALGORITHM,
+}
+ASR_FIXTURE_MANIFEST = ROOT / "backend" / "fixtures" / "asr" / "manifest.json"
+
+
+def canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def content_hash(value: Any) -> str:
+    serialized = value if isinstance(value, str) else canonical_json(value)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+SENSITIVE_LOG_KEY = re.compile(
+    r"(authorization|cookie|credential|password|passwd|secret|session|token|api[_-]?key|private[_-]?key)",
+    re.IGNORECASE,
+)
+SENSITIVE_LOG_VALUE = re.compile(
+    r"(?i)(bearer\s+)[^\s]+|(hf_[A-Za-z0-9_-]{8,})|"
+    r"((?:token|password|secret|api[_-]?key)\s*[=:]\s*)[^\s,;]+"
+)
+
+
+def redact_log_text(value: Any, limit: int = 2000) -> str:
+    text = str(value or "")
+    return SENSITIVE_LOG_VALUE.sub(
+        lambda match: f"{match.group(1) or match.group(3) or ''}***REDACTED***",
+        text,
+    )[:limit]
+
+
+def sanitize_log_detail(value: Any, key: str = "", depth: int = 0) -> Any:
+    if depth > 5:
+        return "[truncated]"
+    if key and SENSITIVE_LOG_KEY.search(key):
+        return "***REDACTED***"
+    if isinstance(value, dict):
+        return {
+            str(item_key)[:100]: sanitize_log_detail(item_value, str(item_key), depth + 1)
+            for item_key, item_value in list(value.items())[:50]
+        }
+    if isinstance(value, (list, tuple)):
+        return [sanitize_log_detail(item, "", depth + 1) for item in list(value)[:50]]
+    if isinstance(value, (str, bytes)):
+        return redact_log_text(value, 1000)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return redact_log_text(value, 1000)
+
+
+class Database:
+    def __init__(self, path: str):
+        self.path = Path(path).expanduser()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=20)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA foreign_keys=ON")
+        return connection
+
+    def initialize(self) -> None:
+        with self.connect() as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS metric_samples (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    cpu_percent REAL NOT NULL,
+                    memory_percent REAL NOT NULL,
+                    memory_used INTEGER NOT NULL,
+                    memory_total INTEGER NOT NULL,
+                    gpu_utilization REAL,
+                    gpu_memory_used INTEGER,
+                    gpu_memory_total INTEGER,
+                    gpu_temperature REAL,
+                    gpu_power_watts REAL,
+                    gpu_power_limit_watts REAL,
+                    disk_percent REAL NOT NULL,
+                    disk_used INTEGER NOT NULL,
+                    disk_total INTEGER NOT NULL,
+                    disk_read_bytes INTEGER NOT NULL DEFAULT 0,
+                    disk_write_bytes INTEGER NOT NULL DEFAULT 0,
+                    network_sent INTEGER NOT NULL,
+                    network_received INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_metric_created_at ON metric_samples(created_at);
+
+                CREATE TABLE IF NOT EXISTS model_metric_samples (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    profile_id TEXT,
+                    model_id TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    engine TEXT NOT NULL,
+                    pid INTEGER,
+                    attribution TEXT NOT NULL,
+                    cpu_percent REAL,
+                    ram_bytes INTEGER,
+                    unified_memory_bytes INTEGER,
+                    gpu_memory_bytes INTEGER,
+                    gpu_utilization REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_model_metric_created_at
+                ON model_metric_samples(created_at);
+                CREATE INDEX IF NOT EXISTS idx_model_metric_identity
+                ON model_metric_samples(profile_id,model_id,created_at);
+
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    progress REAL NOT NULL DEFAULT 0,
+                    message TEXT NOT NULL DEFAULT '',
+                    cancel_requested INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS job_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    progress REAL NOT NULL DEFAULT 0,
+                    message TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_job_events_job_created
+                ON job_events(job_id, created_at);
+                CREATE TABLE IF NOT EXISTS system_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    level TEXT NOT NULL CHECK(level IN ('debug','info','warning','error','critical')),
+                    category TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    entity_type TEXT NOT NULL DEFAULT '',
+                    entity_id TEXT NOT NULL DEFAULT '',
+                    job_id TEXT,
+                    detail_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_system_logs_created
+                ON system_logs(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_system_logs_level_created
+                ON system_logs(level, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_system_logs_category_created
+                ON system_logs(category, created_at DESC);
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    success INTEGER NOT NULL,
+                    detail TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS job_results (
+                    job_id TEXT PRIMARY KEY,
+                    result_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS preferences (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS model_descriptions (
+                    source TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    revision TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    fetched_at TEXT NOT NULL,
+                    PRIMARY KEY(source, source_id)
+                );
+                CREATE TABLE IF NOT EXISTS profiles (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    engine TEXT NOT NULL CHECK(engine IN (
+                        'llama.cpp','ollama','vllm','sglang','tensorrt-llm',
+                        'openai-compatible','comfyui','diffusers','whisper',
+                        'riva','nvidia-nim'
+                    )),
+                    model_ref TEXT NOT NULL,
+                    model_file TEXT NOT NULL DEFAULT '',
+                    model_repo TEXT NOT NULL DEFAULT '',
+                    model_filename TEXT NOT NULL DEFAULT '',
+                    model_files_json TEXT NOT NULL DEFAULT '[]',
+                    mmproj_file TEXT NOT NULL DEFAULT '',
+                    mmproj_repo TEXT NOT NULL DEFAULT '',
+                    mmproj_filename TEXT NOT NULL DEFAULT '',
+                    model_alias TEXT NOT NULL DEFAULT '',
+                    port INTEGER NOT NULL,
+                    context_size INTEGER NOT NULL,
+                    gpu_layers INTEGER NOT NULL,
+                    threads INTEGER NOT NULL,
+                    parallel INTEGER NOT NULL DEFAULT 1,
+                    batch_size INTEGER NOT NULL,
+                    ubatch_size INTEGER NOT NULL DEFAULT 256,
+                    temperature REAL NOT NULL,
+                    top_p REAL NOT NULL,
+                    top_k INTEGER NOT NULL DEFAULT 0,
+                    min_p REAL NOT NULL DEFAULT 0,
+                    repeat_penalty REAL NOT NULL,
+                    presence_penalty REAL NOT NULL DEFAULT 0,
+                    flash_attention INTEGER NOT NULL DEFAULT 1,
+                    cache_type_k TEXT NOT NULL DEFAULT '',
+                    cache_type_v TEXT NOT NULL DEFAULT '',
+                    reasoning_off INTEGER NOT NULL DEFAULT 1,
+                    reasoning_effort TEXT NOT NULL DEFAULT '',
+                    kv_unified_per_slot INTEGER NOT NULL DEFAULT 1,
+                    jinja INTEGER NOT NULL DEFAULT 1,
+                    min_free_memory_mb INTEGER NOT NULL DEFAULT 0,
+                    source TEXT NOT NULL DEFAULT '',
+                    runtime_requirement TEXT NOT NULL DEFAULT '',
+                    task TEXT NOT NULL DEFAULT 'chat',
+                    input_modalities_json TEXT NOT NULL DEFAULT '["text"]',
+                    output_modalities_json TEXT NOT NULL DEFAULT '["text"]',
+                    runtime_backend TEXT NOT NULL DEFAULT 'native',
+                    endpoint_url TEXT NOT NULL DEFAULT '',
+                    api_protocol TEXT NOT NULL DEFAULT 'openai',
+                    estimated_memory_mb INTEGER NOT NULL DEFAULT 0,
+                    max_input_mb INTEGER NOT NULL DEFAULT 32,
+                    timeout_seconds INTEGER NOT NULL DEFAULT 600,
+                    additional_models_json TEXT NOT NULL DEFAULT '[]',
+                    memory_reserve_mb INTEGER NOT NULL DEFAULT 4096,
+                    auto_fit_context INTEGER NOT NULL DEFAULT 1,
+                    minimum_context_size INTEGER NOT NULL DEFAULT 8192,
+                    favorite INTEGER NOT NULL DEFAULT 0,
+                    active INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_one_active
+                ON profiles(active) WHERE active = 1;
+                CREATE TABLE IF NOT EXISTS profile_model_runs (
+                    profile_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    effective_context INTEGER,
+                    estimated_memory_mb INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    detail TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(profile_id, model_id),
+                    FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+                );
+                DROP TABLE IF EXISTS deployment_versions;
+                DROP TABLE IF EXISTS deployments;
+                CREATE TABLE IF NOT EXISTS benchmark_protocols (
+                    id TEXT PRIMARY KEY,
+                    version INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    modality TEXT NOT NULL,
+                    definition_json TEXT NOT NULL,
+                    definition_hash TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS benchmark_models (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    revision TEXT NOT NULL DEFAULT '',
+                    filename TEXT NOT NULL DEFAULT '',
+                    artifact_hash TEXT NOT NULL UNIQUE,
+                    artifact_size INTEGER,
+                    quantization TEXT NOT NULL DEFAULT '',
+                    architecture TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    card_text TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_benchmark_models_source
+                ON benchmark_models(source,source_id);
+                CREATE TABLE IF NOT EXISTS benchmark_environments (
+                    id TEXT PRIMARY KEY,
+                    environment_hash TEXT NOT NULL UNIQUE,
+                    hardware_json TEXT NOT NULL,
+                    software_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS benchmark_runs (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL UNIQUE,
+                    protocol_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    environment_id TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    runtime_hash TEXT NOT NULL,
+                    runtime_json TEXT NOT NULL,
+                    score_algorithm TEXT NOT NULL DEFAULT '',
+                    score REAL,
+                    status TEXT NOT NULL,
+                    valid INTEGER NOT NULL DEFAULT 0,
+                    invalid_reason TEXT NOT NULL DEFAULT '',
+                    summary_json TEXT NOT NULL DEFAULT '{}',
+                    imported INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+                    FOREIGN KEY(protocol_id) REFERENCES benchmark_protocols(id),
+                    FOREIGN KEY(model_id) REFERENCES benchmark_models(id),
+                    FOREIGN KEY(environment_id) REFERENCES benchmark_environments(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_benchmark_runs_model_created
+                ON benchmark_runs(model_id,created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_benchmark_runs_status
+                ON benchmark_runs(status,created_at DESC);
+                CREATE TABLE IF NOT EXISTS benchmark_samples (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    case_id TEXT NOT NULL,
+                    phase TEXT NOT NULL,
+                    repetition INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ttft_ms REAL,
+                    total_ms REAL NOT NULL,
+                    prompt_tokens INTEGER,
+                    output_tokens INTEGER,
+                    output_tps REAL,
+                    chars_per_second REAL,
+                    output_chars INTEGER NOT NULL DEFAULT 0,
+                    output_hash TEXT NOT NULL DEFAULT '',
+                    native_metrics_json TEXT NOT NULL DEFAULT '{}',
+                    valid INTEGER NOT NULL DEFAULT 1,
+                    error TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(run_id) REFERENCES benchmark_runs(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_benchmark_samples_run
+                ON benchmark_samples(run_id,case_id,phase,repetition);
+                CREATE TABLE IF NOT EXISTS benchmark_telemetry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    cpu_percent REAL,
+                    memory_used INTEGER,
+                    gpu_utilization REAL,
+                    gpu_memory_used INTEGER,
+                    gpu_temperature REAL,
+                    gpu_power_watts REAL,
+                    FOREIGN KEY(run_id) REFERENCES benchmark_runs(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_benchmark_telemetry_run
+                ON benchmark_telemetry(run_id,created_at);
+                CREATE TABLE IF NOT EXISTS benchmark_queue (
+                    id TEXT PRIMARY KEY,
+                    target TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN (
+                        'pending','running','done','skipped','expired','failed'
+                    )),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_reason TEXT NOT NULL DEFAULT '',
+                    job_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_benchmark_queue_pending
+                ON benchmark_queue(target) WHERE status IN ('pending','running');
+                CREATE TABLE IF NOT EXISTS benchmark_suites (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL CHECK(status IN (
+                        'queued','running','restoring','completed','cancelled','failed','interrupted'
+                    )),
+                    repetitions INTEGER NOT NULL,
+                    total_models INTEGER NOT NULL DEFAULT 0,
+                    completed_models INTEGER NOT NULL DEFAULT 0,
+                    current_position INTEGER,
+                    current_target TEXT NOT NULL DEFAULT '',
+                    current_child_job_id TEXT,
+                    snapshot_json TEXT NOT NULL DEFAULT '{}',
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_benchmark_suites_created
+                ON benchmark_suites(created_at DESC);
+                CREATE TABLE IF NOT EXISTS benchmark_suite_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    suite_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    candidate_key TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    engine TEXT NOT NULL,
+                    protocol_id TEXT NOT NULL DEFAULT 'mydgx-text-generation-v1',
+                    modality TEXT NOT NULL DEFAULT 'text-generation',
+                    artifact_hash TEXT NOT NULL,
+                    artifact_size INTEGER,
+                    profile_id TEXT NOT NULL DEFAULT '',
+                    model_id TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL CHECK(status IN (
+                        'pending','loading','running','completed','skipped','failed','cancelled'
+                    )),
+                    run_id TEXT,
+                    error TEXT NOT NULL DEFAULT '',
+                    started_at TEXT,
+                    completed_at TEXT,
+                    UNIQUE(suite_id,position),
+                    FOREIGN KEY(suite_id) REFERENCES benchmark_suites(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_benchmark_suite_items_suite
+                ON benchmark_suite_items(suite_id,position);
+                """
+            )
+            for protocol_id, protocol in BENCHMARK_PROTOCOLS.items():
+                protocol_json = canonical_json(protocol)
+                protocol_hash = content_hash(protocol_json)
+                existing_protocol = connection.execute(
+                    "SELECT definition_hash FROM benchmark_protocols WHERE id=?",
+                    (protocol_id,),
+                ).fetchone()
+                if existing_protocol and existing_protocol["definition_hash"] != protocol_hash:
+                    raise RuntimeError(
+                        f"El protocolo publicado {protocol_id} no puede modificarse"
+                    )
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO benchmark_protocols(
+                        id,version,name,modality,definition_json,definition_hash,active,created_at
+                    ) VALUES(?,?,?,?,?,?,1,?)
+                    """,
+                    (
+                        protocol_id,
+                        protocol["version"],
+                        protocol["name"],
+                        protocol["modality"],
+                        protocol_json,
+                        protocol_hash,
+                        utc_now(),
+                    ),
+                )
+            job_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            if "cancel_requested" not in job_columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
+                )
+            metric_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(metric_samples)").fetchall()
+            }
+            metric_additions = {
+                "gpu_power_watts": "REAL",
+                "gpu_power_limit_watts": "REAL",
+                "disk_read_bytes": "INTEGER NOT NULL DEFAULT 0",
+                "disk_write_bytes": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for column, definition in metric_additions.items():
+                if column not in metric_columns:
+                    connection.execute(
+                        f"ALTER TABLE metric_samples ADD COLUMN {column} {definition}"
+                    )
+            suite_item_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(benchmark_suite_items)"
+                ).fetchall()
+            }
+            suite_item_additions = {
+                "protocol_id": (
+                    f"TEXT NOT NULL DEFAULT '{BENCHMARK_PROTOCOL_ID}'"
+                ),
+                "modality": "TEXT NOT NULL DEFAULT 'text-generation'",
+            }
+            for column, definition in suite_item_additions.items():
+                if column not in suite_item_columns:
+                    connection.execute(
+                        f"ALTER TABLE benchmark_suite_items ADD COLUMN {column} {definition}"
+                    )
+            existing = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(profiles)").fetchall()
+            }
+            additions = {
+                "model_repo": "TEXT NOT NULL DEFAULT ''",
+                "model_filename": "TEXT NOT NULL DEFAULT ''",
+                "model_files_json": "TEXT NOT NULL DEFAULT '[]'",
+                "mmproj_file": "TEXT NOT NULL DEFAULT ''",
+                "mmproj_repo": "TEXT NOT NULL DEFAULT ''",
+                "mmproj_filename": "TEXT NOT NULL DEFAULT ''",
+                "model_alias": "TEXT NOT NULL DEFAULT ''",
+                "threads": "INTEGER NOT NULL DEFAULT 1",
+                "parallel": "INTEGER NOT NULL DEFAULT 1",
+                "ubatch_size": "INTEGER NOT NULL DEFAULT 256",
+                "top_k": "INTEGER NOT NULL DEFAULT 0",
+                "min_p": "REAL NOT NULL DEFAULT 0",
+                "presence_penalty": "REAL NOT NULL DEFAULT 0",
+                "cache_type_k": "TEXT NOT NULL DEFAULT ''",
+                "cache_type_v": "TEXT NOT NULL DEFAULT ''",
+                "reasoning_off": "INTEGER NOT NULL DEFAULT 1",
+                "reasoning_effort": "TEXT NOT NULL DEFAULT ''",
+                "kv_unified_per_slot": "INTEGER NOT NULL DEFAULT 1",
+                "jinja": "INTEGER NOT NULL DEFAULT 1",
+                "min_free_memory_mb": "INTEGER NOT NULL DEFAULT 0",
+                "source": "TEXT NOT NULL DEFAULT ''",
+                "runtime_requirement": "TEXT NOT NULL DEFAULT ''",
+                "task": "TEXT NOT NULL DEFAULT 'chat'",
+                "input_modalities_json": "TEXT NOT NULL DEFAULT '[\"text\"]'",
+                "output_modalities_json": "TEXT NOT NULL DEFAULT '[\"text\"]'",
+                "runtime_backend": "TEXT NOT NULL DEFAULT 'native'",
+                "endpoint_url": "TEXT NOT NULL DEFAULT ''",
+                "api_protocol": "TEXT NOT NULL DEFAULT 'openai'",
+                "estimated_memory_mb": "INTEGER NOT NULL DEFAULT 0",
+                "max_input_mb": "INTEGER NOT NULL DEFAULT 32",
+                "timeout_seconds": "INTEGER NOT NULL DEFAULT 600",
+                "additional_models_json": "TEXT NOT NULL DEFAULT '[]'",
+                "memory_reserve_mb": "INTEGER NOT NULL DEFAULT 4096",
+                "auto_fit_context": "INTEGER NOT NULL DEFAULT 1",
+                "minimum_context_size": "INTEGER NOT NULL DEFAULT 8192",
+                "favorite": "INTEGER NOT NULL DEFAULT 0",
+                "app": "TEXT NOT NULL DEFAULT ''",
+            }
+            for column, definition in additions.items():
+                if column not in existing:
+                    connection.execute(f"ALTER TABLE profiles ADD COLUMN {column} {definition}")
+            profile_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(profiles)").fetchall()
+            }
+            if "threads" in profile_columns:
+                connection.execute("UPDATE profiles SET threads=1 WHERE threads < 1")
+            for row in connection.execute(
+                "SELECT id,additional_models_json FROM profiles"
+            ).fetchall():
+                try:
+                    additional_models = json.loads(row["additional_models_json"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                changed = False
+                for model in additional_models:
+                    if not isinstance(model, dict):
+                        continue
+                    try:
+                        threads = int(model.get("threads") or 0)
+                    except (TypeError, ValueError):
+                        threads = 0
+                    if threads < 1:
+                        model["threads"] = 1
+                        changed = True
+                if changed:
+                    connection.execute(
+                        "UPDATE profiles SET additional_models_json=? WHERE id=?",
+                        (json.dumps(additional_models), row["id"]),
+                    )
+            log_count = connection.execute("SELECT COUNT(*) FROM system_logs").fetchone()[0]
+            if log_count == 0:
+                connection.execute(
+                    """
+                    INSERT INTO system_logs(
+                        created_at,level,category,action,message,
+                        entity_type,entity_id,detail_json
+                    )
+                    SELECT created_at,
+                        CASE WHEN success=1 THEN 'info' ELSE 'error' END,
+                        CASE
+                            WHEN instr(action,'.') > 0 THEN substr(action,1,instr(action,'.')-1)
+                            ELSE 'audit'
+                        END,
+                        action,
+                        action || ' · ' || target,
+                        'audit',target,
+                        json_object('success',success,'detail',detail,'migrated',1)
+                    FROM audit_events
+                    ORDER BY id
+                    """
+                )
+            cutoff = datetime.now(timezone.utc).timestamp() - max(1, settings.log_retention_days) * 86400
+            cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+            connection.execute("DELETE FROM system_logs WHERE created_at < ?", (cutoff_iso,))
+            connection.commit()
+            profile_sql_row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='profiles'"
+            ).fetchone()
+            profile_sql = profile_sql_row["sql"] if profile_sql_row else ""
+            legacy_check = "CHECK(engine IN ('llama.cpp', 'ollama'))"
+            if legacy_check in profile_sql:
+                connection.execute("PRAGMA foreign_keys=OFF")
+                expanded_check = (
+                    "CHECK(engine IN ('llama.cpp','ollama','vllm','sglang',"
+                    "'tensorrt-llm','openai-compatible','comfyui','diffusers',"
+                    "'whisper','riva','nvidia-nim'))"
+                )
+                replacement_sql = profile_sql.replace(
+                    "CREATE TABLE profiles", "CREATE TABLE profiles_new", 1
+                ).replace(legacy_check, expanded_check)
+                columns = [
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(profiles)").fetchall()
+                ]
+                quoted = ",".join(f'"{column}"' for column in columns)
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(replacement_sql)
+                connection.execute(
+                    f"INSERT INTO profiles_new({quoted}) SELECT {quoted} FROM profiles"
+                )
+                connection.execute("DROP TABLE profiles")
+                connection.execute("ALTER TABLE profiles_new RENAME TO profiles")
+                connection.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_one_active "
+                    "ON profiles(active) WHERE active = 1"
+                )
+                connection.commit()
+                connection.execute("PRAGMA foreign_keys=ON")
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        with self.connect() as connection:
+            connection.execute(sql, params)
+            connection.commit()
+
+    def rows(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute(sql, params).fetchall()]
+
+    def log(
+        self,
+        level: str,
+        category: str,
+        action: str,
+        message: str,
+        *,
+        entity_type: str = "",
+        entity_id: str = "",
+        job_id: str | None = None,
+        detail: Any = None,
+    ) -> None:
+        safe_level = level if level in {"debug", "info", "warning", "error", "critical"} else "info"
+        safe_detail = sanitize_log_detail(detail if detail is not None else {})
+        self.execute(
+            """
+            INSERT INTO system_logs(
+                created_at,level,category,action,message,
+                entity_type,entity_id,job_id,detail_json
+            ) VALUES(?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                utc_now(),
+                safe_level,
+                redact_log_text(category, 80),
+                redact_log_text(action, 120),
+                redact_log_text(message, 2000),
+                redact_log_text(entity_type, 80),
+                redact_log_text(entity_id, 300),
+                job_id,
+                json.dumps(safe_detail, ensure_ascii=False)[:8000],
+            ),
+        )
+
+    def create_job(self, kind: str, target: str) -> str:
+        job_id = str(uuid.uuid4())
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO jobs(id, kind, target, status, progress, message, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                (job_id, kind, target, "queued", 0, "En cola", now, now),
+            )
+            connection.execute(
+                "INSERT INTO job_events(job_id,status,progress,message,created_at) VALUES(?,?,?,?,?)",
+                (job_id, "queued", 0, "En cola", now),
+            )
+            connection.commit()
+        self.log(
+            "info",
+            "job",
+            "job.queued",
+            f"Trabajo en cola: {kind}",
+            entity_type="job",
+            entity_id=target,
+            job_id=job_id,
+            detail={"kind": kind, "status": "queued"},
+        )
+        return job_id
+
+    def update_job(self, job_id: str, status: str, progress: float, message: str) -> None:
+        safe_progress = max(0, min(100, progress))
+        safe_message = redact_log_text(message, 1000)
+        now = utc_now()
+        log_event = False
+        with self.connect() as connection:
+            if status == "running":
+                current = connection.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+                if current is not None and current["status"] == "cancelling":
+                    status = "cancelling"
+            connection.execute(
+                "UPDATE jobs SET status=?, progress=?, message=?, updated_at=? WHERE id=?",
+                (status, safe_progress, safe_message, now, job_id),
+            )
+            latest = connection.execute(
+                """
+                SELECT status,message FROM job_events
+                WHERE job_id=? ORDER BY id DESC LIMIT 1
+                """,
+                (job_id,),
+            ).fetchone()
+            if (
+                latest is None
+                or latest["status"] != status
+                or latest["message"] != safe_message
+            ):
+                connection.execute(
+                    "INSERT INTO job_events(job_id,status,progress,message,created_at) VALUES(?,?,?,?,?)",
+                    (job_id, status, safe_progress, safe_message, now),
+                )
+                log_event = True
+            connection.commit()
+        if log_event:
+            level = "error" if status == "failed" else "warning" if status in {"cancelled", "cancelling"} else "info"
+            self.log(
+                level,
+                "job",
+                f"job.{status}",
+                safe_message,
+                entity_type="job",
+                entity_id=job_id,
+                job_id=job_id,
+                detail={"status": status, "progress": safe_progress},
+            )
+
+    def request_job_cancel(self, job_id: str) -> bool:
+        with self.connect() as connection:
+            now = utc_now()
+            cursor = connection.execute(
+                """
+                UPDATE jobs SET cancel_requested=1,status='cancelling',
+                    message='Cancelación solicitada',updated_at=?
+                WHERE id=? AND status IN ('queued','running')
+                """,
+                (now, job_id),
+            )
+            if cursor.rowcount > 0:
+                connection.execute(
+                    "INSERT INTO job_events(job_id,status,progress,message,created_at) "
+                    "SELECT id,'cancelling',progress,'Cancelación solicitada',? FROM jobs WHERE id=?",
+                    (now, job_id),
+                )
+            connection.commit()
+            if cursor.rowcount > 0:
+                self.log(
+                    "warning",
+                    "job",
+                    "job.cancelling",
+                    "Cancelación solicitada",
+                    entity_type="job",
+                    entity_id=job_id,
+                    job_id=job_id,
+                )
+            return cursor.rowcount > 0
+
+    def job_cancel_requested(self, job_id: str) -> bool:
+        rows = self.rows("SELECT cancel_requested FROM jobs WHERE id=?", (job_id,))
+        return bool(rows and rows[0]["cancel_requested"])
+
+    def audit(self, action: str, target: str, success: bool, detail: str = "") -> None:
+        safe_target = redact_log_text(target, 300)
+        safe_detail = redact_log_text(detail, 2000)
+        self.execute(
+            "INSERT INTO audit_events(created_at, action, target, success, detail) VALUES(?,?,?,?,?)",
+            (utc_now(), action, safe_target, int(success), safe_detail),
+        )
+        category = action.partition(".")[0] or "audit"
+        self.log(
+            "info" if success else "error",
+            category,
+            action,
+            f"{action} · {safe_target}",
+            entity_type=category,
+            entity_id=safe_target,
+            detail={"success": success, "detail": safe_detail},
+        )
+
+
+db = Database(settings.database_path)
+
+
+def preference_value(key: str) -> str | None:
+    try:
+        rows = db.rows("SELECT value FROM preferences WHERE key=?", (key,))
+    except sqlite3.OperationalError:
+        return None
+    return rows[0]["value"] if rows else None
+
+
+RUNTIME_DESIRED_PROFILES_KEY = "runtime.desired_profile_ids"
+
+
+def desired_profile_ids() -> list[str] | None:
+    raw = preference_value(RUNTIME_DESIRED_PROFILES_KEY)
+    if raw is None:
+        return None
+    try:
+        values = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(values, list):
+        return None
+    profile_ids: list[str] = []
+    for value in values:
+        if isinstance(value, str) and value and value not in profile_ids:
+            profile_ids.append(value)
+    return profile_ids
+
+
+def save_desired_profile_ids(profile_ids: list[str]) -> None:
+    unique_ids = list(dict.fromkeys(
+        profile_id for profile_id in profile_ids
+        if profile_id and profile_id not in MANAGED_PROFILES
+    ))
+    db.execute(
+        """
+        INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+        """,
+        (RUNTIME_DESIRED_PROFILES_KEY, json.dumps(unique_ids), utc_now()),
+    )
+
+
+def remove_desired_profile_id(profile_id: str) -> None:
+    desired = desired_profile_ids()
+    if desired is not None and profile_id in desired:
+        save_desired_profile_ids([
+            current_id for current_id in desired if current_id != profile_id
+        ])
+
+
+def gateway_runtime_config() -> dict[str, Any]:
+    defaults = {
+        "enabled": settings.gateway_enabled,
+        "host": settings.gateway_host,
+        "port": settings.gateway_port,
+        "request_timeout_seconds": settings.gateway_request_timeout_seconds,
+        "max_request_mb": settings.gateway_max_request_mb,
+    }
+    raw = preference_value("gateway.config")
+    if not raw:
+        return defaults
+    try:
+        stored = json.loads(raw)
+    except json.JSONDecodeError:
+        return defaults
+    if not isinstance(stored, dict):
+        return defaults
+    return {**defaults, **{key: stored[key] for key in defaults if key in stored}}
+
+
+def sync_openwebui_gateway_port(port: int) -> None:
+    env_path = Path.home() / ".local" / "share" / "mydgx" / "open-webui" / "open-webui.env"
+    if not env_path.is_file() or env_path.is_symlink():
+        return
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    key = "OPENAI_API_BASE_URL"
+    replacement = f"{key}=http://127.0.0.1:{port}/v1"
+    updated: list[str] = []
+    found = False
+    for line in lines:
+        if line.startswith(f"{key}="):
+            updated.append(replacement)
+            found = True
+        else:
+            updated.append(line)
+    if not found:
+        updated.append(replacement)
+    temporary = env_path.with_suffix(".tmp")
+    temporary.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(env_path)
+
+
+DASHBOARD_SESSION_COOKIE = "mydgx_session"
+DASHBOARD_LOGIN_WINDOW_SECONDS = 300
+DASHBOARD_LOGIN_MAX_FAILURES = 5
+_dashboard_login_failures: dict[str, list[float]] = {}
+
+
+class DashboardLoginPayload(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+
+def dashboard_password() -> str:
+    return (settings.mydgx_dashboard_password or "").strip()
+
+
+def dashboard_session_ttl_seconds() -> int:
+    return max(60, min(24 * 60 * 60, int(settings.mydgx_session_ttl_minutes) * 60))
+
+
+def _dashboard_session_key() -> bytes:
+    return hashlib.sha256(
+        b"MyDGX dashboard session v1\0" + dashboard_password().encode("utf-8")
+    ).digest()
+
+
+def create_dashboard_session(now: int | None = None) -> tuple[str, int]:
+    issued_at = int(time.time() if now is None else now)
+    expires_at = issued_at + dashboard_session_ttl_seconds()
+    payload = f"v1:{issued_at}:{expires_at}:{uuid.uuid4().hex}".encode("ascii")
+    encoded = base64.urlsafe_b64encode(payload).rstrip(b"=")
+    signature = hmac.new(_dashboard_session_key(), encoded, hashlib.sha256).digest()
+    token = b".".join((
+        encoded,
+        base64.urlsafe_b64encode(signature).rstrip(b"="),
+    )).decode("ascii")
+    return token, expires_at
+
+
+def dashboard_session_remaining(token: str, now: int | None = None) -> int:
+    if not token or not dashboard_password():
+        return 0
+    try:
+        encoded_text, supplied_text = token.split(".", 1)
+        encoded = encoded_text.encode("ascii")
+        supplied = base64.urlsafe_b64decode(
+            supplied_text.encode("ascii") + b"=" * (-len(supplied_text) % 4)
+        )
+        expected = hmac.new(_dashboard_session_key(), encoded, hashlib.sha256).digest()
+        if not hmac.compare_digest(supplied, expected):
+            return 0
+        payload = base64.urlsafe_b64decode(
+            encoded + b"=" * (-len(encoded) % 4)
+        ).decode("ascii")
+        version, issued_text, expires_text, nonce = payload.split(":", 3)
+        issued_at, expires_at = int(issued_text), int(expires_text)
+        current = int(time.time() if now is None else now)
+        ttl = dashboard_session_ttl_seconds()
+        if (
+            version != "v1"
+            or len(nonce) != 32
+            or issued_at > current + 30
+            or expires_at - issued_at != ttl
+            or expires_at <= current
+        ):
+            return 0
+        return expires_at - current
+    except (ValueError, UnicodeError, binascii.Error):
+        return 0
+
+
+def dashboard_session_valid(request: Request) -> bool:
+    return dashboard_session_remaining(
+        request.cookies.get(DASHBOARD_SESSION_COOKIE, "")
+    ) > 0
+
+
+def dashboard_login_client(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def dashboard_login_retry_after(client: str, now: float | None = None) -> int:
+    current = time.monotonic() if now is None else now
+    recent = [
+        attempted for attempted in _dashboard_login_failures.get(client, [])
+        if current - attempted < DASHBOARD_LOGIN_WINDOW_SECONDS
+    ]
+    if recent:
+        _dashboard_login_failures[client] = recent
+    else:
+        _dashboard_login_failures.pop(client, None)
+    if len(recent) < DASHBOARD_LOGIN_MAX_FAILURES:
+        return 0
+    return max(1, math.ceil(DASHBOARD_LOGIN_WINDOW_SECONDS - (current - recent[0])))
+
+
+def register_dashboard_login_failure(client: str) -> None:
+    _dashboard_login_failures.setdefault(client, []).append(time.monotonic())
+
+
+async def require_api_key(
+    request: Request,
+    x_mydgx_key: str | None = Header(default=None),
+) -> None:
+    expected_key = settings.mydgx_api_key or ""
+    if expected_key and hmac.compare_digest(x_mydgx_key or "", expected_key):
+        return
+    if dashboard_password() and dashboard_session_valid(request):
+        return
+    if dashboard_password():
+        raise HTTPException(
+            status_code=401,
+            detail="Autenticación requerida",
+            headers={"X-MyDGX-Auth-Required": "password"},
+        )
+    if expected_key:
+        raise HTTPException(status_code=401, detail="Clave de acceso inválida")
+    if settings.host not in {"127.0.0.1", "localhost", "::1"}:
+        raise HTTPException(
+            status_code=503,
+            detail="Configura MYDGX_DASHBOARD_PASSWORD o MYDGX_API_KEY para acceso de red",
+        )
+
+
+LOOPBACK_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+@lru_cache(maxsize=8)
+def trusted_request_hosts(bind_host: str, extra: str) -> frozenset[str]:
+    hosts = set(LOOPBACK_HOSTNAMES)
+    bind = bind_host.strip().strip("[]").casefold()
+    if bind in {"0.0.0.0", "::", ""}:
+        with suppress(Exception):
+            for addresses in psutil.net_if_addrs().values():
+                hosts.update(item.address.split("%", 1)[0].casefold() for item in addresses if item.family in {socket.AF_INET, socket.AF_INET6})
+        with suppress(OSError):
+            name = socket.gethostname().casefold()
+            hosts.update({name, f"{name.split('.', 1)[0]}.local"})
+    else:
+        hosts.add(bind)
+    hosts.update(item.strip().casefold() for item in extra.split(",") if item.strip())
+    return frozenset(hosts)
+
+
+def request_hostname(value: str) -> str:
+    value = value.strip().casefold()
+    if value.startswith("["):
+        return value[1:value.find("]")] if "]" in value else value
+    return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+
+
+def browser_request_rejection(request: Request, bind_host: str, allowed_origins: set[str]) -> str | None:
+    """Reject DNS-rebinding hosts and state-changing requests a browser sends on behalf of another site."""
+    host_header = request.headers.get("host", "")
+    if request_hostname(host_header) not in trusted_request_hosts(bind_host, settings.trusted_hosts):
+        return "Host no permitido: añádelo a TRUSTED_HOSTS si es legítimo"
+    if request.method.upper() not in UNSAFE_METHODS:
+        return None
+    origin = (request.headers.get("origin") or "").strip().rstrip("/")
+    if origin:
+        if origin in allowed_origins:
+            return None
+        parsed = urlparse(origin)
+        if parsed.scheme in {"http", "https"} and parsed.netloc.casefold() == host_header.strip().casefold():
+            return None
+        return "Origen no permitido para esta operación"
+    if request.headers.get("sec-fetch-site", "").casefold() in {"cross-site", "same-site"}:
+        return "Petición entre sitios bloqueada"
+    return None
+
+
+async def require_openwebui_tool_key(
+    authorization: str | None = Header(default=None),
+) -> None:
+    expected = (settings.openwebui_tool_api_key or "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Las herramientas Open WebUI no están configuradas")
+    scheme, separator, supplied = (authorization or "").partition(" ")
+    if (
+        not separator
+        or scheme.casefold() != "bearer"
+        or not hmac.compare_digest(supplied, expected)
+    ):
+        raise HTTPException(status_code=401, detail="Credencial de herramienta inválida")
+
+
+def run_command(args: list[str], timeout: int = 15) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(args, 127, "", type(exc).__name__)
+
+
+def nvidia_metrics() -> dict[str, float | int | None]:
+    defaults = {
+        "gpu_utilization": None,
+        "gpu_memory_used": None,
+        "gpu_memory_total": None,
+        "gpu_temperature": None,
+        "gpu_power_watts": None,
+        "gpu_power_limit_watts": None,
+    }
+    if not shutil.which("nvidia-smi"):
+        return defaults
+    try:
+        result = run_command(
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit",
+                "--format=csv,noheader,nounits",
+            ]
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return defaults
+        rows: list[list[float | None]] = []
+        for line in result.stdout.strip().splitlines():
+            values: list[float | None] = []
+            for raw_value in line.split(","):
+                value = raw_value.strip()
+                if value.lower() in {"n/a", "[n/a]", "not supported", "[not supported]"}:
+                    values.append(None)
+                else:
+                    values.append(float(value))
+            if len(values) == 6:
+                rows.append(values)
+        if not rows:
+            return defaults
+
+        def available(column: int) -> list[float]:
+            return [value for row in rows if (value := row[column]) is not None]
+
+        utilization = available(0)
+        memory_used = available(1)
+        memory_total = available(2)
+        temperature = available(3)
+        power_draw = available(4)
+        power_limit = available(5)
+        return {
+            "gpu_utilization": round(sum(utilization) / len(utilization), 1) if utilization else None,
+            "gpu_memory_used": int(sum(memory_used) * 1024 * 1024) if memory_used else None,
+            "gpu_memory_total": int(sum(memory_total) * 1024 * 1024) if memory_total else None,
+            "gpu_temperature": round(max(temperature), 1) if temperature else None,
+            "gpu_power_watts": round(sum(power_draw), 1) if power_draw else None,
+            "gpu_power_limit_watts": round(sum(power_limit), 1) if power_limit else None,
+        }
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return defaults
+
+
+def collect_metrics() -> dict[str, Any]:
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    try:
+        network = psutil.net_io_counters()
+        network_sent = network.bytes_sent
+        network_received = network.bytes_recv
+    except (PermissionError, OSError):
+        network_sent = 0
+        network_received = 0
+    try:
+        disk_io = psutil.disk_io_counters()
+        disk_read_bytes = disk_io.read_bytes if disk_io else 0
+        disk_write_bytes = disk_io.write_bytes if disk_io else 0
+    except (PermissionError, OSError):
+        disk_read_bytes = 0
+        disk_write_bytes = 0
+    return {
+        "created_at": utc_now(),
+        "cpu_percent": round(psutil.cpu_percent(interval=None), 1),
+        "memory_percent": round(memory.percent, 1),
+        "memory_used": memory.used,
+        "memory_total": memory.total,
+        "memory_available": memory.available,
+        **nvidia_metrics(),
+        "disk_percent": round(disk.percent, 1),
+        "disk_used": disk.used,
+        "disk_total": disk.total,
+        "disk_read_bytes": disk_read_bytes,
+        "disk_write_bytes": disk_write_bytes,
+        "network_sent": network_sent,
+        "network_received": network_received,
+    }
+
+
+def os_information() -> dict[str, Any]:
+    values: dict[str, str] = {}
+    try:
+        for line in Path("/etc/os-release").read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value.strip().strip('"')
+    except OSError:
+        pass
+    os_id = values.get("ID", "").lower()
+    os_like = values.get("ID_LIKE", "").lower()
+    dgx_release_path = Path("/etc/dgx-release")
+    dgx_release = ""
+    try:
+        if dgx_release_path.is_file():
+            dgx_release = dgx_release_path.read_text(encoding="utf-8", errors="ignore").strip()
+    except OSError:
+        pass
+    if dgx_release:
+        os_family = "NVIDIA DGX OS"
+    elif os_id == "ubuntu":
+        os_family = "Ubuntu"
+    elif os_id == "debian" or "debian" in os_like:
+        os_family = "Debian"
+    elif os.uname().sysname == "Darwin":
+        os_family = "macOS"
+    elif os.uname().sysname == "Linux":
+        os_family = values.get("NAME", "Linux")
+    else:
+        os_family = os.uname().sysname
+    return {
+        "os_name": values.get("PRETTY_NAME", os.uname().sysname),
+        "os_version": values.get("VERSION_ID", ""),
+        "kernel": os.uname().release,
+        "os_id": os_id or os.uname().sysname.lower(),
+        "os_family": os_family,
+        "is_dgx_os": bool(dgx_release),
+        "dgx_release": dgx_release.replace("\n", " · ")[:240],
+    }
+
+
+def boot_time_iso() -> str:
+    try:
+        boot_time = psutil.boot_time()
+    except (OSError, RuntimeError):
+        boot_time = time.time()
+    return datetime.fromtimestamp(boot_time, timezone.utc).isoformat()
+
+
+def safe_cpu_count() -> int:
+    try:
+        return psutil.cpu_count() or 1
+    except (OSError, RuntimeError, SystemError):
+        try:
+            return os.cpu_count() or 1
+        except (OSError, SystemError):
+            return 1
+
+
+@lru_cache(maxsize=1)
+def device_identity() -> dict[str, Any]:
+    evidence: list[str] = []
+    for path in (
+        Path("/etc/dgx-release"),
+        Path("/sys/devices/virtual/dmi/id/product_name"),
+        Path("/sys/devices/virtual/dmi/id/product_version"),
+        Path("/sys/devices/virtual/dmi/id/product_sku"),
+        Path("/sys/devices/virtual/dmi/id/sys_vendor"),
+        Path("/sys/devices/virtual/dmi/id/board_vendor"),
+        Path("/sys/firmware/devicetree/base/model"),
+        Path("/proc/device-tree/model"),
+    ):
+        try:
+            if path.is_file():
+                evidence.append(path.read_text(encoding="utf-8", errors="ignore").replace("\x00", " ").strip())
+        except OSError:
+            continue
+    gpu_name = ""
+    if shutil.which("nvidia-smi"):
+        try:
+            result = run_command(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                8,
+            )
+            gpu_name = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+            if gpu_name:
+                evidence.append(gpu_name)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    combined = " ".join(evidence).lower()
+    is_gb10_platform = any(marker in combined for marker in ("dgx spark", "gb10", "ascent gx10", "zgx nano", "thinkstation pgx"))
+    override = settings.device_variant_override.strip().lower()
+    override_models = {
+        "nvidia": ("NVIDIA", "NVIDIA DGX Spark"),
+        "asus": ("ASUS", "ASUS Ascent GX10"),
+        "hp": ("HP", "HP ZGX Nano G1n"),
+        "lenovo": ("Lenovo", "Lenovo ThinkStation PGX"),
+        "generic": ("NVIDIA GB10", "GB10 AI Supercomputer"),
+    }
+    if override in override_models:
+        variant = override
+        vendor, model = override_models[override]
+        is_gb10_platform = True
+    elif "ascent gx10" in combined or ("asustek" in combined and "gx10" in combined):
+        variant, vendor, model = "asus", "ASUS", "ASUS Ascent GX10"
+    elif "zgx nano" in combined or (" hp " in f" {combined} " and "gb10" in combined):
+        variant, vendor, model = "hp", "HP", "HP ZGX Nano G1n"
+    elif "thinkstation pgx" in combined or "30kl" in combined or ("lenovo" in combined and "pgx" in combined):
+        variant, vendor, model = "lenovo", "Lenovo", "Lenovo ThinkStation PGX"
+    elif "dgx spark" in combined and not any(name in combined for name in ("asus", "asustek", "hp", "lenovo")):
+        variant, vendor, model = "nvidia", "NVIDIA", "NVIDIA DGX Spark"
+    elif is_gb10_platform:
+        variant, vendor, model = "generic", "NVIDIA GB10", next((item for item in evidence if "gb10" in item.lower()), "GB10 AI Supercomputer")
+    else:
+        variant, vendor, model = "other", "", next((item for item in evidence if item), os.uname().nodename)
+    return {
+        "is_dgx_spark": is_gb10_platform,
+        "device_variant": variant,
+        "device_vendor": vendor,
+        "device_model": model[:160],
+        "gpu_name": gpu_name[:160],
+    }
+
+
+def persist_metrics(sample: dict[str, Any]) -> None:
+    db.execute(
+        """
+        INSERT INTO metric_samples(
+            created_at,cpu_percent,memory_percent,memory_used,memory_total,
+            gpu_utilization,gpu_memory_used,gpu_memory_total,gpu_temperature,
+            gpu_power_watts,gpu_power_limit_watts,
+            disk_percent,disk_used,disk_total,disk_read_bytes,disk_write_bytes,
+            network_sent,network_received
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        tuple(sample[key] for key in (
+            "created_at", "cpu_percent", "memory_percent", "memory_used", "memory_total",
+            "gpu_utilization", "gpu_memory_used", "gpu_memory_total", "gpu_temperature",
+            "gpu_power_watts", "gpu_power_limit_watts",
+            "disk_percent", "disk_used", "disk_total", "disk_read_bytes", "disk_write_bytes",
+            "network_sent", "network_received",
+        )),
+    )
+
+
+async def metrics_sampler() -> None:
+    while True:
+        await asyncio.sleep(max(2, settings.metrics_interval_seconds))
+        try:
+            persist_metrics(await asyncio.to_thread(collect_metrics))
+            model_samples = await collect_model_metrics()
+            persist_model_metrics(model_samples)
+            cutoff = time.time() - settings.metrics_retention_hours * 3600
+            cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+            db.execute("DELETE FROM metric_samples WHERE created_at < ?", (cutoff_iso,))
+            db.execute("DELETE FROM model_metric_samples WHERE created_at < ?", (cutoff_iso,))
+        except Exception as exc:
+            with suppress(Exception):
+                db.audit("metrics.sample", "host", False, type(exc).__name__)
+
+
+_profile_processes: dict[str, asyncio.subprocess.Process] = {}
+_profile_logs: dict[str, Any] = {}
+_runtime_profile_id: str | None = None
+_profile_start_lock = asyncio.Lock()
+_external_model_ids: set[str] = set()
+_runtime_effective_contexts: dict[str, int] = {}
+_runtime_model_signatures: dict[str, str] = {}
+_runtime_model_routes: dict[str, dict[str, Any]] = {}
+_runtime_profile_ids: list[str] = []
+_runtime_profile_models: dict[str, dict[str, str]] = {}
+_runtime_stop_generation: dict[str, int] = {"*": 0}
+_model_psutil_processes: dict[int, psutil.Process] = {}
+
+
+def nvidia_process_metrics() -> dict[int, dict[str, float | int | None]]:
+    metrics: dict[int, dict[str, float | int | None]] = {}
+    if not shutil.which("nvidia-smi"):
+        return metrics
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,used_gpu_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+        for line in result.stdout.splitlines():
+            parts = [part.strip() for part in line.split(",")]
+            if len(parts) != 2 or not parts[0].isdigit():
+                continue
+            memory_mb = integer_value(parts[1])
+            metrics[int(parts[0])] = {
+                "gpu_memory_bytes": memory_mb * 1024 * 1024 if memory_mb is not None else None,
+                "gpu_utilization": None,
+            }
+    except (OSError, subprocess.TimeoutExpired):
+        return metrics
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "pmon", "-c", "1", "-s", "um"],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if not parts or parts[0].startswith("#") or len(parts) < 5 or not parts[1].isdigit():
+                continue
+            utilization = float(parts[3]) if parts[3] not in {"-", "N/A"} else None
+            metrics.setdefault(int(parts[1]), {
+                "gpu_memory_bytes": None,
+                "gpu_utilization": None,
+            })["gpu_utilization"] = utilization
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return metrics
+
+
+def process_resource_metrics(pid: int) -> dict[str, float | int | None]:
+    try:
+        process = _model_psutil_processes.get(pid)
+        if process is None or not process.is_running():
+            process = psutil.Process(pid)
+            process.cpu_percent(None)
+            _model_psutil_processes[pid] = process
+        processes = [process, *process.children(recursive=True)]
+        return {
+            "cpu_percent": round(sum(item.cpu_percent(None) for item in processes), 2),
+            "ram_bytes": sum(item.memory_info().rss for item in processes),
+        }
+    except (psutil.Error, OSError):
+        _model_psutil_processes.pop(pid, None)
+        return {"cpu_percent": None, "ram_bytes": None}
+
+
+async def collect_model_metrics() -> list[dict[str, Any]]:
+    created_at = utc_now()
+    runtime_models: list[tuple[str, dict[str, Any], str]] = []
+    for profile in running_profiles():
+        mapping = _runtime_profile_models.get(profile["id"], {})
+        for model in running_profile_models(profile):
+            runtime_models.append((profile["id"], model, mapping[model["id"]]))
+    gpu_by_pid = await asyncio.to_thread(nvidia_process_metrics)
+    try:
+        ollama_running = (await ollama_payload("/api/ps")).get("models", [])
+    except HTTPException:
+        ollama_running = []
+    ollama_by_name = {
+        str(item.get("name") or item.get("model") or ""): item
+        for item in ollama_running
+    }
+    samples: list[dict[str, Any]] = []
+    attributed_ollama: set[str] = set()
+    attributed_runtime_keys: set[str] = set()
+    is_spark = device_identity()["is_dgx_spark"]
+    for profile_id, model, runtime_key in runtime_models:
+        if runtime_key in attributed_runtime_keys:
+            continue
+        attributed_runtime_keys.add(runtime_key)
+        model_id = str(model["id"])
+        engine = str(model["engine"])
+        pid = None
+        attribution = "external-unattributed"
+        cpu_percent = ram_bytes = gpu_memory_bytes = gpu_utilization = None
+        if engine == "llama.cpp":
+            process = _profile_processes.get(runtime_key)
+            if not process or process.returncode is not None:
+                continue
+            pid = process.pid
+            process_metrics = process_resource_metrics(pid)
+            cpu_percent = process_metrics["cpu_percent"]
+            ram_bytes = process_metrics["ram_bytes"]
+            gpu = gpu_by_pid.get(pid, {})
+            gpu_memory_bytes = gpu.get("gpu_memory_bytes")
+            gpu_utilization = gpu.get("gpu_utilization")
+            attribution = "process"
+        elif engine == "ollama":
+            running = ollama_by_name.get(str(model.get("model_ref") or ""))
+            if not running:
+                continue
+            attributed_ollama.add(str(model.get("model_ref") or ""))
+            gpu_memory_bytes = integer_value(running.get("size_vram"))
+            ram_bytes = integer_value(running.get("size"))
+            attribution = "ollama"
+        elif runtime_key not in _external_model_ids:
+            continue
+        samples.append({
+            "created_at": created_at,
+            "profile_id": profile_id,
+            "model_id": model_id,
+            "model_name": model.get("name") or model.get("model_ref") or model_id,
+            "engine": engine,
+            "pid": pid,
+            "attribution": attribution,
+            "cpu_percent": cpu_percent,
+            "ram_bytes": ram_bytes,
+            "unified_memory_bytes": ram_bytes if is_spark and engine == "llama.cpp" else None,
+            "gpu_memory_bytes": gpu_memory_bytes,
+            "gpu_utilization": gpu_utilization,
+        })
+    for name, running in ollama_by_name.items():
+        if not name or name in attributed_ollama:
+            continue
+        samples.append({
+            "created_at": created_at,
+            "profile_id": None,
+            "model_id": f"ollama:{name}",
+            "model_name": name,
+            "engine": "ollama",
+            "pid": None,
+            "attribution": "ollama",
+            "cpu_percent": None,
+            "ram_bytes": integer_value(running.get("size")),
+            "unified_memory_bytes": None,
+            "gpu_memory_bytes": integer_value(running.get("size_vram")),
+            "gpu_utilization": None,
+        })
+    return samples
+
+
+def persist_model_metrics(samples: list[dict[str, Any]]) -> None:
+    if not samples:
+        return
+    keys = (
+        "created_at", "profile_id", "model_id", "model_name", "engine", "pid",
+        "attribution", "cpu_percent", "ram_bytes", "unified_memory_bytes",
+        "gpu_memory_bytes", "gpu_utilization",
+    )
+    with db.connect() as connection:
+        connection.executemany(
+            """
+            INSERT INTO model_metric_samples(
+                created_at,profile_id,model_id,model_name,engine,pid,attribution,
+                cpu_percent,ram_bytes,unified_memory_bytes,gpu_memory_bytes,gpu_utilization
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            [tuple(sample.get(key) for key in keys) for sample in samples],
+        )
+        connection.commit()
+
+
+ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
+    {
+        "id": "artifex-tiel-q5", "name": "ARTIFEX · Cyber-Tiel Q5", "model_ref": "bughunter-tiel",
+        "repo": "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF",
+        "files": ["Cyber-Tiel-Coder-35B-A3B-UD-Q5_K_XL.gguf"], "port": 18081,
+        "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
+        "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0,
+        "cache_k": "q8_0", "cache_v": "q8_0", "memory": 40960,
+        "runtime": "llama.cpp b10679 · CUDA 13 · sm_121",
+    },
+    {
+        "id": "artifex-tiel-q6", "name": "ARTIFEX · Cyber-Tiel Q6", "model_ref": "bughunter-tiel",
+        "repo": "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF",
+        "files": ["Cyber-Tiel-Coder-35B-A3B-UD-Q6_K_XL.gguf"], "port": 18081,
+        "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
+        "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0,
+        "cache_k": "q8_0", "cache_v": "q8_0", "memory": 49152,
+        "runtime": "llama.cpp b10679 · CUDA 13 · sm_121",
+    },
+    {
+        "id": "artifex-v7", "name": "ARTIFEX · BugHunter v7", "model_ref": "bughunter-v7",
+        "repo": "mmp2055/Qwen3.8-27B-Uncensored-bughunter-v7",
+        "files": ["Qwen3.8-27B-Uncensored.Q4_K_M.gguf"], "port": 18080,
+        "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
+        "temperature": 0.1, "top_p": 0.9, "top_k": 0, "min_p": 0,
+        "cache_k": "", "cache_v": "", "memory": 40960,
+        "runtime": "llama.cpp b10679 · CUDA 13 · sm_121",
+    },
+    {
+        "id": "artifex-v8", "name": "ARTIFEX · BugHunter v8", "model_ref": "bughunter-v8",
+        "repo": "mmp2055/Qwen3.5-35B-A3B-uncensored-bughunter-v8",
+        "files": ["Qwen3.5-35B-A3B-uncensored-bughunter-v8.Q4_K_M.gguf"], "port": 18080,
+        "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
+        "temperature": 0.1, "top_p": 0.9, "top_k": 0, "min_p": 0,
+        "cache_k": "", "cache_v": "", "memory": 30720,
+        "runtime": "llama.cpp b10679 · CUDA 13 · sm_121",
+    },
+    {
+        "id": "artifex-gpt-oss", "name": "ARTIFEX · GPT-OSS 120B", "model_ref": "bughunter-gpt-oss",
+        "repo": "ggml-org/gpt-oss-120b-GGUF", "files": ["gpt-oss-120b-MXFP4.gguf"],
+        "port": 18080, "context": 131072, "parallel": 1, "batch": 2048, "ubatch": 2048,
+        "temperature": 1.0, "top_p": 1.0, "top_k": 0, "min_p": 0,
+        "cache_k": "", "cache_v": "", "memory": 81920, "reasoning_off": 0,
+        "reasoning_effort": "medium", "kv_unified": 0,
+        "runtime": "llama.cpp b11429 · CUDA 13 · sm_121",
+    },
+    {
+        "id": "artifex-qwen-flash", "name": "ARTIFEX · Qwen Flash", "model_ref": "bughunter-qwen-flash",
+        "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
+        "files": [
+            "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+            "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf",
+            "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf",
+        ],
+        "port": 18080, "context": 262144, "parallel": 1, "batch": 2048, "ubatch": 2048,
+        "temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0,
+        "presence": 1.5, "cache_k": "", "cache_v": "", "memory": 102400,
+        "kv_unified": 0, "runtime": "llama.cpp b11429 · CUDA 13 · sm_121",
+    },
+)
+
+
+def seed_artifex_profiles() -> None:
+    now = utc_now()
+    for preset in ARTIFEX_PROFILES:
+        files = preset["files"]
+        db.execute(
+            """
+            INSERT OR IGNORE INTO profiles(
+                id,name,engine,model_ref,model_file,model_repo,model_filename,model_files_json,
+                model_alias,port,context_size,gpu_layers,threads,parallel,batch_size,ubatch_size,
+                temperature,top_p,top_k,min_p,repeat_penalty,presence_penalty,flash_attention,
+                cache_type_k,cache_type_v,reasoning_off,reasoning_effort,kv_unified_per_slot,
+                jinja,min_free_memory_mb,source,runtime_requirement,active,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                preset["id"], preset["name"], "llama.cpp", preset["model_ref"], "",
+                preset["repo"], files[0], json.dumps(files), preset["model_ref"], preset["port"],
+                preset["context"], 99, 1, preset["parallel"], preset["batch"], preset["ubatch"],
+                preset["temperature"], preset["top_p"], preset["top_k"], preset["min_p"], 0,
+                preset.get("presence", 0), 1, preset["cache_k"], preset["cache_v"],
+                preset.get("reasoning_off", 1), preset.get("reasoning_effort", ""),
+                preset.get("kv_unified", 1), 1, preset["memory"],
+                "ARTIFEX gpu/remote/start_server.sh", preset["runtime"], 0, now, now,
+            ),
+        )
+
+
+def apply_configured_default_profile() -> dict[str, Any] | None:
+    profile_id = settings.default_profile_id.strip()
+    if not profile_id:
+        return active_profile()
+    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        db.audit(
+            "profile.default",
+            profile_id,
+            False,
+            "El DEFAULT_PROFILE_ID configurado no existe",
+        )
+        return active_profile()
+    profile = rows[0]
+    with db.connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "UPDATE profiles SET active=0,updated_at=? WHERE active=1 AND id<>?",
+            (utc_now(), profile_id),
+        )
+        connection.execute(
+            "UPDATE profiles SET active=1,updated_at=? WHERE id=?",
+            (utc_now(), profile_id),
+        )
+        connection.commit()
+    db.audit("profile.default", profile["name"], True, "Activado desde DEFAULT_PROFILE_ID")
+    return profile
+
+
+def active_profile() -> dict[str, Any] | None:
+    rows = db.rows("SELECT * FROM profiles WHERE active = 1 LIMIT 1")
+    return rows[0] if rows else None
+
+
+RUNTIME_SNAPSHOT_KEY = "runtime.snapshot"
+_runtime_owner = True
+
+
+def use_published_runtime(enabled: bool = True) -> None:
+    """Processes that never launch models (the gateway) read the owner's published snapshot."""
+    global _runtime_owner
+    _runtime_owner = not enabled
+
+
+def publish_runtime_snapshot() -> None:
+    if not _runtime_owner:
+        return
+    snapshot = {
+        "pid": os.getpid(),
+        "profile_ids": list(_runtime_profile_ids),
+        "profile_models": {key: dict(value) for key, value in _runtime_profile_models.items()},
+        "routes": {key: dict(value) for key, value in _runtime_model_routes.items()},
+        "contexts": dict(_runtime_effective_contexts),
+    }
+    try:
+        db.execute(
+            """
+            INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+            """,
+            (RUNTIME_SNAPSHOT_KEY, json.dumps(snapshot), utc_now()),
+        )
+    except sqlite3.Error:
+        pass
+
+
+def runtime_state() -> tuple[list[str], dict[str, dict[str, str]], dict[str, dict[str, Any]], dict[str, int]]:
+    if _runtime_owner:
+        return _runtime_profile_ids, _runtime_profile_models, _runtime_model_routes, _runtime_effective_contexts
+    try:
+        snapshot = json.loads(preference_value(RUNTIME_SNAPSHOT_KEY) or "{}")
+    except (json.JSONDecodeError, TypeError):
+        snapshot = {}
+    if not isinstance(snapshot, dict) or not psutil.pid_exists(int(snapshot.get("pid") or 0)):
+        return [], {}, {}, {}
+    return (
+        [str(item) for item in snapshot.get("profile_ids") or []],
+        dict(snapshot.get("profile_models") or {}),
+        dict(snapshot.get("routes") or {}),
+        {key: int(value) for key, value in (snapshot.get("contexts") or {}).items()},
+    )
+
+
+def running_profiles() -> list[dict[str, Any]]:
+    profiles: list[dict[str, Any]] = []
+    for profile_id in runtime_state()[0]:
+        rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+        if rows:
+            profiles.append(rows[0])
+    return profiles
+
+
+def running_profile_models(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    _, profile_mappings, routes, contexts = runtime_state()
+    mapping = profile_mappings.get(profile["id"], {})
+    models = []
+    for source in profile_models(profile):
+        if not source.get("enabled", True) or source["id"] not in mapping:
+            continue
+        model = dict(source)
+        runtime_id = mapping[source["id"]]
+        route = routes.get(runtime_id, {})
+        model["_runtime_context_size"] = contexts.get(
+            runtime_id,
+            model.get("context_size", 8192),
+        )
+        if route:
+            model["_runtime_port"] = route.get("port")
+            model["_runtime_model_alias"] = route.get("model_alias")
+        models.append(model)
+    return models
+
+
+def serialize_additional_models(models: list[AdditionalModelPayload]) -> str:
+    values = []
+    for model in models:
+        value = model.model_dump()
+        value["id"] = value["id"] or f"model-{uuid.uuid4().hex[:12]}"
+        values.append(value)
+    return json.dumps(values)
+
+
+PERSISTENT_MODELS_KEY = "models.persistent"
+QUICK_MODELS_KEY = "models.quick"
+DEFAULT_PROFILE_ID = "mydgx-default"
+QUICK_PROFILE_ID = "mydgx-quick"
+MANAGED_PROFILES: dict[str, dict[str, Any]] = {
+    DEFAULT_PROFILE_ID: {"name": "Default", "key": PERSISTENT_MODELS_KEY, "ports": 20_000},
+    QUICK_PROFILE_ID: {"name": "Quick", "key": QUICK_MODELS_KEY, "ports": 30_000},
+}
+
+
+def managed_models(profile_id: str) -> list[dict[str, Any]]:
+    spec = MANAGED_PROFILES[profile_id]
+    raw = preference_value(spec["key"])
+    if not raw:
+        return []
+    try:
+        values = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return assign_managed_ports(profile_id, [dict(item) for item in values if isinstance(item, dict)])
+
+
+def assign_managed_ports(profile_id: str, models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    identities = sorted({model_identity(model) for model in models})
+    assigned_ports: dict[str, int] = {}
+    used_ports: set[int] = set()
+    first = int(MANAGED_PROFILES[profile_id]["ports"])
+    for identity in identities:
+        port = first + int(hashlib.sha256(identity.encode()).hexdigest()[:8], 16) % 10_000
+        while port in used_ports:
+            port = first if port >= first + 9_999 else port + 1
+        assigned_ports[identity] = port
+        used_ports.add(port)
+    for model in models:
+        model["port"] = assigned_ports[model_identity(model)]
+    return models
+
+
+def save_managed_models(profile_id: str, models: list[dict[str, Any]]) -> None:
+    values = [(MANAGED_PROFILES[profile_id]["key"], json.dumps(models), utc_now())]
+    if profile_id == QUICK_PROFILE_ID:
+        values.append((QUICK_BOOT_ID_KEY, current_boot_id(), utc_now()))
+    for value in values:
+        db.execute(
+            """
+            INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+            """,
+            value,
+        )
+    sync_managed_profile(profile_id)
+
+
+QUICK_BOOT_ID_KEY = "models.quick.boot_id"
+QUICK_RESET_MARKER = ROOT / "data" / ".quick-reset"
+
+
+def current_boot_id() -> str:
+    """Kernel boot id: it changes on every reboot but not when only the MyDGX service restarts."""
+    with suppress(OSError):
+        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    with suppress(Exception):
+        return f"boot-{int(psutil.boot_time())}"
+    return "boot-unknown"
+
+
+def reconcile_quick_profile_on_startup() -> bool:
+    """Keep Quick across service restarts and plain deploys; drop it after a reboot or a deploy --repair."""
+    keep = (
+        settings.enable_profile_autostart
+        and bool(managed_models(QUICK_PROFILE_ID))
+        and preference_value(QUICK_BOOT_ID_KEY) == current_boot_id()
+        and not QUICK_RESET_MARKER.exists()
+    )
+    with suppress(OSError):
+        QUICK_RESET_MARKER.unlink()
+    if keep:
+        sync_managed_profile(QUICK_PROFILE_ID)
+    else:
+        save_managed_models(QUICK_PROFILE_ID, [])
+    return keep
+
+
+def persistent_models() -> list[dict[str, Any]]:
+    return managed_models(DEFAULT_PROFILE_ID)
+
+
+def save_persistent_models(models: list[dict[str, Any]]) -> None:
+    save_managed_models(DEFAULT_PROFILE_ID, models)
+
+
+def model_identity(model: dict[str, Any]) -> str:
+    if model.get("engine") == "ollama":
+        return f"ollama:{str(model.get('model_ref') or '').casefold()}"
+    return f"huggingface:{str(model.get('model_repo') or model.get('model_ref') or '').casefold()}"
+
+
+def profile_models(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    primary = dict(profile)
+    primary["id"] = "primary"
+    primary["name"] = profile["name"]
+    primary["enabled"] = True
+    primary["estimated_memory_mb"] = profile.get("estimated_memory_mb", 0)
+    for key, fallback in (
+        ("input_modalities", ["text"]),
+        ("output_modalities", ["text"]),
+    ):
+        raw = profile.get(f"{key}_json")
+        try:
+            primary[key] = json.loads(raw) if raw else fallback
+        except (json.JSONDecodeError, TypeError):
+            primary[key] = fallback
+    models = [primary]
+    try:
+        extra = json.loads(profile.get("additional_models_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        extra = []
+    for index, value in enumerate(extra):
+        if not isinstance(value, dict):
+            continue
+        model = dict(value)
+        model["id"] = model.get("id") or f"legacy-{index + 1}"
+        model["name"] = model.get("name") or model.get("model_ref") or f"Modelo {index + 2}"
+        model.setdefault("enabled", True)
+        model.setdefault("estimated_memory_mb", 0)
+        model.setdefault("model_files", [])
+        model.setdefault("task", "chat")
+        model.setdefault("input_modalities", ["text"])
+        model.setdefault("output_modalities", ["text"])
+        model.setdefault("runtime_backend", "native" if model.get("engine") == "llama.cpp" else "external")
+        model.setdefault("endpoint_url", "")
+        model.setdefault("api_protocol", "openai")
+        model.setdefault("max_input_mb", 32)
+        model.setdefault("timeout_seconds", 600)
+        models.append(model)
+    return models
+
+
+def model_weight_mb(model: dict[str, Any]) -> int:
+    paths: list[Path] = []
+    configured = model.get("model_file", "")
+    if configured:
+        path = Path(configured).expanduser()
+        if path.is_file():
+            paths.append(path)
+    repo = model.get("model_repo", "")
+    filenames = model.get("model_files") or []
+    if not filenames and model.get("model_filename"):
+        filenames = [model["model_filename"]]
+    if repo:
+        for filename in filenames:
+            try:
+                cached = cached_hf_file(repo, filename)
+                path = Path(cached)
+                if path.is_file() and path not in paths:
+                    paths.append(path)
+            except Exception:
+                continue
+    mmproj_file = model.get("mmproj_file", "")
+    if mmproj_file:
+        mmproj_path = Path(mmproj_file).expanduser()
+        if mmproj_path.is_file() and mmproj_path not in paths:
+            paths.append(mmproj_path)
+    mmproj_repo = model.get("mmproj_repo", "") or repo
+    mmproj_filename = model.get("mmproj_filename", "")
+    if mmproj_repo and mmproj_filename:
+        try:
+            cached = cached_hf_file(mmproj_repo, mmproj_filename)
+            mmproj_path = Path(cached)
+            if mmproj_path.is_file() and mmproj_path not in paths:
+                paths.append(mmproj_path)
+        except Exception:
+            pass
+    return sum(path.stat().st_size for path in paths) // (1024 * 1024)
+
+
+def estimate_model_memory_mb(model: dict[str, Any]) -> dict[str, Any]:
+    explicit = int(model.get("estimated_memory_mb") or 0)
+    declared = int(model.get("min_free_memory_mb") or 0)
+    weight = model_weight_mb(model)
+    context = int(model.get("context_size") or 8192)
+    parallel = int(model.get("parallel") or 1)
+    task = model.get("task", "chat")
+    context_estimate = (
+        max(1024, context * parallel // 32)
+        if task in {"chat", "vision", "embeddings", "reranking"}
+        else 2048
+    )
+    if explicit:
+        estimate, source = explicit, "manual"
+    elif declared:
+        estimate, source = declared, "mínimo del perfil"
+    elif weight:
+        estimate, source = int(weight * 1.12) + context_estimate, "GGUF + contexto conservador"
+    else:
+        estimate, source = 8192 + context_estimate, "estimación conservadora sin GGUF local"
+    return {
+        "model_id": model["id"],
+        "name": model["name"],
+        "port": model["port"],
+        "context_size": context,
+        "weight_mb": weight,
+        "estimated_memory_mb": estimate,
+        "source": source,
+    }
+
+
+def profile_memory_plan(profile: dict[str, Any]) -> dict[str, Any]:
+    models = [model for model in profile_models(profile) if model.get("enabled", True)]
+    estimates = [estimate_model_memory_mb(model) for model in models]
+    memory = psutil.virtual_memory()
+    reserve = int(profile.get("memory_reserve_mb") or 4096)
+    capacity = max(0, memory.total // (1024 * 1024) - reserve)
+    required = sum(item["estimated_memory_mb"] for item in estimates)
+    ports = [int(model["port"]) for model in models if model["engine"] == "llama.cpp"]
+    duplicate_ports = sorted({port for port in ports if ports.count(port) > 1})
+    return {
+        "models": estimates,
+        "required_mb": required,
+        "reserve_mb": reserve,
+        "capacity_mb": capacity,
+        "available_mb": memory.available // (1024 * 1024),
+        "fits": required <= capacity and not duplicate_ports,
+        "duplicate_ports": duplicate_ports,
+    }
+
+
+def profile_runtime_status() -> dict[str, Any]:
+    models = []
+    references: dict[str, int] = {}
+    for mapping in _runtime_profile_models.values():
+        for runtime_key in mapping.values():
+            references[runtime_key] = references.get(runtime_key, 0) + 1
+    if _runtime_profile_models:
+        for profile_id, mapping in _runtime_profile_models.items():
+            for model_id, runtime_key in mapping.items():
+                process = _profile_processes.get(runtime_key)
+                external = runtime_key in _external_model_ids
+                running = external or bool(process and process.returncode is None)
+                models.append({
+                    "profile_id": profile_id,
+                    "model_id": model_id,
+                    "runtime_key": runtime_key,
+                    "running": running,
+                    "pid": process.pid if process and process.returncode is None else None,
+                    "returncode": process.returncode if process else None,
+                    "external": external,
+                    "shared": references.get(runtime_key, 0) > 1,
+                    "effective_context": _runtime_effective_contexts.get(runtime_key),
+                })
+    else:
+        for model_id, process in _profile_processes.items():
+            running = process.returncode is None
+            models.append({
+                "profile_id": _runtime_profile_id,
+                "model_id": model_id,
+                "running": running,
+                "pid": process.pid if running else None,
+                "returncode": process.returncode,
+                "external": False,
+                "shared": False,
+                "effective_context": _runtime_effective_contexts.get(model_id),
+            })
+        for model_id in _external_model_ids:
+            models.append({
+                "profile_id": _runtime_profile_id,
+                "model_id": model_id,
+                "running": True,
+                "pid": None,
+                "external": True,
+                "shared": False,
+                "effective_context": _runtime_effective_contexts.get(model_id),
+            })
+    unique_running = {
+        model.get("runtime_key") or f"{model.get('profile_id')}:{model['model_id']}"
+        for model in models if model["running"]
+    }
+    return {
+        "running": any(model["running"] for model in models),
+        "profile_id": _runtime_profile_id,
+        "profile_ids": list(_runtime_profile_ids),
+        "models": models,
+        "running_models": len(unique_running),
+        "boot_restore": {
+            "state": _boot_restore["state"],
+            "pending": list(_boot_restore["pending"]),
+            "errors": list(_boot_restore["errors"]),
+        },
+    }
+
+
+def configured_binary(value: str) -> str | None:
+    if not value:
+        return None
+    configured = Path(value).expanduser()
+    if configured.is_file():
+        return str(configured.resolve())
+    return shutil.which(value)
+
+
+def cuda_nvcc_binary() -> str | None:
+    for candidate in (
+        "nvcc",
+        "/usr/local/cuda/bin/nvcc",
+        "/usr/local/cuda-13.0/bin/nvcc",
+        "/usr/local/cuda-13/bin/nvcc",
+    ):
+        binary = configured_binary(candidate)
+        if binary:
+            return binary
+    return None
+
+
+def nvcc_cuda_status(output: str, minimum_major: int = 13) -> tuple[bool, str]:
+    """Parse the full `nvcc --version` text; the release line is not the last one."""
+    lines = [line.strip() for line in output.strip().splitlines() if line.strip()]
+    if not lines:
+        return False, "nvcc no detectado"
+    match = re.search(r"release\s+(\d+)\.(\d+)", output, re.IGNORECASE) or re.search(r"cuda_(\d+)\.(\d+)", output)
+    if not match:
+        return False, lines[-1]
+    version = f"{match.group(1)}.{match.group(2)}"
+    build = next((line for line in lines if line.startswith("Build ")), "")
+    return int(match.group(1)) >= minimum_major, f"CUDA {version}" + (f" · {build}" if build else "")
+
+
+def llama_binary(profile: dict[str, Any] | None = None) -> str | None:
+    configured_value = settings.llama_cpp_server_path
+    if profile:
+        requirement = profile.get("runtime_requirement", "")
+        if "b10679" in requirement and settings.llama_cpp_b10679_path:
+            configured_value = settings.llama_cpp_b10679_path
+        elif "b11429" in requirement and settings.llama_cpp_b11429_path:
+            configured_value = settings.llama_cpp_b11429_path
+    return configured_binary(configured_value)
+
+
+HF_REPO_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def cached_hf_file(repo: str, filename: str) -> Path:
+    """Resolve a cached Hub file offline, also for snapshots whose refs/main is missing."""
+    try:
+        return Path(hf_hub_download(
+            repo_id=repo,
+            filename=filename,
+            cache_dir=str(huggingface_cache_dir()),
+            token=huggingface_token(),
+            local_files_only=True,
+        ))
+    except Exception as exc:
+        failure = exc
+    relative = Path(filename)
+    if not HF_REPO_ID.fullmatch(repo) or not filename or relative.is_absolute() or ".." in relative.parts:
+        raise FileNotFoundError(filename) from failure
+    snapshots = huggingface_cache_dir() / f"models--{repo.replace('/', '--')}" / "snapshots"
+    try:
+        main_commit = (snapshots.parent / "refs" / "main").read_text(encoding="utf-8").strip()
+    except OSError:
+        main_commit = ""
+    try:
+        candidates = sorted(
+            (item for item in snapshots.iterdir() if item.is_dir()),
+            key=lambda item: (item.name != main_commit, -item.stat().st_mtime),
+        )
+    except OSError:
+        candidates = []
+    for snapshot in candidates:
+        path = snapshot / relative
+        with suppress(OSError):
+            if path.is_file() and path.stat().st_size > 0:
+                return path
+    raise FileNotFoundError(filename) from failure
+
+
+def resolve_profile_model_file(profile: dict[str, Any]) -> Path:
+    configured = profile.get("model_file", "")
+    if configured:
+        path = Path(configured).expanduser().resolve()
+        if path.is_file() and path.suffix.lower() == ".gguf":
+            return path
+    repo = profile.get("model_repo", "")
+    filename = profile.get("model_filename", "")
+    if repo and filename:
+        try:
+            cached = cached_hf_file(repo, filename)
+            return Path(cached).resolve()
+        except Exception as exc:
+            raise RuntimeError("El GGUF no está descargado; usa Descargar en el perfil") from exc
+    raise RuntimeError("El perfil no tiene un archivo GGUF válido")
+
+
+def resolve_mmproj_file(model: dict[str, Any]) -> Path | None:
+    configured = str(model.get("mmproj_file") or "")
+    if configured:
+        path = Path(configured).expanduser().resolve()
+        if path.is_file() and path.suffix.lower() == ".gguf":
+            return path
+    repo = str(model.get("mmproj_repo") or model.get("model_repo") or "")
+    filename = str(model.get("mmproj_filename") or "")
+    if repo and filename:
+        try:
+            cached = cached_hf_file(repo, filename)
+            return Path(cached).resolve()
+        except Exception as exc:
+            raise RuntimeError("El proyector multimodal no está descargado") from exc
+    return None
+
+
+def profile_model_is_downloaded(model: dict[str, Any]) -> bool:
+    if model["engine"] == "ollama":
+        return True
+    if model["engine"] != "llama.cpp":
+        return bool(model.get("endpoint_url"))
+    try:
+        model_ready = resolve_profile_model_file(model).is_file()
+        if model.get("task") == "vision":
+            return model_ready and resolve_mmproj_file(model) is not None
+        return model_ready
+    except RuntimeError:
+        return False
+
+
+def build_llama_args(binary: str, model_file: Path, profile: dict[str, Any]) -> list[str]:
+    context_flag = "--kv-unified-per-slot" if profile.get("kv_unified_per_slot") else "--ctx-size"
+    args = [
+        binary,
+        "--model", str(model_file),
+        "--alias", profile.get("model_alias") or profile["model_ref"],
+        "--host", settings.profile_bind_host,
+        "--port", str(profile["port"]),
+        context_flag, str(profile["context_size"]),
+        "--n-gpu-layers", str(profile["gpu_layers"]),
+        "--parallel", str(profile.get("parallel", 1)),
+        "--batch-size", str(profile["batch_size"]),
+        "--ubatch-size", str(profile.get("ubatch_size", 256)),
+        "--temp", str(profile["temperature"]),
+        "--top-p", str(profile["top_p"]),
+        "--metrics",
+    ]
+    if profile.get("threads", 0) > 0:
+        args.extend(["--threads", str(profile["threads"])])
+    if profile.get("repeat_penalty", 0) > 0:
+        args.extend(["--repeat-penalty", str(profile["repeat_penalty"])])
+    if profile.get("top_k", 0) > 0:
+        args.extend(["--top-k", str(profile["top_k"]), "--min-p", str(profile.get("min_p", 0))])
+    if profile.get("presence_penalty", 0) > 0:
+        args.extend(["--presence-penalty", str(profile["presence_penalty"])])
+    if profile.get("flash_attention"):
+        args.extend(["--flash-attn", "on"])
+    if profile.get("jinja"):
+        args.append("--jinja")
+    if profile.get("reasoning_off"):
+        args.extend(["--reasoning", "off"])
+    template_kwargs: dict[str, Any] = {}
+    if profile.get("reasoning_off"):
+        template_kwargs["enable_thinking"] = False
+    if profile.get("reasoning_effort"):
+        template_kwargs["reasoning_effort"] = profile["reasoning_effort"]
+    if template_kwargs:
+        args.extend(["--chat-template-kwargs", json.dumps(template_kwargs, separators=(",", ":"))])
+    if profile.get("cache_type_k"):
+        args.extend(["--cache-type-k", profile["cache_type_k"]])
+    if profile.get("cache_type_v"):
+        args.extend(["--cache-type-v", profile["cache_type_v"]])
+    mmproj = resolve_mmproj_file(profile)
+    if mmproj:
+        args.extend(["--mmproj", str(mmproj)])
+    return args
+
+
+def model_runtime_signature(model: dict[str, Any], context: int) -> str:
+    engine = str(model.get("engine") or "")
+    if engine == "llama.cpp":
+        binary = llama_binary(model)
+        if not binary:
+            raise RuntimeError("No se encontró el runtime llama.cpp requerido")
+        model_file = resolve_profile_model_file(model)
+        effective = {**model, "context_size": context}
+        args = build_llama_args(binary, model_file, effective)
+        normalized_args: list[str] = []
+        skip_next = False
+        for argument in args:
+            if skip_next:
+                skip_next = False
+                continue
+            if argument in {"--alias", "--port"}:
+                skip_next = True
+                continue
+            normalized_args.append(argument)
+        value: dict[str, Any] = {
+            "engine": engine,
+            "args": normalized_args,
+        }
+    elif engine == "ollama":
+        value = {
+            "engine": engine,
+            "model_ref": str(model.get("model_ref") or ""),
+            "ollama_url": settings.ollama_url.rstrip("/"),
+        }
+    else:
+        value = {
+            "engine": engine,
+            "model_ref": str(model.get("model_ref") or ""),
+            "endpoint_url": str(model.get("endpoint_url") or "").rstrip("/"),
+            "api_protocol": str(model.get("api_protocol") or "openai"),
+        }
+    value["routing"] = {
+        "task": model.get("task", "chat"),
+        "input_modalities": model.get("input_modalities", ["text"]),
+        "output_modalities": model.get("output_modalities", ["text"]),
+    }
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def planned_model_signature(model: dict[str, Any]) -> str:
+    context = int(model.get("context_size") or 8192)
+    try:
+        return model_runtime_signature(model, context)
+    except RuntimeError:
+        keys = (
+            "engine", "model_ref", "model_file", "model_repo", "model_filename",
+            "mmproj_file", "mmproj_repo", "mmproj_filename",
+            "context_size", "gpu_layers", "threads", "parallel", "batch_size",
+            "ubatch_size", "temperature", "top_p", "top_k", "min_p",
+            "repeat_penalty", "presence_penalty", "flash_attention", "cache_type_k",
+            "cache_type_v", "reasoning_off", "reasoning_effort",
+            "kv_unified_per_slot", "jinja", "endpoint_url", "api_protocol",
+            "task", "input_modalities", "output_modalities",
+        )
+        return json.dumps(
+            {key: model.get(key) for key in keys},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+
+
+def local_port_available(port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+
+
+def managed_profile_ports(
+    profile: dict[str, Any],
+    existing_profiles: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    managed = dict(profile)
+    try:
+        additional = json.loads(managed.get("additional_models_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        additional = []
+    additional = [dict(model) for model in additional if isinstance(model, dict)]
+    occupied: dict[int, str] = {}
+    for existing in existing_profiles:
+        for model in profile_models(existing):
+            if model.get("enabled", True) and model.get("engine") == "llama.cpp":
+                occupied[int(model.get("port") or 0)] = planned_model_signature(model)
+    gateway = gateway_runtime_config()
+    reserved = {
+        settings.port,
+        int(gateway["port"]),
+        settings.gateway_litellm_port,
+        3000,
+        8188,
+        8888,
+        9000,
+        11000,
+    }
+    for url in (settings.ollama_url, settings.openwebui_url):
+        parsed = urlparse(url)
+        if parsed.port:
+            reserved.add(parsed.port)
+    assignments: list[dict[str, Any]] = []
+    models = [managed, *additional]
+    for index, model in enumerate(models):
+        if not model.get("enabled", True) or model.get("engine") != "llama.cpp":
+            continue
+        signature = planned_model_signature(model)
+        requested = int(model.get("port") or 18080)
+        owner = occupied.get(requested)
+        reusable = owner == signature
+        conflict = (
+            requested in reserved
+            or (owner is not None and owner != signature)
+            or (owner is None and not local_port_available(requested))
+        )
+        selected = requested
+        if conflict and not reusable:
+            selected = next(
+                (
+                    candidate
+                    for candidate in range(18080, 20000)
+                    if candidate not in reserved
+                    and candidate not in occupied
+                    and local_port_available(candidate)
+                ),
+                0,
+            )
+            if not selected:
+                raise RuntimeError("No hay puertos locales libres para arrancar el perfil")
+            model["port"] = selected
+            assignments.append({
+                "model_id": "primary" if index == 0 else str(model.get("id") or f"model-{index + 1}"),
+                "model": str(model.get("name") or model.get("model_ref") or "Modelo"),
+                "from": requested,
+                "to": selected,
+            })
+        occupied[selected] = signature
+    managed["port"] = int(models[0].get("port") or managed.get("port") or 18080)
+    managed["additional_models_json"] = json.dumps(additional)
+    return managed, assignments
+
+
+def persist_managed_profile_ports(profile: dict[str, Any]) -> None:
+    db.execute(
+        "UPDATE profiles SET port=?,additional_models_json=?,updated_at=? WHERE id=?",
+        (
+            int(profile["port"]),
+            profile.get("additional_models_json") or "[]",
+            utc_now(),
+            profile["id"],
+        ),
+    )
+
+
+def user_profile_count(profiles: list[dict[str, Any]]) -> int:
+    return sum(1 for profile in profiles if profile["id"] not in MANAGED_PROFILES)
+
+
+def profiles_runtime_plan(profiles: list[dict[str, Any]]) -> dict[str, Any]:
+    memory = psutil.virtual_memory()
+    reserve_mb = max(
+        (int(profile.get("memory_reserve_mb") or 4096) for profile in profiles),
+        default=4096,
+    )
+    capacity_mb = max(0, memory.total // (1024 * 1024) - reserve_mb)
+    unique: dict[str, dict[str, Any]] = {}
+    aliases: dict[str, str] = {}
+    ports: dict[int, str] = {}
+    alias_conflicts: list[str] = []
+    port_conflicts: list[int] = []
+    entries: list[dict[str, Any]] = []
+    for profile in profiles:
+        models = [model for model in profile_models(profile) if model.get("enabled", True)]
+        for model in models:
+            estimate = estimate_model_memory_mb(model)
+            signature = planned_model_signature(model)
+            alias = str(model.get("model_alias") or model.get("model_ref") or "")
+            alias_key = alias.casefold()
+            if alias_key in aliases and aliases[alias_key] != signature:
+                alias_conflicts.append(alias)
+            aliases[alias_key] = signature
+            if model["engine"] == "llama.cpp":
+                port = int(model["port"])
+                if port in ports and ports[port] != signature:
+                    port_conflicts.append(port)
+                ports[port] = signature
+            current = unique.get(signature)
+            if not current or estimate["estimated_memory_mb"] > current["estimated_memory_mb"]:
+                unique[signature] = estimate
+            entries.append({
+                "profile_id": profile["id"],
+                "model_id": model["id"],
+                "name": model["name"],
+                "signature": signature,
+                "estimated_memory_mb": estimate["estimated_memory_mb"],
+            })
+    required_mb = sum(item["estimated_memory_mb"] for item in unique.values())
+    current_signatures = set(_runtime_model_signatures.values())
+    incremental_mb = sum(
+        item["estimated_memory_mb"]
+        for signature, item in unique.items()
+        if signature not in current_signatures
+    )
+    available_mb = memory.available // (1024 * 1024)
+    fits_total = required_mb <= capacity_mb
+    fits_available = (
+        not current_signatures
+        or incremental_mb == 0
+        or incremental_mb + reserve_mb <= available_mb
+    )
+    return {
+        "profile_ids": [profile["id"] for profile in profiles],
+        "models": entries,
+        "unique_models": len(unique),
+        "shared_models": len(entries) - len(unique),
+        "required_mb": required_mb,
+        "incremental_mb": incremental_mb,
+        "reserve_mb": reserve_mb,
+        "capacity_mb": capacity_mb,
+        "available_mb": available_mb,
+        "alias_conflicts": sorted(set(alias_conflicts)),
+        "port_conflicts": sorted(set(port_conflicts)),
+        "fits": (
+            user_profile_count(profiles) <= 2
+            and fits_total
+            and fits_available
+            and not alias_conflicts
+            and not port_conflicts
+        ),
+    }
+
+
+def record_model_run(
+    profile_id: str,
+    model: dict[str, Any],
+    status: str,
+    context: int | None,
+    estimate: int,
+    attempts: int,
+    detail: str = "",
+) -> None:
+    db.execute(
+        """
+        INSERT INTO profile_model_runs(
+            profile_id,model_id,model_name,status,effective_context,
+            estimated_memory_mb,attempts,detail,updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(profile_id,model_id) DO UPDATE SET
+            model_name=excluded.model_name,status=excluded.status,
+            effective_context=excluded.effective_context,
+            estimated_memory_mb=excluded.estimated_memory_mb,
+            attempts=excluded.attempts,detail=excluded.detail,updated_at=excluded.updated_at
+        """,
+        (
+            profile_id, model["id"], model["name"], status, context, estimate,
+            attempts, detail[:1000], utc_now(),
+        ),
+    )
+
+
+async def stop_model_process(model_id: str) -> None:
+    process = _profile_processes.pop(model_id, None)
+    if process and process.returncode is None:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=15)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+    log = _profile_logs.pop(model_id, None)
+    if log:
+        log.close()
+    _external_model_ids.discard(model_id)
+    _runtime_effective_contexts.pop(model_id, None)
+    _runtime_model_signatures.pop(model_id, None)
+    _runtime_model_routes.pop(model_id, None)
+    publish_runtime_snapshot()
+
+
+def runtime_stop_marker(profile_id: str) -> tuple[int, int]:
+    return _runtime_stop_generation["*"], _runtime_stop_generation.get(profile_id, 0)
+
+
+async def stop_profile_process(*, preserve_desired: bool = False) -> None:
+    global _runtime_profile_id
+    _runtime_stop_generation["*"] += 1
+    for profile_id in {*_runtime_profile_apps, *_profile_app_tasks}:
+        await release_profile_app(profile_id)
+    for model_id in list(_profile_processes):
+        await stop_model_process(model_id)
+    _external_model_ids.clear()
+    _runtime_effective_contexts.clear()
+    _runtime_model_signatures.clear()
+    _runtime_model_routes.clear()
+    _runtime_profile_ids.clear()
+    _runtime_profile_models.clear()
+    _runtime_profile_id = None
+    publish_runtime_snapshot()
+    if not preserve_desired:
+        save_managed_models(QUICK_PROFILE_ID, [])
+        save_desired_profile_ids([])
+
+
+async def stop_runtime_profile(profile_id: str) -> None:
+    global _runtime_profile_id
+    _runtime_stop_generation[profile_id] = _runtime_stop_generation.get(profile_id, 0) + 1
+    await release_profile_app(profile_id)
+    mapping = _runtime_profile_models.pop(profile_id, {})
+    if profile_id in _runtime_profile_ids:
+        _runtime_profile_ids.remove(profile_id)
+    referenced = {
+        runtime_key
+        for profile_mapping in _runtime_profile_models.values()
+        for runtime_key in profile_mapping.values()
+    }
+    for runtime_key in set(mapping.values()) - referenced:
+        await stop_model_process(runtime_key)
+    if _runtime_profile_id == profile_id:
+        _runtime_profile_id = _runtime_profile_ids[-1] if _runtime_profile_ids else None
+    publish_runtime_snapshot()
+    if profile_id == QUICK_PROFILE_ID:
+        save_managed_models(QUICK_PROFILE_ID, [])
+    save_desired_profile_ids(_runtime_profile_ids)
+
+
+PROFILE_APP_NAME = r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+PROFILE_APP_TIMEOUTS = {"start": 900, "restart": 900, "stop": 180, "status": 20}
+PROFILE_APP_ENV_KEYS = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TZ", "SHELL", "XDG_RUNTIME_DIR")
+_runtime_profile_apps: dict[str, str] = {}
+_profile_app_state: dict[str, dict[str, Any]] = {}
+_profile_app_locks: dict[str, asyncio.Lock] = {}
+_profile_app_tasks: dict[str, asyncio.Task[None]] = {}
+
+
+def profile_apps_root() -> Path:
+    return Path(settings.profile_apps_root).expanduser() if settings.profile_apps_root else Path.home()
+
+
+def profile_app_dir(name: str) -> Path | None:
+    """Return the directory of an app managed by its own start.sh, or None when it is not safe to run."""
+    if not re.fullmatch(PROFILE_APP_NAME, name or ""):
+        return None
+    allowed = {item.strip() for item in settings.profile_apps.split(",") if item.strip()}
+    if allowed and name not in allowed:
+        return None
+    root = profile_apps_root()
+    directory = root / name
+    script = directory / "start.sh"
+    try:
+        if directory.is_symlink() or script.is_symlink() or not directory.is_dir() or not script.is_file():
+            return None
+        resolved = directory.resolve()
+        if resolved == ROOT.resolve() or resolved.parent != root.resolve():
+            return None
+        uid = os.getuid()
+        script_stat = script.stat()
+        if directory.stat().st_uid != uid or script_stat.st_uid != uid or script_stat.st_mode & 0o022:
+            return None
+    except OSError:
+        return None
+    return directory
+
+
+def discover_profile_apps() -> list[str]:
+    try:
+        names = sorted(item.name for item in profile_apps_root().iterdir() if not item.name.startswith("."))
+    except OSError:
+        return []
+    return [name for name in names if profile_app_dir(name)]
+
+
+def profile_app_environment(name: str = "") -> dict[str, str]:
+    env = {key: os.environ[key] for key in PROFILE_APP_ENV_KEYS if key in os.environ}
+    home = env.setdefault("HOME", str(Path.home()))
+    path = env.get("PATH") or "/usr/local/bin:/usr/bin:/bin"
+    env["PATH"] = ":".join(dict.fromkeys([f"{home}/.local/bin", *path.split(":")]))
+    env["MYDGX_GATEWAY_URL"] = f"http://127.0.0.1:{gateway_runtime_config()['port']}/v1"
+    if name:
+        env["MYDGX_APP_NAME"] = name
+    web = profile_app_web_configs().get(name) if name else None
+    if web:
+        env["MYDGX_APP_HOST"] = "127.0.0.1"
+        env["MYDGX_APP_PORT"] = str(web["port"])
+        env["MYDGX_APP_ALIAS"] = web["alias"]
+        env["MYDGX_APP_URL"] = web["url"]
+    return env
+
+
+PROFILE_APP_WEB_KEY = "profile_apps.web"
+PROFILE_APP_ALIAS = re.compile(r"[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ][A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ._-]{0,39}")
+# Local ports the macOS tray forwards by default; an app on the same port could not be tunnelled.
+TRAY_TUNNEL_DEFAULT_PORTS = {11000: "túnel DGX Dashboard", 13000: "túnel Open WebUI", 14000: "túnel gateway",
+                             18088: "túnel MyDGX", 18188: "túnel ComfyUI", 28088: "túnel MyDGX"}
+
+
+def profile_app_web_configs() -> dict[str, dict[str, Any]]:
+    raw = preference_value(PROFILE_APP_WEB_KEY)
+    try:
+        values = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, TypeError):
+        values = {}
+    if not isinstance(values, dict):
+        return {}
+    configs: dict[str, dict[str, Any]] = {}
+    for name, item in values.items():
+        if not isinstance(item, dict) or not re.fullmatch(PROFILE_APP_NAME, str(name)):
+            continue
+        try:
+            port = int(item.get("port"))
+        except (TypeError, ValueError):
+            continue
+        alias = str(item.get("alias") or name).strip()
+        if 1024 <= port <= 65535 and PROFILE_APP_ALIAS.fullmatch(alias):
+            configs[str(name)] = {"alias": alias, "port": port, "url": f"http://127.0.0.1:{port}"}
+    return configs
+
+
+def reserved_app_ports() -> dict[int, str]:
+    reserved: dict[int, str] = dict(TRAY_TUNNEL_DEFAULT_PORTS)
+    for field, value in settings.model_dump().items():
+        if field.endswith("_url") and isinstance(value, str) and value:
+            with suppress(ValueError):
+                port = urlparse(value).port
+                if port:
+                    reserved[port] = field.removesuffix("_url").replace("_", " ")
+    reserved.update({settings.port: "MyDGX", settings.gateway_port: "gateway", settings.gateway_litellm_port: "gateway LiteLLM"})
+    with suppress(sqlite3.Error):
+        for profile in db.rows("SELECT * FROM profiles"):
+            for model in profile_models(profile):
+                with suppress(TypeError, ValueError):
+                    reserved[int(model["port"])] = f"perfil {profile['name']}"
+    return reserved
+
+
+def profile_app_port_conflict(name: str, port: int) -> str | None:
+    for spec in MANAGED_PROFILES.values():
+        if spec["ports"] <= port < spec["ports"] + 10_000:
+            return f"el rango {spec['ports']}-{spec['ports'] + 9_999} está reservado para el perfil {spec['name']}"
+    owner = reserved_app_ports().get(port)
+    if owner:
+        return f"el puerto {port} ya lo usa {owner}"
+    for other, config in profile_app_web_configs().items():
+        if other != name and config["port"] == port:
+            return f"el puerto {port} ya lo usa la app {other}"
+    return None
+
+
+async def local_port_open(port: int) -> bool:
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), timeout=0.3)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    writer.close()
+    with suppress(Exception):
+        await writer.wait_closed()
+    return True
+
+
+async def profile_web_apps() -> list[dict[str, Any]]:
+    """Web apps of loaded profiles (or started by hand), for the Summary buttons and the tray menu."""
+    configs = profile_app_web_configs()
+    attached = set(_runtime_profile_apps.values())
+    names = [
+        name for name in configs
+        if name in attached or _profile_app_state.get(name, {}).get("state") == "running"
+    ]
+    reachable = await asyncio.gather(*(local_port_open(configs[name]["port"]) for name in names))
+    return [
+        {"name": name, **configs[name], "state": _profile_app_state.get(name, {}).get("state", "starting"), "reachable": ok}
+        for name, ok in zip(names, reachable)
+    ]
+
+
+def profile_app_log_tail(name: str, limit: int = 600) -> str:
+    try:
+        with (ROOT / "logs" / "apps" / f"{name}.log").open("rb") as log:
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell() - limit))
+            return redact_log_text(log.read().decode("utf-8", "replace").strip(), limit)
+    except OSError:
+        return ""
+
+
+async def run_profile_app_action(name: str, action: str) -> int:
+    directory = profile_app_dir(name)
+    if directory is None:
+        raise RuntimeError(f"La app {name} no existe en {profile_apps_root()} o su start.sh no es válido")
+    timeout = PROFILE_APP_TIMEOUTS[action]
+    log_dir = ROOT / "logs" / "apps"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    with (log_dir / f"{name}.log").open("ab") as log:
+        if action != "status":
+            log.write(f"\n==> {utc_now()} start.sh {action}\n".encode())
+            log.flush()
+        # A log file instead of a pipe: start.sh may leave a daemon holding stdout open.
+        process = await asyncio.create_subprocess_exec(
+            "/bin/bash", str(directory / "start.sh"), action,
+            cwd=str(directory),
+            env=profile_app_environment(name),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL if action == "status" else log,
+            stderr=asyncio.subprocess.DEVNULL if action == "status" else asyncio.subprocess.STDOUT,
+            start_new_session=True,
+        )
+    try:
+        return await asyncio.wait_for(process.wait(), timeout=timeout)
+    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+        with suppress(asyncio.TimeoutError, ProcessLookupError):
+            await asyncio.wait_for(asyncio.shield(process.wait()), timeout=5)
+        if process.returncode is None:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        raise RuntimeError(f"start.sh {action} superó {timeout} s") from exc
+
+
+def set_profile_app_state(name: str, state: str, message: str = "") -> None:
+    _profile_app_state[name] = {
+        "state": state,
+        "message": message[:500],
+        "profiles": [profile_id for profile_id, app in _runtime_profile_apps.items() if app == name],
+        "updated_at": utc_now(),
+    }
+
+
+async def ensure_profile_app(profile_id: str, name: str) -> None:
+    async with _profile_app_locks.setdefault(name, asyncio.Lock()):
+        if _runtime_profile_apps.get(profile_id) != name:
+            return
+        try:
+            if await run_profile_app_action(name, "status") == 0:
+                set_profile_app_state(name, "running", "Ya estaba en marcha")
+                return
+            set_profile_app_state(name, "starting", "Arrancando con start.sh start")
+            code = await run_profile_app_action(name, "start")
+            if code != 0:
+                raise RuntimeError(f"start.sh start terminó con código {code}: {profile_app_log_tail(name)}")
+            set_profile_app_state(name, "running")
+            db.log(
+                "info", "profile", "profile.app.started", f"App {name} arrancada con el perfil",
+                entity_type="profile", entity_id=profile_id,
+            )
+        except asyncio.CancelledError:
+            set_profile_app_state(name, "stopped", "Arranque cancelado al detener el perfil")
+            raise
+        except Exception as exc:
+            message = redact_log_text(str(exc), 500)
+            set_profile_app_state(name, "error", message)
+            db.log(
+                "warning", "profile", "profile.app.failed", f"La app {name} no arrancó: {message}",
+                entity_type="profile", entity_id=profile_id,
+            )
+
+
+def schedule_profile_app(profile: dict[str, Any]) -> str:
+    """Start the profile's app in the background so slow app builds never hold the profile lock."""
+    name = str(profile.get("app") or "").strip()
+    if not name:
+        return ""
+    _runtime_profile_apps[profile["id"]] = name
+    previous = _profile_app_tasks.get(profile["id"])
+    if previous and not previous.done():
+        return name
+    set_profile_app_state(name, "starting", "En cola tras cargar la inferencia")
+    profile_id = profile["id"]
+    task = asyncio.create_task(ensure_profile_app(profile_id, name))
+    _profile_app_tasks[profile_id] = task
+
+    def forget(done: asyncio.Task[None]) -> None:
+        if _profile_app_tasks.get(profile_id) is done:
+            _profile_app_tasks.pop(profile_id, None)
+
+    task.add_done_callback(forget)
+    return name
+
+
+async def release_profile_app(profile_id: str) -> None:
+    name = _runtime_profile_apps.pop(profile_id, None)
+    task = _profile_app_tasks.pop(profile_id, None)
+    if task and not task.done():
+        task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await task
+    if not name:
+        return
+    if name in _runtime_profile_apps.values():
+        set_profile_app_state(name, _profile_app_state.get(name, {}).get("state", "running"), "Sigue en uso por otro perfil")
+        return
+    async with _profile_app_locks.setdefault(name, asyncio.Lock()):
+        if name in _runtime_profile_apps.values():
+            return
+        set_profile_app_state(name, "stopping", "Deteniendo con start.sh stop")
+        try:
+            code = await run_profile_app_action(name, "stop")
+            if code != 0:
+                raise RuntimeError(f"start.sh stop terminó con código {code}: {profile_app_log_tail(name)}")
+            set_profile_app_state(name, "stopped")
+            db.log(
+                "info", "profile", "profile.app.stopped", f"App {name} detenida con el perfil",
+                entity_type="profile", entity_id=profile_id,
+            )
+        except Exception as exc:
+            message = redact_log_text(str(exc), 500)
+            set_profile_app_state(name, "error", message)
+            db.log(
+                "warning", "profile", "profile.app.stop_failed", f"La app {name} no se detuvo: {message}",
+                entity_type="profile", entity_id=profile_id,
+            )
+
+
+def profile_apps_overview() -> dict[str, Any]:
+    return {
+        "root": str(profile_apps_root()),
+        "available": discover_profile_apps(),
+        "states": _profile_app_state,
+        "web": profile_app_web_configs(),
+    }
+
+
+WATCHDOG_INTERVAL_SECONDS = 10
+WATCHDOG_BACKOFF_SECONDS = (10, 30, 60, 120, 300)
+WATCHDOG_HEALTHY_RESET_SECONDS = 600
+_watchdog_state: dict[str, dict[str, Any]] = {}
+
+
+def runtime_key_owner(runtime_key: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    for profile_id, mapping in _runtime_profile_models.items():
+        for model_id, key in mapping.items():
+            if key != runtime_key:
+                continue
+            rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+            model = next(
+                (item for item in profile_models(rows[0]) if str(item["id"]) == str(model_id)),
+                None,
+            ) if rows else None
+            if model and model.get("engine") == "llama.cpp":
+                return rows[0], model
+    return None
+
+
+async def watchdog_tick(now: float | None = None) -> None:
+    """Relaunch llama-server processes of loaded profiles that died unexpectedly, with back-off."""
+    now = time.monotonic() if now is None else now
+    mapped = {key for mapping in _runtime_profile_models.values() for key in mapping.values()}
+    for key in set(_watchdog_state) - mapped:
+        _watchdog_state.pop(key, None)
+    if _profile_start_lock.locked() or _benchmark_lock.locked() or db.rows(
+        "SELECT id FROM benchmark_suites WHERE status IN ('queued','running','restoring') LIMIT 1"
+    ):
+        return
+    for key in sorted(mapped - _external_model_ids):
+        process = _profile_processes.get(key)
+        state = _watchdog_state.get(key)
+        if process and process.returncode is None:
+            if state and not state.get("dead") and now - state["started_at"] >= WATCHDOG_HEALTHY_RESET_SECONDS:
+                _watchdog_state.pop(key, None)
+            continue
+        owner = runtime_key_owner(key)
+        if not owner:
+            continue
+        profile, model = owner
+        state = state or {"failures": 0, "started_at": now}
+        _watchdog_state[key] = state
+        log_path = ROOT / "logs" / f"profile-{profile['id']}-{key}.log"
+        if not state.get("dead"):
+            detail, oom = await asyncio.to_thread(startup_log_detail, log_path)
+            state.update({
+                "dead": True,
+                "context": _runtime_effective_contexts.get(key) or int(model.get("context_size") or 8192),
+                "next_at": now + WATCHDOG_BACKOFF_SECONDS[min(state["failures"], len(WATCHDOG_BACKOFF_SECONDS) - 1)],
+            })
+            message = redact_log_text(f"{'OOM: ' if oom else ''}{detail}", 500)
+            db.log(
+                "error", "profile", "profile.model.crashed",
+                f"{model['name']} se detuvo inesperadamente (código {process.returncode if process else '—'})",
+                entity_type="profile", entity_id=profile["id"],
+                detail={"runtime_key": key, "returncode": process.returncode if process else None, "detail": message},
+            )
+            record_model_run(profile["id"], model, "retrying", state["context"], 0, state["failures"] + 1, message)
+            continue
+        if state.get("gave_up") or now < state["next_at"]:
+            continue
+        if state["failures"] >= len(WATCHDOG_BACKOFF_SECONDS):
+            state["gave_up"] = True
+            db.log(
+                "error", "profile", "profile.model.watchdog_gave_up",
+                f"{model['name']}: {state['failures']} relanzamientos fallidos; se deja detenido",
+                entity_type="profile", entity_id=profile["id"],
+            )
+            record_model_run(
+                profile["id"], model, "failed", state["context"], 0, state["failures"],
+                "El watchdog dejó de relanzarlo tras varios fallos seguidos; levanta el perfil de nuevo",
+            )
+            continue
+        async with _profile_start_lock:
+            if not runtime_key_owner(key):
+                _watchdog_state.pop(key, None)
+                continue
+            await stop_model_process(key)
+            try:
+                await launch_profile_model(profile, model, state["context"], key)
+            except Exception as exc:
+                state["failures"] += 1
+                state["next_at"] = time.monotonic() + WATCHDOG_BACKOFF_SECONDS[
+                    min(state["failures"], len(WATCHDOG_BACKOFF_SECONDS) - 1)
+                ]
+                message = redact_log_text(str(exc), 500)
+                db.log(
+                    "warning", "profile", "profile.model.relaunch_failed",
+                    f"{model['name']}: relanzamiento {state['failures']} fallido",
+                    entity_type="profile", entity_id=profile["id"], detail={"detail": message},
+                )
+                record_model_run(profile["id"], model, "retrying", state["context"], 0, state["failures"], message)
+                continue
+        state.update({"dead": False, "failures": state["failures"] + 1, "started_at": time.monotonic()})
+        db.log(
+            "info", "profile", "profile.model.relaunched",
+            f"{model['name']} relanzado por el watchdog",
+            entity_type="profile", entity_id=profile["id"], detail={"runtime_key": key},
+        )
+        record_model_run(profile["id"], model, "running", state["context"], 0, state["failures"])
+
+
+async def profile_watchdog() -> None:
+    while True:
+        await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
+        try:
+            await watchdog_tick()
+        except Exception as exc:
+            with suppress(Exception):
+                db.log("error", "profile", "profile.watchdog.error", f"{type(exc).__name__}: {redact_log_text(str(exc), 300)}")
+
+
+def reap_orphaned_llama_servers() -> list[int]:
+    """llama-server processes still writing to our profile logs belong to a previous backend that died."""
+    logs = str(ROOT / "logs" / "profile-")
+    reaped: list[int] = []
+    try:
+        candidates = [
+            process for process in psutil.process_iter(["pid", "ppid", "cmdline"])
+            if (process.info.get("cmdline") or [""])[0].endswith("llama-server")
+            and process.info.get("ppid") != os.getpid()
+        ]
+    except (psutil.Error, OSError):
+        return reaped
+    for process in candidates:
+        try:
+            target = os.readlink(f"/proc/{process.pid}/fd/1")
+        except OSError:
+            continue
+        if not target.startswith(logs):
+            continue
+        try:
+            process.terminate()
+            try:
+                process.wait(15)
+            except psutil.TimeoutExpired:
+                process.kill()
+            reaped.append(process.pid)
+        except psutil.Error:
+            continue
+    return reaped
+
+
+def _die_with_parent(parent_pid: int) -> Any:
+    """Linux: SIGTERM llama-server if the backend dies, even outside systemd (no cgroup cleanup there)."""
+    if sys.platform != "linux" or _LIBC is None:
+        return None
+    prctl = _LIBC.prctl
+
+    def apply() -> None:
+        prctl(1, 15, 0, 0, 0)
+        if os.getppid() != parent_pid:
+            os.kill(os.getpid(), 15)
+
+    return apply
+
+
+try:
+    import ctypes
+
+    _LIBC = ctypes.CDLL(None, use_errno=True) if sys.platform == "linux" else None
+except OSError:
+    _LIBC = None
+
+
+async def wait_for_memory_recovery(seconds: int = 12) -> None:
+    previous = 0
+    stable = 0
+    for _ in range(seconds * 2):
+        available = psutil.virtual_memory().available
+        if available <= previous + 64 * 1024 * 1024:
+            stable += 1
+        else:
+            stable = 0
+        if stable >= 3:
+            return
+        previous = available
+        await asyncio.sleep(0.5)
+
+
+def startup_log_detail(path: Path) -> tuple[str, bool]:
+    try:
+        text = path.read_bytes()[-65536:].decode("utf-8", errors="replace")
+    except OSError:
+        return "llama-server no produjo un diagnóstico", False
+    oom = bool(re.search(
+        r"out of memory|cuda.*(?:alloc|memory)|failed to allocate|std::bad_alloc|ggml.*alloc",
+        text,
+        re.IGNORECASE,
+    ))
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    detail = lines[-1][:500] if lines else "llama-server terminó sin diagnóstico"
+    return detail, oom
+
+
+class ExternalRuntimeUnavailable(RuntimeError):
+    pass
+
+
+async def external_endpoint_reachable(model: dict[str, Any], timeout: float = 2) -> bool:
+    endpoint = str(model.get("endpoint_url") or "").rstrip("/")
+    if not endpoint:
+        return False
+    tts_lab = model.get("api_protocol") == "tts-lab"
+    probes = (
+        [endpoint]
+        if tts_lab
+        else [f"{endpoint}/health", f"{endpoint}/v1/models", f"{endpoint}/system_stats"]
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for probe in probes:
+            try:
+                response = await client.get(probe)
+            except httpx.HTTPError:
+                continue
+            if response.status_code < (400 if tts_lab else 500):
+                return True
+    return False
+
+
+async def launch_profile_model(
+    profile: dict[str, Any],
+    model: dict[str, Any],
+    context: int,
+    runtime_key: str | None = None,
+) -> None:
+    model_id = runtime_key or model["id"]
+    if model["engine"] == "ollama":
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(f"{settings.ollama_url.rstrip('/')}/api/tags")
+            response.raise_for_status()
+            installed = {item.get("name") for item in response.json().get("models", [])}
+        if model["model_ref"] not in installed:
+            raise RuntimeError(f"El modelo Ollama {model['model_ref']} no está instalado")
+        _external_model_ids.add(model_id)
+        _runtime_effective_contexts[model_id] = context
+        _runtime_model_signatures[model_id] = model_runtime_signature(model, context)
+        _runtime_model_routes[model_id] = {
+            "port": model.get("port"),
+            "model_alias": model.get("model_alias") or model.get("model_ref"),
+        }
+        publish_runtime_snapshot()
+        return
+
+    if model["engine"] != "llama.cpp":
+        if not str(model.get("endpoint_url") or "").strip():
+            raise RuntimeError(f"{model['name']} no tiene endpoint configurado")
+        if not await external_endpoint_reachable(model, timeout=5):
+            raise ExternalRuntimeUnavailable(
+                f"El endpoint de {model['name']} no está disponible"
+            )
+        _external_model_ids.add(model_id)
+        _runtime_effective_contexts[model_id] = context
+        _runtime_model_signatures[model_id] = model_runtime_signature(model, context)
+        _runtime_model_routes[model_id] = {
+            "port": model.get("port"),
+            "model_alias": model.get("model_alias") or model.get("model_ref"),
+        }
+        publish_runtime_snapshot()
+        return
+
+    binary = llama_binary(model)
+    if not binary:
+        raise RuntimeError("No se encontró el runtime llama.cpp requerido")
+    if "sm_121" in model.get("runtime_requirement", "") and not device_identity()["is_dgx_spark"]:
+        raise RuntimeError("El modelo requiere una plataforma GB10 / sm_121")
+    model_file = resolve_profile_model_file(model)
+    effective = {**model, "context_size": context}
+    estimate = await asyncio.to_thread(estimate_model_memory_mb, effective)
+    await prepare_memory_for_model(model["name"], int(estimate["estimated_memory_mb"]) * 1024 * 1024)
+    args = build_llama_args(binary, model_file, effective)
+    log_path = ROOT / "logs" / f"profile-{profile['id']}-{model_id}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log = log_path.open("ab", buffering=0)
+    _profile_logs[model_id] = log
+    process_env = os.environ.copy()
+    process_env["CUDA_VISIBLE_DEVICES"] = "0"
+    if device_identity()["is_dgx_spark"]:
+        process_env["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] = "1"
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=log,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=ROOT,
+            env=process_env,
+            preexec_fn=_die_with_parent(os.getpid()),
+        )
+    except Exception:
+        await stop_model_process(model_id)
+        raise
+    _profile_processes[model_id] = process
+    _runtime_effective_contexts[model_id] = context
+    deadline = time.monotonic() + settings.profile_start_timeout_seconds
+    health_url = f"http://127.0.0.1:{model['port']}/health"
+    async with httpx.AsyncClient(timeout=2) as client:
+        while time.monotonic() < deadline:
+            if process.returncode is not None:
+                detail, oom = startup_log_detail(log_path)
+                await stop_model_process(model_id)
+                prefix = "OOM: " if oom else ""
+                raise RuntimeError(f"{prefix}{detail}")
+            try:
+                response = await client.get(health_url)
+                if response.status_code < 500:
+                    _runtime_model_signatures[model_id] = model_runtime_signature(model, context)
+                    _runtime_model_routes[model_id] = {
+                        "port": model.get("port"),
+                        "model_alias": model.get("model_alias") or model.get("model_ref"),
+                    }
+                    publish_runtime_snapshot()
+                    return
+            except httpx.HTTPError:
+                pass
+            await asyncio.sleep(1)
+    await stop_model_process(model_id)
+    raise RuntimeError("llama-server agotó el tiempo de arranque")
+
+
+def context_attempts(profile: dict[str, Any], model: dict[str, Any]) -> list[int]:
+    configured = int(model.get("context_size") or 8192)
+    if not profile.get("auto_fit_context", 1) or model["engine"] != "llama.cpp":
+        return [configured]
+    minimum = min(configured, int(profile.get("minimum_context_size") or 8192))
+    attempts = [configured]
+    candidate = configured
+    while candidate > minimum:
+        candidate = max(minimum, max(512, candidate // 2 // 1024 * 1024))
+        if candidate not in attempts:
+            attempts.append(candidate)
+    return attempts
+
+
+async def start_profile_process(
+    profile: dict[str, Any],
+    *,
+    persist_desired: bool = True,
+) -> dict[str, Any]:
+    global _runtime_profile_id
+    current_profiles = [
+        current for current in running_profiles() if current["id"] != profile["id"]
+    ]
+    profile, port_assignments = managed_profile_ports(profile, current_profiles)
+    if port_assignments:
+        persist_managed_profile_ports(profile)
+        db.log(
+            "info",
+            "profile",
+            "profile.ports.assigned",
+            f"{len(port_assignments)} puerto(s) reasignado(s) automáticamente",
+            entity_type="profile",
+            entity_id=profile["id"],
+            detail={"assignments": port_assignments},
+        )
+    profiles = [*current_profiles, profile]
+    plan = profiles_runtime_plan(profiles)
+    if not plan["fits"]:
+        if user_profile_count(profiles) > 2:
+            reason = "ya hay dos perfiles cargados"
+        elif plan["alias_conflicts"]:
+            reason = f"alias incompatibles: {', '.join(plan['alias_conflicts'])}"
+        elif plan["port_conflicts"]:
+            reason = f"puertos incompatibles: {plan['port_conflicts']}"
+        elif plan["required_mb"] > plan["capacity_mb"]:
+            reason = (
+                f"requiere {plan['required_mb']} MiB y la capacidad segura "
+                f"es {plan['capacity_mb']} MiB"
+            )
+        else:
+            reason = (
+                f"necesita {plan['incremental_mb']} MiB adicionales más "
+                f"{plan['reserve_mb']} MiB de reserva; hay {plan['available_mb']} MiB"
+            )
+        raise RuntimeError(f"No se puede cargar la combinación: {reason}")
+    models = [model for model in profile_models(profile) if model.get("enabled", True)]
+    previous_mapping: dict[str, str] | None = None
+    if profile["id"] in _runtime_profile_models:
+        existing = _runtime_profile_models[profile["id"]]
+        signatures = {
+            model["id"]: planned_model_signature(model)
+            for model in models
+        }
+        if (
+            set(existing) == set(signatures)
+            and all(
+                _runtime_model_signatures.get(existing[model_id]) == signature
+                for model_id, signature in signatures.items()
+            )
+        ):
+            _runtime_profile_id = profile["id"]
+            if persist_desired:
+                save_desired_profile_ids(_runtime_profile_ids)
+            runtime = profile_runtime_status()
+            runtime["app"] = schedule_profile_app(profile)
+            runtime["reused_models"] = len(models)
+            runtime["plan"] = plan
+            runtime["port_assignments"] = port_assignments
+            return runtime
+        if profile["id"] not in MANAGED_PROFILES:
+            raise RuntimeError(
+                "El perfil ya está cargado con otra configuración; detén solo ese perfil antes de recargarlo"
+            )
+        previous_mapping = _runtime_profile_models.pop(profile["id"])
+
+    mapping: dict[str, str] = {}
+    new_runtime_keys: set[str] = set()
+    reused_model_ids: set[str] = set()
+    stop_marker = runtime_stop_marker(profile["id"])
+    _runtime_profile_id = profile["id"]
+    try:
+        estimates = {
+            item["model_id"]: item
+            for item in profile_memory_plan(profile)["models"]
+        }
+        for model in models:
+            estimate = estimates[model["id"]]
+            configured_context = int(model.get("context_size") or 8192)
+            signature = model_runtime_signature(model, configured_context)
+            reusable_key = next((
+                runtime_key
+                for runtime_key, current_signature in _runtime_model_signatures.items()
+                if current_signature == signature
+                and (
+                    runtime_key in _external_model_ids
+                    or (
+                        runtime_key in _profile_processes
+                        and _profile_processes[runtime_key].returncode is None
+                    )
+                )
+            ), None)
+            if reusable_key:
+                mapping[model["id"]] = reusable_key
+                reused_model_ids.add(model["id"])
+                context = _runtime_effective_contexts.get(reusable_key, configured_context)
+                record_model_run(
+                    profile["id"],
+                    model,
+                    "running",
+                    context,
+                    estimate["estimated_memory_mb"],
+                    0,
+                    "Proceso conservado al cambiar de perfil",
+                )
+                db.log(
+                    "info",
+                    "profile",
+                    "profile.model.reused",
+                    f"{model['name']} compartido sin reiniciar",
+                    entity_type="profile",
+                    entity_id=profile["id"],
+                    detail={"model_id": model["id"], "runtime_key": reusable_key},
+                )
+                continue
+            runtime_key = f"{profile['id']}:{model['id']}"
+            mapping[model["id"]] = runtime_key
+            new_runtime_keys.add(runtime_key)
+            attempts = context_attempts(profile, model)
+            last_error = ""
+            for attempt_number, context in enumerate(attempts, start=1):
+                available_mb = psutil.virtual_memory().available // (1024 * 1024)
+                scaled_estimate = max(
+                    1024,
+                    estimate["estimated_memory_mb"] * context // max(1, int(model["context_size"])),
+                )
+                if available_mb < scaled_estimate + plan["reserve_mb"]:
+                    last_error = (
+                        f"memoria disponible {available_mb} MiB; "
+                        f"necesita {scaled_estimate + plan['reserve_mb']} MiB"
+                    )
+                    record_model_run(
+                        profile["id"], model,
+                        "retrying" if attempt_number < len(attempts) else "failed",
+                        context, scaled_estimate, attempt_number, last_error,
+                    )
+                else:
+                    try:
+                        record_model_run(profile["id"], model, "starting", context, scaled_estimate, attempt_number)
+                        await launch_profile_model(profile, model, context, runtime_key)
+                        record_model_run(profile["id"], model, "running", context, scaled_estimate, attempt_number)
+                        break
+                    except Exception as exc:
+                        last_error = str(exc)
+                        await stop_model_process(runtime_key)
+                        await wait_for_memory_recovery()
+                        record_model_run(
+                            profile["id"], model,
+                            "retrying" if last_error.startswith("OOM:") and attempt_number < len(attempts) else "failed",
+                            context, scaled_estimate, attempt_number, last_error,
+                        )
+                        if not last_error.startswith("OOM:"):
+                            raise
+            else:
+                raise RuntimeError(f"{model['name']}: {last_error}")
+        if runtime_stop_marker(profile["id"]) != stop_marker:
+            raise RuntimeError("Arranque interrumpido: se pidió detener el perfil mientras cargaba")
+        _runtime_profile_models[profile["id"]] = mapping
+        if profile["id"] not in _runtime_profile_ids:
+            _runtime_profile_ids.append(profile["id"])
+        if previous_mapping:
+            referenced = {key for keys in _runtime_profile_models.values() for key in keys.values()}
+            for runtime_key in set(previous_mapping.values()) - referenced:
+                await stop_model_process(runtime_key)
+        publish_runtime_snapshot()
+        if persist_desired:
+            save_desired_profile_ids(_runtime_profile_ids)
+        detail = f"{len(models)} modelos · {len(reused_model_ids)} conservados"
+        db.audit("profile.start", profile["name"], True, detail)
+        runtime = profile_runtime_status()
+        runtime["app"] = schedule_profile_app(profile)
+        runtime["reused_models"] = len(reused_model_ids)
+        runtime["plan"] = plan
+        runtime["port_assignments"] = port_assignments
+        return runtime
+    except Exception:
+        for runtime_key in new_runtime_keys:
+            await stop_model_process(runtime_key)
+        if previous_mapping is not None:
+            _runtime_profile_models[profile["id"]] = previous_mapping
+        else:
+            _runtime_profile_models.pop(profile["id"], None)
+            if profile["id"] in _runtime_profile_ids:
+                _runtime_profile_ids.remove(profile["id"])
+        _runtime_profile_id = _runtime_profile_ids[-1] if _runtime_profile_ids else None
+        publish_runtime_snapshot()
+        raise
+
+
+async def restore_desired_profiles(
+    legacy_profile: dict[str, Any] | None,
+) -> None:
+    desired = desired_profile_ids()
+    if desired is None:
+        targets = [legacy_profile] if legacy_profile and legacy_profile["id"] not in MANAGED_PROFILES else []
+        persist_each = True
+    else:
+        targets = []
+        persist_each = False
+        for profile_id in desired:
+            if profile_id in MANAGED_PROFILES:
+                continue
+            rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+            if rows:
+                targets.append(rows[0])
+            else:
+                db.audit(
+                    "profile.autostart",
+                    profile_id,
+                    False,
+                    "El perfil guardado ya no existe",
+                )
+    targets = [
+        *db.rows("SELECT * FROM profiles WHERE id=?", (DEFAULT_PROFILE_ID,)),
+        *targets,
+        *db.rows("SELECT * FROM profiles WHERE id=?", (QUICK_PROFILE_ID,)),
+    ]
+    _boot_restore.update({"state": "restoring", "pending": [profile["name"] for profile in targets], "errors": []})
+    deadline = time.monotonic() + settings.profile_restore_retry_seconds
+    while targets:
+        retry: list[dict[str, Any]] = []
+        for profile in targets:
+            try:
+                await start_profile_process(profile, persist_desired=persist_each)
+                queue_profile_benchmarks(profile)
+                db.audit(
+                    "profile.autostart",
+                    profile["name"],
+                    True,
+                    "Estado de ejecución restaurado",
+                )
+            except (ExternalRuntimeUnavailable, httpx.HTTPError) as exc:
+                if time.monotonic() >= deadline:
+                    db.audit("profile.autostart", profile["name"], False, redact_log_text(str(exc), 500))
+                    _boot_restore["errors"].append(f"{profile['name']}: {type(exc).__name__}")
+                else:
+                    retry.append(profile)
+            except Exception as exc:
+                db.audit("profile.autostart", profile["name"], False, redact_log_text(str(exc), 500))
+                _boot_restore["errors"].append(f"{profile['name']}: {redact_log_text(str(exc), 200)}")
+                if profile["id"] == QUICK_PROFILE_ID:
+                    save_managed_models(QUICK_PROFILE_ID, [])
+        targets = retry
+        _boot_restore["pending"] = [profile["name"] for profile in targets]
+        if targets:
+            db.log(
+                "info",
+                "profile",
+                "profile.autostart.waiting",
+                f"Esperando a sus servicios para restaurar: {', '.join(_boot_restore['pending'])}",
+            )
+            await asyncio.sleep(PROFILE_RESTORE_RETRY_INTERVAL_SECONDS)
+    _boot_restore["state"] = "done"
+
+
+PROFILE_RESTORE_RETRY_INTERVAL_SECONDS = 15
+_boot_restore: dict[str, Any] = {"state": "idle", "pending": [], "errors": []}
+
+
+async def boot_restore_runtime(legacy_profile: dict[str, Any] | None) -> None:
+    """Runs after the API is serving, so slow model loads never block systemd's start timeout."""
+    try:
+        if settings.enable_profile_autostart:
+            async with _profile_start_lock:
+                await restore_desired_profiles(legacy_profile)
+    except Exception as exc:
+        _boot_restore.update({"state": "done"})
+        _boot_restore["errors"].append(type(exc).__name__)
+        db.log("error", "profile", "profile.autostart.failed", redact_log_text(str(exc), 500))
+    finally:
+        benchmark_task = asyncio.create_task(benchmark_scheduler())
+        _benchmark_background_tasks.add(benchmark_task)
+        benchmark_task.add_done_callback(_benchmark_background_tasks.discard)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    db.initialize()
+    stale_download_jobs = db.rows(
+        """
+        SELECT id,status,cancel_requested FROM jobs
+        WHERE kind IN (
+            'huggingface.download','huggingface.files.download',
+            'huggingface.integrity','ollama.pull','ollama.update'
+        )
+          AND status IN ('queued','running','cancelling')
+        """
+    )
+    for stale in stale_download_jobs:
+        cancelled = bool(stale.get("cancel_requested")) or stale["status"] == "cancelling"
+        db.update_job(
+            stale["id"],
+            "cancelled" if cancelled else "failed",
+            0,
+            (
+                "Descarga cancelada tras reiniciar MyDGX"
+                if cancelled
+                else "Descarga interrumpida al reiniciar MyDGX; puede reanudarse"
+            ),
+        )
+    stale_suites = db.rows(
+        """
+        SELECT id,job_id FROM benchmark_suites
+        WHERE status IN ('queued','running','restoring')
+        """
+    )
+    for stale in stale_suites:
+        db.execute(
+            """
+            UPDATE benchmark_suites
+            SET status='interrupted',error='MyDGX se reinició durante la suite',
+                completed_at=?
+            WHERE id=?
+            """,
+            (utc_now(), stale["id"]),
+        )
+        db.execute(
+            """
+            UPDATE benchmark_suite_items
+            SET status='cancelled',error='MyDGX se reinició',completed_at=?
+            WHERE suite_id=? AND status IN ('loading','running')
+            """,
+            (utc_now(), stale["id"]),
+        )
+        db.update_job(
+            stale["job_id"],
+            "failed",
+            0,
+            "Suite interrumpida; MyDGX restaurará los perfiles guardados",
+        )
+    db.log(
+        "info",
+        "application",
+        "application.start",
+        "MyDGX está iniciando",
+        entity_type="application",
+        entity_id=settings.app_name,
+        detail={"version": app.version},
+    )
+    for seed in (seed_artifex_profiles, seed_default_profiles):
+        try:
+            seed()
+        except Exception as exc:
+            db.log("error", "profile", "profile.seed.failed", f"{seed.__name__}: {redact_log_text(str(exc), 500)}")
+    try:
+        if reconcile_quick_profile_on_startup():
+            db.log("info", "profile", "profile.quick.kept", "Quick se conserva: MyDGX se reinició sin reiniciar el equipo")
+        sync_managed_profile(DEFAULT_PROFILE_ID)
+    except Exception as exc:
+        db.log("error", "profile", "profile.managed.sync_failed", redact_log_text(str(exc), 500))
+    profile = apply_configured_default_profile()
+    reaped = await asyncio.to_thread(reap_orphaned_llama_servers)
+    if reaped:
+        db.log(
+            "warning", "profile", "profile.orphans.reaped",
+            f"{len(reaped)} llama-server huérfano(s) de una ejecución anterior detenido(s)",
+            detail={"pids": reaped},
+        )
+    persist_metrics(await asyncio.to_thread(collect_metrics))
+    sampler = asyncio.create_task(metrics_sampler())
+    restore_task = asyncio.create_task(boot_restore_runtime(profile))
+    memory_mode_task = asyncio.create_task(reapply_memory_mode())
+    watchdog_task = asyncio.create_task(profile_watchdog())
+    description_task = asyncio.create_task(backfill_hf_model_descriptions())
+    yield
+    db.log(
+        "info",
+        "application",
+        "application.stop",
+        "MyDGX está deteniéndose",
+        entity_type="application",
+        entity_id=settings.app_name,
+    )
+    sampler.cancel()
+    description_task.cancel()
+    for task in (restore_task, memory_mode_task, watchdog_task):
+        task.cancel()
+    await asyncio.gather(restore_task, memory_mode_task, watchdog_task, return_exceptions=True)
+    for task in list(_benchmark_background_tasks):
+        task.cancel()
+    if _benchmark_background_tasks:
+        await asyncio.gather(*list(_benchmark_background_tasks), return_exceptions=True)
+    await stop_profile_process(preserve_desired=True)
+    try:
+        await sampler
+    except asyncio.CancelledError:
+        pass
+    try:
+        await description_task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(title="MyDGX API", version="0.1.0", lifespan=lifespan)
+DASHBOARD_DEV_ORIGINS = {"http://localhost:5173", "http://127.0.0.1:5173"}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(DASHBOARD_DEV_ORIGINS),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def reject_cross_site_requests(request: Request, call_next: Any) -> Any:
+    reason = browser_request_rejection(request, settings.host, DASHBOARD_DEV_ORIGINS)
+    if reason:
+        with suppress(sqlite3.Error):
+            db.log(
+                "warning", "http", "http.cross_site_blocked", reason,
+                entity_type="route", entity_id=request.url.path[:500],
+                detail={"method": request.method, "origin": (request.headers.get("origin") or "")[:200]},
+            )
+        return JSONResponse(status_code=403, content={"detail": reason})
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def log_http_operations(request: Request, call_next: Any) -> Any:
+    started = time.monotonic()
+    method = request.method.upper()
+    path = request.url.path[:500]
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        try:
+            db.log(
+                "error",
+                "http",
+                "http.exception",
+                f"{method} {path} terminó con una excepción",
+                entity_type="route",
+                entity_id=path,
+                detail={
+                    "method": method,
+                    "path": path,
+                    "exception": type(exc).__name__,
+                    "duration_ms": round((time.monotonic() - started) * 1000, 2),
+                },
+            )
+        except sqlite3.Error:
+            pass
+        raise
+    if (
+        path.startswith("/api/")
+        and path != "/api/logs"
+        and (method in {"POST", "PUT", "PATCH", "DELETE"} or response.status_code >= 500)
+    ):
+        level = "error" if response.status_code >= 500 else "warning" if response.status_code >= 400 else "info"
+        try:
+            db.log(
+                level,
+                "http",
+                "http.mutation" if method in {"POST", "PUT", "PATCH", "DELETE"} else "http.response",
+                f"{method} {path} → {response.status_code}",
+                entity_type="route",
+                entity_id=path,
+                detail={
+                    "method": method,
+                    "path": path,
+                    "status_code": response.status_code,
+                    "duration_ms": round((time.monotonic() - started) * 1000, 2),
+                },
+            )
+        except sqlite3.Error:
+            pass
+    return response
+
+
+@app.get("/api/auth/status")
+async def dashboard_auth_status(request: Request, response: Response) -> dict[str, Any]:
+    required = bool(dashboard_password())
+    remaining = (
+        dashboard_session_remaining(request.cookies.get(DASHBOARD_SESSION_COOKIE, ""))
+        if required
+        else 0
+    )
+    response.headers["Cache-Control"] = "no-store"
+    if required and not remaining and request.cookies.get(DASHBOARD_SESSION_COOKIE):
+        response.delete_cookie(DASHBOARD_SESSION_COOKIE, path="/", samesite="strict")
+    return {
+        "required": required,
+        "authenticated": not required or remaining > 0,
+        "expires_in_seconds": remaining,
+        "session_ttl_minutes": dashboard_session_ttl_seconds() // 60,
+    }
+
+
+@app.post("/api/auth/login")
+async def dashboard_auth_login(
+    payload: DashboardLoginPayload,
+    request: Request,
+) -> JSONResponse:
+    expected = dashboard_password()
+    if not expected:
+        return JSONResponse(
+            {
+                "required": False,
+                "authenticated": True,
+                "expires_in_seconds": 0,
+                "session_ttl_minutes": dashboard_session_ttl_seconds() // 60,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+    client = dashboard_login_client(request)
+    retry_after = dashboard_login_retry_after(client)
+    if retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="Demasiados intentos. Espera antes de volver a probar.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    supplied_digest = hashlib.sha256(payload.password.encode("utf-8")).digest()
+    expected_digest = hashlib.sha256(expected.encode("utf-8")).digest()
+    if not hmac.compare_digest(supplied_digest, expected_digest):
+        register_dashboard_login_failure(client)
+        raise HTTPException(status_code=401, detail="Contraseña incorrecta")
+    _dashboard_login_failures.pop(client, None)
+    token, expires_at = create_dashboard_session()
+    remaining = max(1, expires_at - int(time.time()))
+    response = JSONResponse(
+        {
+            "required": True,
+            "authenticated": True,
+            "expires_in_seconds": remaining,
+            "session_ttl_minutes": dashboard_session_ttl_seconds() // 60,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+    response.set_cookie(
+        DASHBOARD_SESSION_COOKIE,
+        token,
+        max_age=remaining,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+async def dashboard_auth_logout() -> JSONResponse:
+    response = JSONResponse(
+        {"authenticated": False},
+        headers={"Cache-Control": "no-store"},
+    )
+    response.delete_cookie(DASHBOARD_SESSION_COOKIE, path="/", samesite="strict")
+    return response
+
+
+secure = [Depends(require_api_key)]
+openwebui_tool_secure = [Depends(require_openwebui_tool_key)]
+
+
+async def service_probe(url: str, path: str = "/") -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(f"{url.rstrip('/')}{path}")
+            return response.status_code < 500
+    except httpx.HTTPError:
+        return False
+
+
+async def ollama_payload(path: str, method: str = "GET", payload: dict[str, Any] | None = None, timeout: float = 10) -> Any:
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.request(method, f"{settings.ollama_url.rstrip('/')}{path}", json=payload)
+            response.raise_for_status()
+            return response.json() if response.content else {}
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"Ollama no disponible: {type(exc).__name__}") from exc
+
+
+@app.get("/api/health")
+async def health() -> dict[str, Any]:
+    return {"status": "ok", "name": settings.app_name, "version": app.version}
+
+
+@app.get("/api/config", dependencies=secure)
+async def public_config() -> dict[str, Any]:
+    gateway = gateway_runtime_config()
+    gateway_host = "127.0.0.1" if gateway["host"] in {"0.0.0.0", "::"} else gateway["host"]
+    return {
+        "app_name": settings.app_name,
+        "openwebui_url": settings.openwebui_public_url or settings.openwebui_url,
+        "comfyui_url": settings.comfyui_public_url or settings.comfyui_url,
+        "dgx_dashboard_url": settings.dgx_dashboard_url,
+        "hf_token_configured": bool(settings.hf_token),
+        "api_key_required": bool(settings.mydgx_api_key),
+        "system_updates_enabled": settings.enable_system_updates,
+        "service_control_enabled": settings.enable_service_control,
+        "gateway_enabled": gateway["enabled"],
+        "gateway_url": f"http://{gateway_host}:{gateway['port']}/v1",
+        "gateway_api_key_configured": bool(settings.gateway_api_key),
+        "assistant_enabled": settings.assistant_enabled,
+        "assistant_model": settings.assistant_model,
+        "benchmark_enabled": settings.benchmark_enabled,
+        "benchmark_auto_new_models": settings.benchmark_auto_new_models,
+    }
+
+
+class GatewayConfigPayload(BaseModel):
+    enabled: bool = True
+    host: Literal["127.0.0.1", "0.0.0.0", "::1", "::"] = "127.0.0.1"
+    port: int = Field(default=4000, ge=1024, le=65535)
+    request_timeout_seconds: int = Field(default=600, ge=10, le=7200)
+    max_request_mb: int = Field(default=32, ge=1, le=256)
+
+
+def gateway_model_full_name(model: dict[str, Any]) -> str:
+    model_file = str(model.get("model_file") or "").strip()
+    if model_file:
+        return re.sub(r"\.gguf$", "", Path(model_file).name, flags=re.IGNORECASE)
+    return str(model.get("model_repo") or model.get("model_ref") or model.get("model_alias") or "")
+
+
+def gateway_published_model(model: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "alias": str(model.get("model_alias") or model["model_ref"]),
+        "full_name": gateway_model_full_name(model),
+        "display_name": str(model.get("name") or ""),
+        "engine": str(model.get("engine") or ""),
+        "task": str(model.get("task") or "chat"),
+        "context_length": int(model.get("_runtime_context_size") or model.get("context_size") or 0) or None,
+    }
+
+
+@app.get("/api/gateway/config", dependencies=secure)
+async def gateway_config() -> dict[str, Any]:
+    config = gateway_runtime_config()
+    display_host = "127.0.0.1" if config["host"] in {"0.0.0.0", "::"} else config["host"]
+    network_addresses = list(dict.fromkeys(
+        address.address
+        for addresses in psutil.net_if_addrs().values()
+        for address in addresses
+        if address.family == socket.AF_INET and not address.address.startswith("127.")
+    ))
+    profiles = running_profiles()
+    published: dict[str, dict[str, Any]] = {}
+    for profile in profiles:
+        for model in running_profile_models(profile):
+            entry = gateway_published_model(model)
+            published.setdefault(entry["alias"], entry)
+    aliases = list(published)
+    return {
+        **config,
+        "api_key_configured": bool(settings.gateway_api_key),
+        "endpoint": f"http://{display_host}:{config['port']}/v1",
+        "anthropic_endpoint": f"http://{display_host}:{config['port']}",
+        "protocol_adapter": installed_distribution("litellm"),
+        "active_profile": " + ".join(profile["name"] for profile in profiles) or None,
+        "aliases": aliases,
+        "models": list(published.values()),
+        "network_addresses": network_addresses,
+        "running": await service_probe(f"http://127.0.0.1:{config['port']}", "/health"),
+    }
+
+
+@app.put("/api/gateway/config", dependencies=secure)
+async def update_gateway_config(payload: GatewayConfigPayload) -> dict[str, Any]:
+    if payload.host in {"0.0.0.0", "::"} and not settings.gateway_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Configura GATEWAY_API_KEY en .env antes de exponer el gateway en la red",
+        )
+    if payload.port in {settings.port, settings.gateway_litellm_port}:
+        raise HTTPException(status_code=400, detail="El puerto está reservado por MyDGX")
+    profile_rows = db.rows("SELECT * FROM profiles")
+    used_ports = {
+        int(model["port"])
+        for profile in profile_rows
+        for model in profile_models(profile)
+        if model.get("enabled", True) and model["engine"] == "llama.cpp"
+    }
+    if payload.port in used_ports:
+        raise HTTPException(status_code=400, detail="El puerto está asignado a un modelo llama.cpp")
+    value = payload.model_dump()
+    db.execute(
+        """
+        INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+        """,
+        ("gateway.config", json.dumps(value), utc_now()),
+    )
+    sync_openwebui_gateway_port(payload.port)
+    db.audit("gateway.configure", f"{payload.host}:{payload.port}", True)
+    return {"updated": True, "restart_required": True}
+
+
+@app.get("/api/overview", dependencies=secure)
+async def overview() -> dict[str, Any]:
+    sample = await asyncio.to_thread(collect_metrics)
+    ollama_ok, openwebui_ok, comfyui_ok, dgx_ok = await asyncio.gather(
+        service_probe(settings.ollama_url, "/api/tags"),
+        service_probe(settings.openwebui_url),
+        service_probe(settings.comfyui_url, "/system_stats"),
+        service_probe(settings.dgx_dashboard_url),
+    )
+    return {
+        "metrics": sample,
+        "host": {
+            "hostname": os.uname().nodename,
+            "platform": os.uname().sysname,
+            "architecture": os.uname().machine,
+            **os_information(),
+            **device_identity(),
+            "boot_time": boot_time_iso(),
+            "cpu_count": safe_cpu_count(),
+        },
+        "services": {
+            "ollama": ollama_ok,
+            "openwebui": openwebui_ok,
+            "comfyui": comfyui_ok,
+            "dgx_dashboard": dgx_ok,
+        },
+        "benchmark_suite": active_benchmark_suite(),
+        "memory": await safe_memory_breakdown(),
+        "running_profiles": [
+            {
+                "id": profile["id"], "name": profile["name"], "app": profile.get("app") or "",
+                "models": profile_model_labels(profile),
+            }
+            for profile in running_profiles()
+        ],
+        "web_apps": await profile_web_apps(),
+    }
+
+
+def short_model_label(model: dict[str, Any]) -> str:
+    reference = str(model.get("model_ref") or model.get("model_repo") or model.get("name") or "")
+    label = reference.rsplit("/", 1)[-1]
+    return re.sub(r"[-_.]gguf$", "", label, flags=re.IGNORECASE) or str(model.get("name") or "")
+
+
+def profile_model_labels(profile: dict[str, Any]) -> list[str]:
+    return [short_model_label(model) for model in profile_models(profile) if model.get("enabled", True)]
+
+
+async def safe_memory_breakdown() -> dict[str, Any]:
+    try:
+        return await memory_breakdown()
+    except Exception:
+        return {}
+
+
+@app.get("/api/metrics/history", dependencies=secure)
+async def metrics_history(
+    minutes: int = Query(default=60, ge=1, le=10080),
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+) -> list[dict[str, Any]]:
+    if (start is None) != (end is None):
+        raise HTTPException(status_code=422, detail="start y end deben indicarse juntos")
+    if start is not None and end is not None:
+        start = start.replace(tzinfo=timezone.utc) if start.tzinfo is None else start.astimezone(timezone.utc)
+        end = end.replace(tzinfo=timezone.utc) if end.tzinfo is None else end.astimezone(timezone.utc)
+        if start >= end:
+            raise HTTPException(status_code=422, detail="start debe ser anterior a end")
+        maximum_span = timedelta(hours=max(1, settings.metrics_retention_hours))
+        if end - start > maximum_span:
+            raise HTTPException(
+                status_code=422,
+                detail=f"El intervalo supera la retención de {settings.metrics_retention_hours} horas",
+            )
+        cutoff = start.isoformat()
+        upper_bound = end.isoformat()
+    else:
+        cutoff = datetime.fromtimestamp(time.time() - minutes * 60, timezone.utc).isoformat()
+        upper_bound = datetime.now(timezone.utc).isoformat()
+    rows = db.rows(
+        """
+        SELECT * FROM metric_samples
+        WHERE created_at >= ? AND created_at <= ?
+        ORDER BY created_at ASC
+        """,
+        (cutoff, upper_bound),
+    )
+    if len(rows) <= 800:
+        return rows
+    stride = max(1, math.ceil(len(rows) / 800))
+    sampled = rows[::stride]
+    if sampled[-1]["id"] != rows[-1]["id"]:
+        sampled.append(rows[-1])
+    return sampled
+
+
+@app.get("/api/metrics/models", dependencies=secure)
+async def model_metrics_history(
+    minutes: int = Query(default=60, ge=1, le=10080),
+    profile_id: str | None = Query(default=None, max_length=80),
+) -> dict[str, Any]:
+    cutoff = datetime.fromtimestamp(time.time() - minutes * 60, timezone.utc).isoformat()
+    if profile_id:
+        rows = db.rows(
+            """
+            SELECT * FROM model_metric_samples
+            WHERE created_at >= ? AND profile_id=?
+            ORDER BY created_at ASC
+            """,
+            (cutoff, profile_id),
+        )
+    else:
+        rows = db.rows(
+            "SELECT * FROM model_metric_samples WHERE created_at >= ? ORDER BY created_at ASC",
+            (cutoff,),
+        )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        key = f"{row.get('profile_id') or 'standalone'}:{row['model_id']}"
+        grouped.setdefault(key, []).append(row)
+    history = []
+    current = []
+    now = datetime.now(timezone.utc)
+    freshness_seconds = max(15, settings.metrics_interval_seconds * 3)
+    for samples in grouped.values():
+        latest = dict(samples[-1])
+        try:
+            sampled_at = datetime.fromisoformat(latest["created_at"])
+            latest["active"] = (now - sampled_at).total_seconds() <= freshness_seconds
+        except (TypeError, ValueError):
+            latest["active"] = False
+        current.append(latest)
+        stride = max(1, math.ceil(len(samples) / 300))
+        history.extend(samples[::stride])
+        if history and history[-1]["id"] != samples[-1]["id"]:
+            history.append(samples[-1])
+    history.sort(key=lambda item: item["created_at"])
+    current.sort(key=lambda item: item["model_name"].casefold())
+    return {
+        "current": current,
+        "history": history,
+        "retention_hours": settings.metrics_retention_hours,
+    }
+
+
+def file_value(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+
+
+def integer_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        normalized = value.strip().replace(",", "")
+        match = re.search(r"-?\d+", normalized)
+        if match:
+            return int(match.group())
+    return None
+
+
+def nvme_storage_devices(
+    nvme_root: Path = Path("/sys/class/nvme"),
+    block_root: Path = Path("/sys/class/block"),
+    dev_root: Path = Path("/dev"),
+) -> list[dict[str, Any]]:
+    devices = []
+    cached_smart_payloads: dict[str, dict[str, Any]] | None = None
+    for controller in sorted(nvme_root.glob("nvme*")):
+        if not re.fullmatch(r"nvme\d+", controller.name):
+            continue
+        namespaces = []
+        capacity = 0
+        for block in sorted(block_root.glob(f"{controller.name}n*")):
+            if not re.fullmatch(rf"{re.escape(controller.name)}n\d+", block.name):
+                continue
+            sectors = integer_value(file_value(block / "size")) or 0
+            size = sectors * 512
+            capacity += size
+            namespaces.append({"name": block.name, "path": str(dev_root / block.name), "size": size})
+
+        temperature = None
+        for temperature_file in controller.glob("hwmon*/temp1_input"):
+            millidegrees = integer_value(file_value(temperature_file))
+            if millidegrees is not None:
+                temperature = round(millidegrees / 1000, 1)
+                break
+
+        smart: dict[str, Any] = {
+            "available": False,
+            "source": None,
+            "critical_warning": None,
+            "available_spare": None,
+            "percentage_used": None,
+            "data_units_read": None,
+            "data_units_written": None,
+            "controller_busy_time": None,
+            "power_cycles": None,
+            "power_on_hours": None,
+            "unsafe_shutdowns": None,
+            "media_errors": None,
+            "num_err_log_entries": None,
+        }
+        device_path = dev_root / controller.name
+        if device_path.exists() and shutil.which("nvme"):
+            result = run_command(["nvme", "smart-log", "-o", "json", str(device_path)], 8)
+            if result.returncode == 0:
+                try:
+                    payload = json.loads(result.stdout)
+                    smart.update({
+                        "available": True,
+                        "source": "nvme-cli",
+                        "critical_warning": integer_value(payload.get("critical_warning")),
+                        "available_spare": integer_value(payload.get("avail_spare")),
+                        "percentage_used": integer_value(payload.get("percent_used")),
+                        "data_units_read": integer_value(payload.get("data_units_read")),
+                        "data_units_written": integer_value(payload.get("data_units_written")),
+                        "controller_busy_time": integer_value(payload.get("controller_busy_time")),
+                        "power_cycles": integer_value(payload.get("power_cycles")),
+                        "power_on_hours": integer_value(payload.get("power_on_hours")),
+                        "unsafe_shutdowns": integer_value(payload.get("unsafe_shutdowns")),
+                        "media_errors": integer_value(payload.get("media_errors")),
+                        "num_err_log_entries": integer_value(payload.get("num_err_log_entries")),
+                    })
+                    temperature = temperature or integer_value(payload.get("temperature"))
+                except json.JSONDecodeError:
+                    pass
+        if (
+            device_path.exists()
+            and not smart["available"]
+            and dev_root == Path("/dev")
+        ):
+            if cached_smart_payloads is None:
+                cached_smart_payloads = {}
+                cache_path = Path("/run/mydgx/nvme-smart.json")
+                try:
+                    cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                    cached_smart_payloads = {
+                        item["name"]: item["smart"]
+                        for item in cached.get("devices", [])
+                        if isinstance(item, dict)
+                        and isinstance(item.get("name"), str)
+                        and isinstance(item.get("smart"), dict)
+                    }
+                except (OSError, json.JSONDecodeError, KeyError):
+                    pass
+            payload = cached_smart_payloads.get(controller.name)
+            if payload:
+                smart.update({
+                    "available": True,
+                    "source": "nvme-cli",
+                    "critical_warning": integer_value(payload.get("critical_warning")),
+                    "available_spare": integer_value(payload.get("avail_spare")),
+                    "percentage_used": integer_value(payload.get("percent_used")),
+                    "data_units_read": integer_value(payload.get("data_units_read")),
+                    "data_units_written": integer_value(payload.get("data_units_written")),
+                    "controller_busy_time": integer_value(payload.get("controller_busy_time")),
+                    "power_cycles": integer_value(payload.get("power_cycles")),
+                    "power_on_hours": integer_value(payload.get("power_on_hours")),
+                    "unsafe_shutdowns": integer_value(payload.get("unsafe_shutdowns")),
+                    "media_errors": integer_value(payload.get("media_errors")),
+                    "num_err_log_entries": integer_value(payload.get("num_err_log_entries")),
+                })
+                temperature = temperature or integer_value(payload.get("temperature"))
+        if device_path.exists() and not smart["available"] and shutil.which("smartctl"):
+            result = run_command(["smartctl", "--json=c", "-a", str(device_path)], 8)
+            if result.returncode in {0, 4}:
+                try:
+                    payload = json.loads(result.stdout)
+                    health = payload.get("nvme_smart_health_information_log") or {}
+                    smart.update({
+                        "available": bool(health),
+                        "source": "smartctl" if health else None,
+                        "critical_warning": integer_value(health.get("critical_warning")),
+                        "available_spare": integer_value(health.get("available_spare")),
+                        "percentage_used": integer_value(health.get("percentage_used")),
+                        "data_units_read": integer_value(health.get("data_units_read")),
+                        "data_units_written": integer_value(health.get("data_units_written")),
+                        "controller_busy_time": integer_value(health.get("controller_busy_time")),
+                        "power_cycles": integer_value(health.get("power_cycles")),
+                        "power_on_hours": integer_value(health.get("power_on_hours")),
+                        "unsafe_shutdowns": integer_value(health.get("unsafe_shutdowns")),
+                        "media_errors": integer_value(health.get("media_errors")),
+                        "num_err_log_entries": integer_value(health.get("num_err_log_entries")),
+                    })
+                    temperature = temperature or integer_value(
+                        (payload.get("temperature") or {}).get("current")
+                    )
+                except json.JSONDecodeError:
+                    pass
+        devices.append({
+            "name": controller.name,
+            "model": file_value(controller / "model"),
+            "firmware": file_value(controller / "firmware_rev"),
+            "state": file_value(controller / "state") or "unknown",
+            "capacity": capacity,
+            "temperature": temperature,
+            "namespaces": namespaces,
+            "smart": smart,
+        })
+    return devices
+
+
+def directory_usage_bytes(path: Path, filesystem_device: int | None = None) -> int:
+    path = path.expanduser()
+    if not path.exists() or path.is_symlink():
+        return 0
+    try:
+        if filesystem_device is not None and path.stat().st_dev != filesystem_device:
+            return 0
+    except OSError:
+        return 0
+    du = shutil.which("du")
+    if du:
+        try:
+            result = subprocess.run(
+                [du, "-x", "-s", "-k", "--", str(path)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            return max(0, int(result.stdout.split()[0]) * 1024)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    total = 0
+    pending = [path]
+    while pending:
+        current = pending.pop()
+        try:
+            for entry in os.scandir(current):
+                try:
+                    if entry.is_symlink():
+                        continue
+                    stat = entry.stat(follow_symlinks=False)
+                    if filesystem_device is not None and stat.st_dev != filesystem_device:
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        total += stat.st_size
+                except (PermissionError, OSError):
+                    continue
+        except (PermissionError, OSError):
+            continue
+    return total
+
+
+def storage_inventory() -> dict[str, Any]:
+    visible = psutil.disk_partitions(all=False)
+    all_partitions = psutil.disk_partitions(all=True)
+    by_mount = {partition.mountpoint: partition for partition in all_partitions}
+    root_usage = psutil.disk_usage("/")
+    root_partition = by_mount.get("/")
+    partitions: list[dict[str, Any]] = []
+    seen_mounts: set[str] = set()
+
+    def add_partition(mountpoint: str, device: str, filesystem: str, scope: str) -> None:
+        if mountpoint in seen_mounts or not Path(mountpoint).is_dir():
+            return
+        try:
+            usage = psutil.disk_usage(mountpoint)
+        except (PermissionError, OSError):
+            return
+        virtual = device.startswith("/dev/loop") or filesystem.lower() in {
+            "overlay", "squashfs", "tmpfs", "devtmpfs", "ramfs",
+        }
+        partitions.append({
+            "device": device or scope,
+            "mountpoint": mountpoint,
+            "filesystem": filesystem or "desconocido",
+            "kind": "virtual" if virtual else scope,
+            "total": usage.total,
+            "used": usage.used,
+            "free": usage.free,
+            "percent": usage.percent,
+        })
+        seen_mounts.add(mountpoint)
+
+    add_partition(
+        "/",
+        root_partition.device if root_partition else "sistema",
+        root_partition.fstype if root_partition else "",
+        "system",
+    )
+    for partition in visible:
+        add_partition(partition.mountpoint, partition.device, partition.fstype, "physical")
+
+    root_device = Path("/").stat().st_dev
+    home = Path.home()
+    hf_path = Path(settings.hf_home).expanduser()
+    ollama_path = home / ".ollama"
+    local_tools_path = home / ".local"
+    model_sizes = {
+        "Hugging Face": directory_usage_bytes(hf_path, root_device),
+        "Ollama": directory_usage_bytes(ollama_path, root_device),
+    }
+    mydgx_size = directory_usage_bytes(ROOT, root_device)
+    home_tools_size = directory_usage_bytes(local_tools_path, root_device)
+    opt_size = directory_usage_bytes(Path("/opt"), root_device)
+    usr_local_size = directory_usage_bytes(Path("/usr/local"), root_device)
+    home_size = directory_usage_bytes(home, root_device)
+    models_size = sum(model_sizes.values())
+    tools_size = home_tools_size + opt_size + usr_local_size
+    home_other_size = max(0, home_size - models_size - mydgx_size - home_tools_size)
+    system_other_size = max(0, root_usage.used - home_size - opt_size - usr_local_size)
+    categories = [
+        {"id": "models", "label": "Modelos", "size": models_size, "description": "Hugging Face y Ollama"},
+        {"id": "mydgx", "label": "MyDGX", "size": mydgx_size, "description": "Aplicación, datos y entorno"},
+        {"id": "tools", "label": "Herramientas", "size": tools_size, "description": ".local, /opt y /usr/local"},
+        {"id": "home", "label": "Home del usuario", "size": home_other_size, "description": "Archivos no incluidos arriba"},
+        {"id": "system", "label": "Sistema y otros", "size": system_other_size, "description": "Sistema operativo y datos restantes"},
+    ]
+    targets = [
+        {"name": name, "path": str(path), "size": model_sizes[name]}
+        for name, path in (("Hugging Face", hf_path), ("Ollama", ollama_path))
+        if path.exists()
+    ]
+    targets.append({"name": "MyDGX", "path": str(ROOT), "size": mydgx_size})
+    return {
+        "partitions": partitions,
+        "usage_categories": categories,
+        "categorized_total": root_usage.used,
+        "model_storage": targets,
+    }
+
+
+@app.get("/api/storage", dependencies=secure)
+async def storage() -> dict[str, Any]:
+    inventory, devices = await asyncio.gather(
+        asyncio.to_thread(storage_inventory),
+        asyncio.to_thread(nvme_storage_devices),
+    )
+    return {**inventory, "nvme_devices": devices}
+
+
+QUANTIZATION_PATTERN = re.compile(
+    r"(?i)(?:^|[._-])((?:UD-)?Q[2-8](?:_[A-Z0-9]+)*|IQ[1-4](?:_[A-Z0-9]+)*|MXFP4|BF16|F16|FP16)(?:[._-]|$)"
+)
+
+
+def local_hf_repo_details(directory: Path) -> dict[str, Any]:
+    refs: dict[str, str] = {}
+    refs_root = directory / "refs"
+    if refs_root.is_dir():
+        for ref in refs_root.rglob("*"):
+            if ref.is_file():
+                try:
+                    refs[str(ref.relative_to(refs_root))] = ref.read_text(
+                        encoding="utf-8", errors="ignore"
+                    ).strip()[:128]
+                except OSError:
+                    continue
+    snapshots = []
+    quantizations: set[str] = set()
+    shard_groups: dict[str, dict[str, Any]] = {}
+    snapshots_root = directory / "snapshots"
+    if snapshots_root.is_dir():
+        for snapshot in sorted(item for item in snapshots_root.iterdir() if item.is_dir()):
+            files = []
+            for item in sorted(snapshot.rglob("*")):
+                if item.is_dir():
+                    continue
+                relative = str(item.relative_to(snapshot))
+                target = item.resolve(strict=False)
+                complete = target.is_file()
+                size = target.stat().st_size if complete else 0
+                blob = target.name if "blobs" in target.parts else None
+                quant_match = QUANTIZATION_PATTERN.search(item.name)
+                quantization = quant_match.group(1).upper() if quant_match else None
+                if quantization:
+                    quantizations.add(quantization)
+                shard_match = re.match(r"(.+)-(\d{5})-of-(\d{5})\.gguf$", item.name, re.IGNORECASE)
+                if shard_match:
+                    group = f"{snapshot.name}:{shard_match.group(1)}"
+                    entry = shard_groups.setdefault(group, {
+                        "name": shard_match.group(1),
+                        "revision": snapshot.name,
+                        "expected": int(shard_match.group(3)),
+                        "present": [],
+                    })
+                    if complete:
+                        entry["present"].append(int(shard_match.group(2)))
+                files.append({
+                    "name": relative,
+                    "size": size,
+                    "complete": complete,
+                    "blob": blob,
+                    "quantization": quantization,
+                    "checksum_verifiable": bool(blob and re.fullmatch(r"[a-fA-F0-9]{64}", blob)),
+                })
+            snapshots.append({
+                "commit": snapshot.name,
+                "files": files,
+                "size": sum(item["size"] for item in files),
+                "complete": all(item["complete"] for item in files),
+            })
+    partials = []
+    blobs_root = directory / "blobs"
+    if blobs_root.is_dir():
+        for item in blobs_root.glob("*.incomplete"):
+            try:
+                partials.append({"name": item.name, "size": item.stat().st_size})
+            except OSError:
+                continue
+    shards = []
+    for value in shard_groups.values():
+        expected = set(range(1, value["expected"] + 1))
+        present = set(value["present"])
+        shards.append({
+            **value,
+            "present": sorted(present),
+            "missing": sorted(expected - present),
+            "complete": present == expected,
+        })
+    return {
+        "refs": refs,
+        "snapshots": snapshots,
+        "partials": partials,
+        "quantizations": sorted(quantizations),
+        "shards": shards,
+    }
+
+
+UNCENSORED_MODEL_PATTERN = re.compile(
+    r"uncensored|abliterat|\bablit|heretic|derestrict|unrestrict|unleashed|unfiltered|nsfw|dolphin",
+    re.IGNORECASE,
+)
+
+
+def hf_card_front_matter(directory: Path, snapshots: list[dict[str, Any]]) -> str:
+    """YAML header of the cached README (tags, base_model…); the free-text body is ignored on purpose."""
+    for snapshot in reversed(snapshots):
+        readme = directory / "snapshots" / str(snapshot["commit"]) / "README.md"
+        try:
+            with readme.open("r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read(65_536)
+        except OSError:
+            continue
+        if not text.startswith("---"):
+            return ""
+        closing = text.find("\n---", 3)
+        return text[3:closing] if closing >= 0 else ""
+    return ""
+
+
+def hf_card_task_hints(front_matter: str) -> tuple[str | None, list[str]]:
+    """pipeline_tag plus tags/library_name from a card header, without a YAML parser."""
+    pipeline = re.search(r"^pipeline_tag:\s*['\"]?([A-Za-z0-9_-]+)", front_matter, re.M)
+    hints: list[str] = []
+    library = re.search(r"^library_name:\s*['\"]?([A-Za-z0-9_.-]+)", front_matter, re.M)
+    if library:
+        hints.append(library.group(1))
+    tags = re.search(r"^tags:\s*\n((?:[ \t]*-[^\n]*\n?)+)", front_matter, re.M)
+    if tags:
+        hints.extend(item.strip().strip("'\"") for item in re.findall(r"-\s*([^\n]+)", tags.group(1)))
+    return (pipeline.group(1) if pipeline else None), hints[:64]
+
+
+def local_hf_models() -> list[dict[str, Any]]:
+    hub = huggingface_cache_dir()
+    models = []
+    if not hub.exists():
+        return models
+    for directory in hub.glob("models--*"):
+        repo_id = directory.name.removeprefix("models--").replace("--", "/")
+        size = sum(item.stat().st_size for item in directory.rglob("*") if item.is_file() and not item.is_symlink())
+        details = local_hf_repo_details(directory)
+        files = [
+            file
+            for snapshot in details["snapshots"]
+            for file in snapshot["files"]
+        ]
+        formats = []
+        filenames = [str(file["name"]).lower() for file in files]
+        for label, suffixes in (
+            ("GGUF", (".gguf",)),
+            ("Safetensors", (".safetensors",)),
+            ("ONNX", (".onnx",)),
+            ("PyTorch", (".bin", ".pt", ".pth")),
+        ):
+            if any(name.endswith(suffixes) for name in filenames):
+                formats.append(label)
+        configuration: dict[str, Any] = {}
+        allowed_config = (
+            "model_type", "architectures", "torch_dtype", "hidden_size",
+            "num_hidden_layers", "num_attention_heads", "num_key_value_heads",
+            "max_position_embeddings", "vocab_size",
+        )
+        for snapshot in reversed(details["snapshots"]):
+            config_path = directory / "snapshots" / snapshot["commit"] / "config.json"
+            if not config_path.is_file():
+                continue
+            try:
+                raw_config = json.loads(config_path.read_text(encoding="utf-8"))
+                configuration = {
+                    key: raw_config[key]
+                    for key in allowed_config
+                    if key in raw_config and isinstance(raw_config[key], (str, int, float, list))
+                }
+            except (OSError, json.JSONDecodeError):
+                pass
+            break
+        front_matter = hf_card_front_matter(directory, details["snapshots"])
+        pipeline_tag, card_tags = hf_card_task_hints(front_matter)
+        architecture_hints = [str(item) for item in configuration.get("architectures") or [] if isinstance(item, str)]
+        if isinstance(configuration.get("model_type"), str):
+            architecture_hints.append(configuration["model_type"])
+        models.append({
+            "repo_id": repo_id,
+            "path": str(directory),
+            "size": size,
+            "pipeline_tag": pipeline_tag or "",
+            "tasks": hf_model_tasks(repo_id, pipeline_tag, [*card_tags, *architecture_hints]) if formats else [],
+            "source": "huggingface",
+            "revisions": details["refs"],
+            "revision": details["refs"].get("main") or (
+                details["snapshots"][-1]["commit"] if details["snapshots"] else ""
+            ),
+            "snapshot_count": len(details["snapshots"]),
+            "file_count": len(files),
+            "formats": formats,
+            "quantizations": details["quantizations"],
+            "configuration": configuration,
+            "shard_count": len(details["shards"]),
+            "partial_downloads": len(details["partials"]),
+            "incomplete_shards": sum(1 for item in details["shards"] if not item["complete"]),
+            "uncensored": bool(
+                UNCENSORED_MODEL_PATTERN.search(repo_id)
+                or UNCENSORED_MODEL_PATTERN.search(front_matter)
+            ),
+            "downloaded_at": datetime.fromtimestamp(
+                directory.stat().st_mtime, timezone.utc
+            ).isoformat(),
+        })
+    return sorted(models, key=lambda item: item["repo_id"].lower())
+
+
+def normalize_model_description(value: str) -> str:
+    text = value.replace("\x00", "").strip()
+    if text.startswith("---"):
+        closing = text.find("\n---", 3)
+        if closing >= 0:
+            text = text[closing + 4:].lstrip()
+    return text[:200_000].rstrip()
+
+
+def generated_hf_description(repo_id: str, info: Any, metadata: dict[str, Any]) -> str:
+    def display(value: Any) -> str:
+        if isinstance(value, list):
+            return ", ".join(str(item) for item in value[:8])
+        return str(value or "").strip()
+
+    pipeline = display(getattr(info, "pipeline_tag", None)) or "no indicada"
+    library = display(getattr(info, "library_name", None)) or "no indicada"
+    license_name = display(metadata.get("license")) or "no indicada"
+    base_model = display(metadata.get("base_model")) or "no indicado"
+    languages = display(metadata.get("language")) or "no indicados"
+    tags = [str(tag) for tag in (getattr(info, "tags", None) or [])[:12]]
+    downloads = int(getattr(info, "downloads", 0) or 0)
+    likes = int(getattr(info, "likes", 0) or 0)
+    return (
+        f"# {repo_id.split('/')[-1]}\n\n"
+        "Descripción generada automáticamente por MyDGX a partir de los metadatos "
+        "públicos de Hugging Face porque el repositorio no proporciona una ficha utilizable.\n\n"
+        f"- **Repositorio:** `{repo_id}`\n"
+        f"- **Tarea declarada:** {pipeline}\n"
+        f"- **Biblioteca:** {library}\n"
+        f"- **Modelo base:** {base_model}\n"
+        f"- **Licencia:** {license_name}\n"
+        f"- **Idiomas:** {languages}\n"
+        f"- **Descargas / Me gusta:** {downloads:,} / {likes:,}\n"
+        f"- **Etiquetas públicas:** {', '.join(tags) if tags else 'ninguna'}\n"
+    )
+
+
+def saved_model_description(repo_id: str) -> dict[str, Any] | None:
+    rows = db.rows(
+        """
+        SELECT revision,description,metadata_json,fetched_at
+        FROM model_descriptions
+        WHERE source='huggingface' AND source_id=?
+        """,
+        (repo_id,),
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    try:
+        metadata = json.loads(row["metadata_json"])
+    except (TypeError, json.JSONDecodeError):
+        metadata = {}
+    return {
+        "revision": row["revision"],
+        "description": row["description"],
+        "metadata": metadata,
+        "fetched_at": row["fetched_at"],
+    }
+
+
+def refresh_hf_model_description(repo_id: str, revision: str = "main") -> dict[str, Any] | None:
+    try:
+        info = HfApi(token=huggingface_token()).model_info(repo_id, revision=revision)
+        resolved_revision = str(getattr(info, "sha", None) or revision)
+        try:
+            card_data = info.card_data
+            metadata = card_data.to_dict() if hasattr(card_data, "to_dict") else dict(card_data or {})
+        except (KeyError, TypeError, ValueError):
+            metadata = {}
+        try:
+            readme_path = hf_hub_download(
+                repo_id=repo_id,
+                filename="README.md",
+                revision=resolved_revision,
+                cache_dir=str(huggingface_card_cache_dir()),
+                token=huggingface_token(),
+            )
+            description = normalize_model_description(
+                Path(readme_path).read_text(encoding="utf-8", errors="replace")
+            )
+        except Exception:
+            description = ""
+        metadata["_mydgx_description_source"] = "huggingface_readme"
+        if not description:
+            description = generated_hf_description(repo_id, info, metadata)
+            metadata["_mydgx_description_source"] = "generated_public_metadata"
+        fetched_at = utc_now()
+        db.execute(
+            """
+            INSERT INTO model_descriptions(
+                source,source_id,revision,description,metadata_json,fetched_at
+            ) VALUES('huggingface',?,?,?,?,?)
+            ON CONFLICT(source,source_id) DO UPDATE SET
+                revision=excluded.revision,
+                description=excluded.description,
+                metadata_json=excluded.metadata_json,
+                fetched_at=excluded.fetched_at
+            """,
+            (
+                repo_id,
+                resolved_revision,
+                description,
+                json.dumps(metadata, ensure_ascii=False, default=str),
+                fetched_at,
+            ),
+        )
+        return {
+            "revision": resolved_revision,
+            "description": description,
+            "metadata": metadata,
+            "fetched_at": fetched_at,
+        }
+    except Exception as exc:
+        db.log(
+            "warning",
+            "models",
+            "huggingface.description",
+            "No se pudo conservar la descripción del modelo",
+            entity_type="huggingface_model",
+            entity_id=repo_id,
+            detail={"error": type(exc).__name__},
+        )
+        return saved_model_description(repo_id)
+
+
+async def backfill_hf_model_descriptions() -> None:
+    missing = [
+        model
+        for model in await asyncio.to_thread(local_hf_models)
+        if saved_model_description(str(model["repo_id"])) is None
+    ]
+    semaphore = asyncio.Semaphore(3)
+
+    async def refresh(model: dict[str, Any]) -> None:
+        async with semaphore:
+            await asyncio.to_thread(
+                refresh_hf_model_description,
+                str(model["repo_id"]),
+                str(model.get("revision") or "main"),
+            )
+
+    await asyncio.gather(*(refresh(model) for model in missing), return_exceptions=True)
+
+
+async def resolved_assistant_reference(
+    installed_names: set[str] | None = None,
+    loaded_profile_models: list[tuple[dict[str, Any], dict[str, Any]]] | None = None,
+) -> str | None:
+    if not settings.assistant_enabled:
+        return None
+    if installed_names is None:
+        try:
+            installed = (await ollama_payload("/api/tags")).get("models", [])
+        except HTTPException:
+            installed = []
+        installed_names = {
+            str(model.get("name") or model.get("model") or "").casefold()
+            for model in installed
+            if model.get("name") or model.get("model")
+        }
+    if loaded_profile_models is None:
+        loaded_profile_models = [
+            (profile, model)
+            for profile in running_profiles()
+            for model in running_profile_models(profile)
+            if model.get("enabled", True)
+        ]
+    for candidate in await assistant_model_candidates(None):
+        normalized = candidate.casefold()
+        if normalized.startswith("profile:"):
+            profile_model = assistant_profile_model(candidate)
+            if profile_model and any(
+                profile["id"] == candidate.split(":", 2)[1]
+                and model["id"] == profile_model["id"]
+                for profile, model in loaded_profile_models
+            ):
+                return candidate
+        elif normalized in installed_names:
+            return candidate
+    return None
+
+
+MEMORY_RUNTIME_PATTERNS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("comfyui", "ComfyUI", ("ComfyUI/main.py",)),
+    ("whisper", "Whisper", ("server:app", "--port 9000")),
+    ("tts", "TTS CUDA", ("server:app", "--port 9010")),
+    ("open-webui", "Open WebUI", ("open-webui", "serve")),
+    ("ollama", "Ollama", ("ollama", "serve")),
+    ("gateway", "Gateway API", ("backend.gateway:app",)),
+    ("searxng", "SearXNG", ("searx",)),
+)
+_comfyui_freed_at = 0.0
+
+
+def process_rss_parts(pid: int) -> tuple[int, int, int]:
+    """Anonymous, file-backed and shared resident bytes; CUDA memory on GB10 shows up as shared."""
+    parts = {"RssAnon:": 0, "RssFile:": 0, "RssShmem:": 0}
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("\t")
+            if key in parts:
+                parts[key] = int(value.split()[0]) * 1024
+    except (OSError, ValueError, IndexError):
+        return 0, 0, 0
+    return parts["RssAnon:"], parts["RssFile:"], parts["RssShmem:"]
+
+
+def process_device_rss(pid: int) -> int:
+    """Resident bytes of /dev/nvidia* mappings: counted as RssFile but they are CUDA memory, not page cache."""
+    total, device = 0, False
+    try:
+        with open(f"/proc/{pid}/smaps", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line[:1] in "0123456789abcdef" and "-" in line.split(" ", 1)[0]:
+                    fields = line.split(None, 5)
+                    device = len(fields) == 6 and fields[5].startswith("/dev/nvidia")
+                elif device and line.startswith("Rss:"):
+                    total += int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return 0
+    return total
+
+
+def memory_runtime_processes() -> list[dict[str, Any]]:
+    matched: dict[int, tuple[str, str, list[str]]] = {}
+    try:
+        listed = list(psutil.process_iter(["pid", "cmdline"]))
+    except (psutil.Error, OSError):
+        return []
+    for process in listed:
+        cmdline = process.info.get("cmdline") or []
+        if not cmdline:
+            continue
+        if Path(cmdline[0]).name == "llama-server":
+            matched[process.info["pid"]] = ("llama-server", "llama-server", cmdline)
+            continue
+        text = " ".join(cmdline)
+        for kind, label, tokens in MEMORY_RUNTIME_PATTERNS:
+            if all(token in text for token in tokens):
+                matched[process.info["pid"]] = (kind, label, cmdline)
+                break
+    result: list[dict[str, Any]] = []
+    for pid, (kind, label, cmdline) in matched.items():
+        try:
+            process = psutil.Process(pid)
+            if any(parent.pid in matched for parent in process.parents()):
+                continue
+            tree = [pid, *(child.pid for child in process.children(recursive=True))]
+            started_at = process.create_time()
+        except psutil.Error:
+            continue
+        anon = file = shared = device = 0
+        for member in tree:
+            member_anon, member_file, member_shared = process_rss_parts(member)
+            anon, file, shared = anon + member_anon, file + member_file, shared + member_shared
+            device += min(member_file, process_device_rss(member)) if member_file else 0
+        file -= device
+        alias = next((cmdline[index + 1] for index, value in enumerate(cmdline[:-1]) if value == "--alias"), "")
+        result.append({
+            "pid": pid,
+            "kind": kind,
+            "name": label,
+            "alias": alias,
+            "started_at": started_at,
+            "anon_bytes": anon,
+            "file_bytes": file,
+            "shared_bytes": shared,
+            "device_bytes": device,
+            "bytes": anon + file + shared + device,
+        })
+    return merge_runtime_trees(result)
+
+
+def merge_runtime_trees(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One entry per service: a container's processes hang off containerd, not off the `docker run` client."""
+    merged: dict[str, dict[str, Any]] = {}
+    largest: dict[str, int] = {}
+    result: list[dict[str, Any]] = []
+    for entry in entries:
+        kind = entry["kind"]
+        if kind == "llama-server":
+            result.append(entry)
+            continue
+        current = merged.get(kind)
+        if current is None:
+            merged[kind] = dict(entry)
+            largest[kind] = int(entry["bytes"])
+            result.append(merged[kind])
+            continue
+        for key in ("anon_bytes", "file_bytes", "shared_bytes", "device_bytes", "bytes"):
+            current[key] += entry[key]
+        if entry["bytes"] > largest[kind]:
+            largest[kind] = int(entry["bytes"])
+            current.update(pid=entry["pid"], started_at=entry["started_at"], alias=entry["alias"] or current["alias"])
+    return result
+
+
+def meminfo_bytes() -> dict[str, int]:
+    values: dict[str, int] = {}
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition(":")
+            values[key] = int(value.split()[0]) * 1024
+    except (OSError, ValueError, IndexError):
+        return {}
+    return values
+
+
+def comfyui_resident_footprint(processes: list[dict[str, Any]]) -> tuple[float, int]:
+    comfyui = next((item for item in processes if item["kind"] == "comfyui"), None)
+    if not comfyui:
+        return 0.0, 0
+    return float(comfyui["started_at"]), int(
+        comfyui["anon_bytes"] + comfyui["shared_bytes"] + comfyui.get("device_bytes", 0)
+    )
+
+
+def hf_repo_matching_bytes(model: dict[str, Any], filenames: set[str]) -> int:
+    snapshots = Path(str(model.get("path") or "")) / "snapshots"
+    if not filenames or not snapshots.is_dir():
+        return 0
+    sizes: dict[str, int] = {}
+    for item in snapshots.rglob("*"):
+        if item.is_file() and item.name.casefold() in filenames:
+            sizes[item.name.casefold()] = item.stat().st_size
+    return sum(sizes.values())
+
+
+async def memory_breakdown() -> dict[str, Any]:
+    meminfo = await asyncio.to_thread(meminfo_bytes)
+    if not meminfo:
+        return {}
+    processes = await asyncio.to_thread(memory_runtime_processes)
+    managed_names: dict[int, str] = {}
+    for profile in running_profiles():
+        mapping = _runtime_profile_models.get(profile["id"], {})
+        for model in running_profile_models(profile):
+            process = _profile_processes.get(mapping.get(str(model["id"]), ""))
+            if process and process.returncode is None:
+                managed_names[process.pid] = str(model.get("name") or model.get("model_ref") or model["id"])
+    managed_pids = {
+        process.pid for process in _profile_processes.values() if process.returncode is None
+    }
+    whisper, tts, ollama, comfyui_files = await asyncio.gather(
+        whisper_runtime_snapshot(),
+        managed_tts_health(),
+        benchmark_ollama_residents(),
+        comfyui_loaded_model_files(processes),
+    )
+    runtimes = []
+    for process in sorted(processes, key=lambda item: -item["bytes"]):
+        kind = process["kind"]
+        name, models, managed = process["name"], [], True
+        if kind == "llama-server":
+            managed = process["pid"] in managed_pids
+            name = managed_names.get(process["pid"]) or (
+                f"llama-server · {process['alias']}" if process["alias"] else "llama-server"
+            )
+            if not managed:
+                name = f"{name} (fuera de MyDGX)"
+        elif kind == "ollama":
+            models = sorted(ollama or [])
+        elif kind == "comfyui":
+            models = sorted(comfyui_files)
+        elif kind == "whisper":
+            models = list(whisper.get("loaded_models", []))
+        elif kind == "tts" and tts and tts.get("loaded"):
+            models = [str(tts["loaded"])]
+        runtimes.append({
+            "kind": kind,
+            "name": name,
+            "pid": process["pid"],
+            "managed": managed,
+            "models": models,
+            "bytes": process["bytes"],
+            "file_bytes": process["file_bytes"],
+        })
+    total = meminfo.get("MemTotal", 0)
+    free = meminfo.get("MemFree", 0)
+    runtime_bytes = sum(item["bytes"] for item in runtimes)
+    cache = max(0, (
+        meminfo.get("Buffers", 0) + meminfo.get("Cached", 0) + meminfo.get("SReclaimable", 0)
+        - meminfo.get("Shmem", 0) - sum(item["file_bytes"] for item in runtimes)
+    ))
+    cache = min(cache, max(0, total - free - runtime_bytes))
+    runtime_anon = sum(
+        process["anon_bytes"] + process["shared_bytes"] for process in processes
+    )
+    system = max(0, meminfo.get("AnonPages", 0) + meminfo.get("Shmem", 0) - runtime_anon) + sum(
+        meminfo.get(key, 0)
+        for key in ("SUnreclaim", "KernelStack", "PageTables", "SecPageTables", "VmallocUsed")
+    )
+    system = min(system, max(0, total - free - runtime_bytes - cache))
+    return {
+        "total": total,
+        "free": free,
+        "available": meminfo.get("MemAvailable", 0),
+        "runtimes": runtimes,
+        "cache_bytes": cache,
+        "system_bytes": system,
+        "driver_bytes": max(0, total - free - runtime_bytes - cache - system),
+    }
+
+
+async def comfyui_loaded_model_files(processes: list[dict[str, Any]] | None = None) -> set[str]:
+    """Model components that ComfyUI still holds: last successful run after its start and the last free."""
+    if processes is None:
+        processes = await asyncio.to_thread(memory_runtime_processes)
+    started_at, resident = comfyui_resident_footprint(processes)
+    if not started_at:
+        return set()
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            response = await client.get(
+                f"{settings.comfyui_url.rstrip('/')}/history",
+                params={"max_items": 10},
+            )
+            response.raise_for_status()
+            history = response.json()
+    except (httpx.HTTPError, ValueError):
+        return set()
+    if not isinstance(history, dict):
+        return set()
+    def created_seconds(entry: dict[str, Any]) -> float:
+        prompt = entry.get("prompt")
+        if not isinstance(prompt, list) or len(prompt) < 4 or not isinstance(prompt[3], dict):
+            return 0.0
+        return float(prompt[3].get("create_time") or 0) / 1000
+
+    entries = sorted(
+        (entry for entry in history.values() if isinstance(entry, dict)),
+        key=created_seconds,
+        reverse=True,
+    )
+    for entry in entries:
+        if entry.get("status", {}).get("status_str") != "success":
+            continue
+        if created_seconds(entry) <= max(started_at, _comfyui_freed_at):
+            return set()
+        prompt = entry.get("prompt")
+        if not isinstance(prompt, list) or len(prompt) < 3 or not isinstance(prompt[2], dict):
+            continue
+        filenames: set[str] = set()
+        for node in prompt[2].values():
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs", {})
+            if not isinstance(inputs, dict):
+                continue
+            for key in ("ckpt_name", "unet_name", "clip_name", "vae_name"):
+                value = inputs.get(key)
+                if isinstance(value, str) and value:
+                    filenames.add(Path(value).name.casefold())
+        weights = await asyncio.to_thread(comfyui_component_bytes, frozenset(filenames))
+        return filenames if resident >= weights // 2 else set()
+    return set()
+
+
+@lru_cache(maxsize=16)
+def comfyui_component_bytes(filenames: frozenset[str]) -> int:
+    return sum(hf_repo_matching_bytes(model, set(filenames)) for model in local_hf_models())
+
+
+async def whisper_loaded_runtime_models() -> list[dict[str, Any]]:
+    canonical_models = {
+        "tiny": ("OpenAI Whisper Tiny", "openai/whisper-tiny"),
+        "tiny.en": ("OpenAI Whisper Tiny EN", "openai/whisper-tiny.en"),
+        "base": ("OpenAI Whisper Base", "openai/whisper-base"),
+        "base.en": ("OpenAI Whisper Base EN", "openai/whisper-base.en"),
+        "small": ("OpenAI Whisper Small", "openai/whisper-small"),
+        "small.en": ("OpenAI Whisper Small EN", "openai/whisper-small.en"),
+        "medium": ("OpenAI Whisper Medium", "openai/whisper-medium"),
+        "medium.en": ("OpenAI Whisper Medium EN", "openai/whisper-medium.en"),
+        "large": ("OpenAI Whisper Large", "openai/whisper-large"),
+        "large-v1": ("OpenAI Whisper Large V1", "openai/whisper-large-v1"),
+        "large-v2": ("OpenAI Whisper Large V2", "openai/whisper-large-v2"),
+        "large-v3": ("OpenAI Whisper Large V3", "openai/whisper-large-v3"),
+        "turbo": (
+            "OpenAI Whisper Large V3 Turbo",
+            "openai/whisper-large-v3-turbo",
+        ),
+    }
+    estimates = {
+        "tiny": 150 * 1024**2,
+        "tiny.en": 150 * 1024**2,
+        "base": 290 * 1024**2,
+        "base.en": 290 * 1024**2,
+        "small": 920 * 1024**2,
+        "small.en": 920 * 1024**2,
+        "medium": 3 * 1024**3,
+        "medium.en": 3 * 1024**3,
+        "large": 6 * 1024**3,
+        "large-v1": 6 * 1024**3,
+        "large-v2": 6 * 1024**3,
+        "large-v3": 6 * 1024**3,
+        "turbo": 1_700 * 1024**2,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            response = await client.get(f"{settings.whisper_url.rstrip('/')}/health")
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return []
+    loaded = payload.get("loaded_models") if isinstance(payload, dict) else []
+    if not isinstance(loaded, list):
+        return []
+    runtime_version = str(payload.get("version") or "") if isinstance(payload, dict) else ""
+    return [
+        {
+            "name": canonical_models.get(name, (f"OpenAI Whisper {name}", name))[0],
+            "model_id": canonical_models.get(name, (f"OpenAI Whisper {name}", name))[1],
+            "engine": "whisper",
+            "runtime": "openai-whisper",
+            "runtime_version": runtime_version,
+            "size": estimates.get(str(name), 0),
+            "estimated": True,
+        }
+        for name in loaded
+        if isinstance(name, str) and name
+    ]
+
+
+def hf_repo_contains_any_file(model: dict[str, Any], filenames: set[str]) -> bool:
+    if not filenames:
+        return False
+    snapshots = Path(str(model.get("path") or "")) / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    return any(
+        item.name.casefold() in filenames
+        for item in snapshots.rglob("*")
+        if item.is_file()
+    )
+
+
+@app.get("/api/models", dependencies=secure)
+async def models() -> dict[str, Any]:
+    installed: list[dict[str, Any]] = []
+    running: list[dict[str, Any]] = []
+    try:
+        installed = (await ollama_payload("/api/tags")).get("models", [])
+        running = (await ollama_payload("/api/ps")).get("models", [])
+    except HTTPException:
+        pass
+    running_names = {
+        str(model.get("name") or model.get("model") or "").casefold()
+        for model in running
+        if model.get("name") or model.get("model")
+    }
+    installed_names = {
+        str(model.get("name") or model.get("model") or "").casefold()
+        for model in installed
+        if model.get("name") or model.get("model")
+    }
+    loaded_profile_models = [
+        (profile, model)
+        for profile in running_profiles()
+        for model in running_profile_models(profile)
+        if model.get("enabled", True)
+    ]
+    loaded_hf_repos = {
+        str(model.get("model_repo") or "").casefold()
+        for _, model in loaded_profile_models
+        if model.get("engine") != "ollama" and model.get("model_repo")
+    }
+    assistant_reference = await resolved_assistant_reference(
+        installed_names,
+        loaded_profile_models,
+    )
+    persistent = {model_identity(model) for model in persistent_models()}
+    quick = {model_identity(model) for model in managed_models(QUICK_PROFILE_ID)}
+    owners: dict[str, list[str]] = {}
+    for profile, loaded_model in loaded_profile_models:
+        names = owners.setdefault(model_identity(loaded_model), [])
+        if profile["name"] not in names:
+            names.append(str(profile["name"]))
+    for model in installed:
+        name = str(model.get("name") or model.get("model") or "")
+        identity = f"ollama:{name.casefold()}"
+        model["persistent"] = identity in persistent
+        model["quick"] = identity in quick
+        model["loaded"] = name.casefold() in running_names or identity in owners
+        model["loaded_by"] = owners.get(identity) or (["Ollama"] if model["loaded"] else [])
+        model["assistant"] = bool(
+            assistant_reference and assistant_reference.casefold() == name.casefold()
+        )
+    huggingface, comfyui_files, runtime_models = await asyncio.gather(
+        asyncio.to_thread(local_hf_models),
+        comfyui_loaded_model_files(),
+        whisper_loaded_runtime_models(),
+    )
+    assistant_hf_repo = ""
+    if assistant_reference and assistant_reference.startswith("profile:"):
+        assistant_profile = assistant_profile_model(assistant_reference)
+        assistant_hf_repo = str(
+            assistant_profile.get("model_repo") if assistant_profile else ""
+        ).casefold()
+    for model in huggingface:
+        identity = f"huggingface:{model['repo_id'].casefold()}"
+        model["persistent"] = identity in persistent
+        model["quick"] = identity in quick
+        loaded_by = list(owners.get(identity, []))
+        if not loaded_by and model["repo_id"].casefold() in loaded_hf_repos:
+            loaded_by.append("Perfil")
+        if hf_repo_contains_any_file(model, comfyui_files):
+            loaded_by.append("ComfyUI")
+        model["loaded"] = bool(loaded_by)
+        model["loaded_by"] = loaded_by
+        model["assistant"] = bool(
+            assistant_hf_repo and model["repo_id"].casefold() == assistant_hf_repo
+        )
+    loaded_rows = running_profiles()
+    current_quick = managed_models(QUICK_PROFILE_ID)
+
+    def availability() -> None:
+        for model in installed:
+            if model["loaded"] or model["quick"]:
+                continue
+            name = str(model.get("name") or model.get("model") or "")
+            config, reason = cached_quick_config("ollama", name, f"{model.get('digest')}:{model.get('size')}", int(model.get("size") or 0))
+            model["quick_start"] = quick_start_availability(config, reason, loaded_rows, current_quick)
+        for model in huggingface:
+            if model["loaded"] or model["quick"] or not model.get("quantizations"):
+                continue
+            signature = f"{model.get('revision')}:{model.get('file_count')}:{model.get('size')}:{model.get('incomplete_shards')}"
+            config, reason = cached_quick_config("huggingface", model["repo_id"], signature)
+            model["quick_start"] = quick_start_availability(config, reason, loaded_rows, current_quick)
+
+    await asyncio.to_thread(availability)
+    return {
+        "ollama": installed,
+        "running": running,
+        "huggingface": huggingface,
+        "runtime_models": runtime_models,
+        "assistant_model": assistant_reference,
+    }
+
+
+HF_TASK = Literal[
+    "any", "chat", "code", "reasoning", "embedding", "vision",
+    "audio-chat", "video-chat", "image-generation", "asr", "tts",
+    "video-generation", "reranking",
+]
+HF_SIZE = Literal["any", "compact", "balanced", "large"]
+HF_ALIGNMENT = Literal["any", "standard", "uncensored"]
+HF_RUNTIME = Literal["any", "llama.cpp", "external"]
+HF_FORMAT = Literal["any", "gguf", "safetensors", "onnx"]
+HF_MODALITY = Literal["any", "text", "image", "audio", "video"]
+
+HF_UNCENSORED_MARKERS = (
+    "uncensored", "uncensor", "abliterated", "abliteration", "no-refusal",
+    "no_refusal", "norefusal", "unaligned", "anti-censorship", "heretic",
+)
+HF_FAVORITES_KEY = "huggingface.favorites"
+
+
+def huggingface_favorites() -> list[dict[str, Any]]:
+    raw = preference_value(HF_FAVORITES_KEY)
+    if not raw:
+        return []
+    try:
+        values = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    favorites = [
+        dict(item)
+        for item in values
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    ]
+    for item in favorites:
+        item["uncensored"] = hf_is_uncensored(
+            item["id"],
+            [str(tag) for tag in item.get("tags", [])],
+        )
+    return favorites
+
+
+def save_huggingface_favorites(models: list[dict[str, Any]]) -> None:
+    db.execute(
+        """
+        INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+        """,
+        (HF_FAVORITES_KEY, json.dumps(models), utc_now()),
+    )
+
+
+def hf_is_uncensored(repo_id: str, tags: list[str]) -> bool:
+    evidence = " ".join([repo_id, *tags]).casefold()
+    return any(marker in evidence for marker in HF_UNCENSORED_MARKERS)
+
+
+def hf_model_capabilities(repo_id: str, pipeline_tag: str | None, tags: list[str]) -> dict[str, list[str]]:
+    evidence = " ".join([repo_id, pipeline_tag or "", *tags]).lower()
+    tasks: set[str] = set()
+    inputs: set[str] = {"text"}
+    outputs: set[str] = {"text"}
+    if any(marker in evidence for marker in ("coder", "code", "starcoder", "codestral", "devstral")):
+        tasks.add("code")
+    if any(marker in evidence for marker in ("reasoning", "deepseek-r1", "qwq", "thinking", "reasoner")):
+        tasks.add("reasoning")
+    if any(marker in evidence for marker in ("embedding", "sentence-transformers", "feature-extraction", "bge-", "e5-", "gte-")):
+        tasks.add("embedding")
+        outputs = {"embedding"}
+    if any(marker in evidence for marker in ("vision", "image-text", "llava", "-vl", "vl-", "multimodal")):
+        tasks.update({"chat", "vision"})
+        inputs.add("image")
+    if any(marker in evidence for marker in ("audio-text-to-text", "audio-language", "qwen2-audio", "audio-flamingo")):
+        tasks.update({"audio-chat", "chat"})
+        inputs.add("audio")
+    if any(marker in evidence for marker in ("video-text-to-text", "video-language", "video-llava")):
+        tasks.update({"chat", "video-chat"})
+        inputs.add("video")
+    if any(marker in evidence for marker in ("text-to-image", "image-generation", "stable-diffusion", "flux", "diffusion", "qwen-image", "hidream", "sdxl", "sd3")):
+        tasks.add("image-generation")
+        outputs = {"image"}
+        if "image-to-image" in evidence:
+            inputs.add("image")
+    if any(marker in evidence for marker in ("automatic-speech-recognition", "speech-recognition", "whisper", "wav2vec")):
+        tasks.add("asr")
+        inputs = {"audio"}
+        outputs = {"text"}
+    if any(marker in evidence for marker in ("text-to-speech", "speech-synthesis", "tts", "bark", "vits", "chatterbox", "cosyvoice", "omnivoice", "vocos", "vocoder")):
+        tasks.add("tts")
+        outputs = {"audio"}
+    if any(marker in evidence for marker in ("text-to-video", "image-to-video", "video-generation", "wan2", "wan_2", "ltx-video", "ltx-2", "hunyuanvideo")):
+        tasks.add("video-generation")
+        outputs = {"video"}
+        if "image-to-video" in evidence:
+            inputs.add("image")
+    if any(marker in evidence for marker in ("reranker", "reranking", "cross-encoder", "text-ranking")):
+        tasks.add("reranking")
+        outputs = {"scores"}
+    if any(marker in evidence.replace("chatterbox", "") for marker in ("instruct", "chat", "text-generation", "conversational", "assistant")):
+        tasks.add("chat")
+    return {
+        "tasks": sorted(tasks or {"chat"}),
+        "input_modalities": sorted(inputs),
+        "output_modalities": sorted(outputs),
+    }
+
+
+def hf_model_tasks(repo_id: str, pipeline_tag: str | None, tags: list[str]) -> list[str]:
+    return hf_model_capabilities(repo_id, pipeline_tag, tags)["tasks"]
+
+
+def hf_model_formats(siblings: list[Any]) -> list[str]:
+    names = [str(getattr(sibling, "rfilename", "") or "").lower() for sibling in siblings]
+    formats = set()
+    if any(name.endswith(".gguf") for name in names):
+        formats.add("gguf")
+    if any(name.endswith(".safetensors") for name in names):
+        formats.add("safetensors")
+    if any(name.endswith(".onnx") for name in names):
+        formats.add("onnx")
+    if any(name.endswith((".bin", ".pt", ".pth", ".ckpt")) for name in names):
+        formats.add("pytorch")
+    if any(name.endswith("model_index.json") for name in names):
+        formats.add("diffusers")
+    return sorted(formats)
+
+
+def hf_mmproj_files(siblings: list[Any]) -> list[dict[str, Any]]:
+    files = []
+    for sibling in siblings:
+        filename = str(getattr(sibling, "rfilename", "") or "")
+        if filename.lower().endswith(".gguf") and "mmproj" in filename.casefold():
+            files.append({"name": filename, "size": integer_value(getattr(sibling, "size", None)) or 0})
+    return sorted(files, key=lambda item: (
+        "f16" not in item["name"].casefold(),
+        "q8" not in item["name"].casefold(),
+        item["size"] or sys.maxsize,
+    ))
+
+
+def hf_recommended_engines(tasks: list[str], formats: list[str]) -> list[str]:
+    engines: list[str] = []
+    task_set = set(tasks)
+    external_weights = bool(set(formats).intersection({"safetensors", "onnx", "pytorch", "diffusers"}))
+    if "gguf" in formats and task_set.intersection({"chat", "code", "reasoning", "vision", "embedding"}):
+        engines.append("llama.cpp")
+    if external_weights and task_set.intersection({"chat", "code", "reasoning", "vision", "audio-chat", "video-chat", "embedding"}):
+        engines.extend(["vLLM", "SGLang", "TensorRT-LLM", "NIM"])
+    if external_weights and ("image-generation" in task_set or "video-generation" in task_set):
+        engines.extend(["ComfyUI", "Diffusers", "NIM"])
+    if external_weights and "asr" in task_set:
+        engines.extend(["Whisper", "Riva", "NIM"])
+    if external_weights and "tts" in task_set:
+        engines.extend(["Riva", "NIM"])
+    if external_weights and "reranking" in task_set:
+        engines.extend(["vLLM", "TensorRT-LLM", "NIM"])
+    return list(dict.fromkeys(engines))
+
+
+def hf_gguf_groups(siblings: list[Any]) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for sibling in siblings:
+        filename = str(getattr(sibling, "rfilename", "") or "")
+        if not filename.lower().endswith(".gguf") or "mmproj" in filename.casefold():
+            continue
+        size = integer_value(getattr(sibling, "size", None)) or 0
+        shard = re.match(r"(.+)-(\d{5})-of-(\d{5})\.gguf$", filename, re.IGNORECASE)
+        group_key = shard.group(1) if shard else filename
+        quant_match = QUANTIZATION_PATTERN.search(filename)
+        quantization = quant_match.group(1).upper() if quant_match else "GGUF"
+        group = groups.setdefault(group_key, {
+            "name": group_key,
+            "files": [],
+            "size": 0,
+            "quantization": quantization,
+            "expected_shards": int(shard.group(3)) if shard else 1,
+        })
+        group["files"].append(filename)
+        group["size"] += size
+    for group in groups.values():
+        group["files"].sort()
+        group["complete"] = len(group["files"]) == group["expected_shards"]
+    return sorted(groups.values(), key=lambda item: (not item["complete"], item["size"] or sys.maxsize))
+
+
+def persistent_model_config(source: Literal["ollama", "huggingface"], model_id: str) -> dict[str, Any]:
+    capabilities = hf_model_capabilities(model_id, None, [])
+    tasks = capabilities["tasks"]
+    task = "vision" if "vision" in tasks else "embeddings" if "embedding" in tasks else "chat"
+    alias = re.sub(r"[^a-z0-9._-]+", "-", model_id.casefold()).strip("-")[-80:] or "persistent-model"
+    base = {
+        "name": f"{model_id} · default",
+        "model_ref": model_id,
+        "model_file": "",
+        "model_repo": "",
+        "model_filename": "",
+        "model_files": [],
+        "mmproj_file": "",
+        "mmproj_repo": "",
+        "mmproj_filename": "",
+        "model_alias": f"{alias}-global",
+        "port": 19_000,
+        "context_size": 8192,
+        "gpu_layers": -1,
+        "threads": 0,
+        "parallel": 1,
+        "batch_size": 512,
+        "ubatch_size": 128,
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "top_k": 40,
+        "min_p": 0.05,
+        "repeat_penalty": 1.1,
+        "presence_penalty": 0.0,
+        "flash_attention": 1,
+        "cache_type_k": "",
+        "cache_type_v": "",
+        "reasoning_off": 0,
+        "reasoning_effort": "",
+        "kv_unified_per_slot": 0,
+        "jinja": 1,
+        "min_free_memory_mb": 0,
+        "source": "Perfil Default desde Modelos",
+        "runtime_requirement": "",
+        "task": task,
+        "input_modalities": capabilities["input_modalities"],
+        "output_modalities": capabilities["output_modalities"],
+        "runtime_backend": "native",
+        "endpoint_url": "",
+        "api_protocol": "openai",
+        "estimated_memory_mb": 0,
+        "max_input_mb": 32,
+        "timeout_seconds": 600,
+        "enabled": True,
+    }
+    if source == "ollama":
+        base["engine"] = "ollama"
+        return base
+
+    directory = huggingface_cache_dir() / f"models--{model_id.replace('/', '--')}"
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="El modelo Hugging Face no está descargado")
+    details = local_hf_repo_details(directory)
+    snapshots = details["snapshots"]
+    preferred_commit = details["refs"].get("main")
+    snapshot = next((item for item in snapshots if item["commit"] == preferred_commit), None)
+    snapshot = snapshot or next((item for item in reversed(snapshots) if item["complete"]), None)
+    if not snapshot:
+        raise HTTPException(status_code=409, detail="El modelo no tiene un snapshot local completo")
+    siblings = [
+        SimpleNamespace(rfilename=item["name"], size=item["size"])
+        for item in snapshot["files"] if item["complete"]
+    ]
+    groups = [group for group in hf_gguf_groups(siblings) if group["complete"] and group["size"]]
+    if not groups:
+        raise HTTPException(
+            status_code=409,
+            detail="Encender o añadir a Default requiere un modelo GGUF completo o un modelo de Ollama",
+        )
+    preference = {"Q4_K_M": 0, "Q5_K_M": 1, "Q6_K": 2, "Q8_0": 3}
+    groups.sort(key=lambda item: (preference.get(item["quantization"], 20), item["size"]))
+    selected = groups[0]
+    mmproj = hf_mmproj_files(siblings)
+    base.update({
+        "engine": "llama.cpp",
+        "model_repo": model_id,
+        "model_filename": selected["files"][0],
+        "model_files": selected["files"],
+        "mmproj_repo": model_id if mmproj else "",
+        "mmproj_filename": mmproj[0]["name"] if mmproj else "",
+        "runtime_requirement": "llama.cpp CUDA · GB10 sm_121",
+        "estimated_memory_mb": math.ceil(selected["size"] / (1024 * 1024) * 1.12) + 1024,
+    })
+    if task == "vision" and not mmproj:
+        raise HTTPException(status_code=409, detail="El modelo de visión no tiene un mmproj local completo")
+    return base
+
+
+class ModelPersistencePayload(BaseModel):
+    source: Literal["ollama", "huggingface"]
+    model_id: str = Field(min_length=1, max_length=300, pattern=r"^[A-Za-z0-9._:/-]+$")
+    enabled: bool
+
+
+async def managed_model_config(source: Literal["ollama", "huggingface"], model_id: str) -> dict[str, Any]:
+    if source == "ollama":
+        installed = (await ollama_payload("/api/tags")).get("models", [])
+        match = next((item for item in installed if str(item.get("name") or "") == model_id), None)
+        if match is None:
+            raise HTTPException(status_code=404, detail="El modelo Ollama no está instalado")
+        config = await asyncio.to_thread(persistent_model_config, source, model_id)
+        size = int(match.get("size") or 0)
+        if size:
+            config["estimated_memory_mb"] = math.ceil(size / (1024 * 1024) * 1.12) + 1024
+        return config
+    return await asyncio.to_thread(persistent_model_config, source, model_id)
+
+
+async def apply_managed_models(profile_id: str, models: list[dict[str, Any]]) -> bool:
+    """Save a managed profile's models and, when it is loaded, apply them live. Returns whether it is loaded."""
+    previous = managed_models(profile_id)
+    save_managed_models(profile_id, models)
+    if profile_id not in _runtime_profile_ids:
+        return False
+    if not models:
+        await stop_runtime_profile(profile_id)
+        return False
+    try:
+        await start_profile_process(db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))[0], persist_desired=False)
+    except Exception as exc:
+        save_managed_models(profile_id, previous)
+        raise HTTPException(status_code=409, detail=redact_log_text(str(exc), 500)) from exc
+    return True
+
+
+@app.put("/api/models/persistence", dependencies=secure)
+async def update_model_persistence(payload: ModelPersistencePayload) -> dict[str, Any]:
+    identity = f"{payload.source}:{payload.model_id.casefold()}"
+    async with _profile_start_lock:
+        values = [item for item in persistent_models() if model_identity(item) != identity]
+        if payload.enabled:
+            values.append(await managed_model_config(payload.source, payload.model_id))
+        loaded = await apply_managed_models(DEFAULT_PROFILE_ID, values)
+    db.audit("model.persistence", payload.model_id, True, "enabled" if payload.enabled else "disabled")
+    return {"persistent": payload.enabled, "profile_id": DEFAULT_PROFILE_ID, "applied": loaded, "models": len(values)}
+
+
+class QuickModelPayload(BaseModel):
+    source: Literal["ollama", "huggingface"]
+    model_id: str = Field(min_length=1, max_length=300, pattern=r"^[A-Za-z0-9._:/-]+$")
+
+
+def quick_model_config(config: dict[str, Any], model_id: str) -> dict[str, Any]:
+    config = dict(config)
+    config["name"] = f"{model_id} · quick"
+    config["model_alias"] = str(config["model_alias"]).removesuffix("-global")
+    config["source"] = "Arranque rápido desde Modelos"
+    return config
+
+
+_quick_config_cache: dict[str, tuple[str, dict[str, Any] | None, str]] = {}
+
+
+def cached_quick_config(source: str, model_id: str, signature: str, size: int = 0) -> tuple[dict[str, Any] | None, str]:
+    """Build (and memoise per local revision) the config Encender would use, or the reason it is not possible."""
+    key = f"{source}:{model_id.casefold()}"
+    cached = _quick_config_cache.get(key)
+    if cached and cached[0] == signature:
+        return cached[1], cached[2]
+    try:
+        config = quick_model_config(persistent_model_config(source, model_id), model_id)  # type: ignore[arg-type]
+        if source == "ollama" and size:
+            config["estimated_memory_mb"] = math.ceil(size / (1024 * 1024) * 1.12) + 1024
+        result: tuple[dict[str, Any] | None, str] = (config, "")
+    except HTTPException as exc:
+        result = (None, str(exc.detail))
+    except Exception as exc:
+        result = (None, redact_log_text(str(exc), 200))
+    _quick_config_cache[key] = (signature, *result)
+    return result
+
+
+def quick_start_availability(
+    config: dict[str, Any] | None,
+    reason: str,
+    loaded: list[dict[str, Any]],
+    current_quick: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Same joint plan the real start uses: current loaded profiles plus Quick with this model added."""
+    if config is None:
+        return {"supported": False, "fits": False, "reason": reason}
+    try:
+        models = assign_managed_ports(QUICK_PROFILE_ID, [*(dict(item) for item in current_quick), dict(config)])
+        payload = managed_profile_payload(QUICK_PROFILE_ID, models)
+        row = dict(zip(PROFILE_INSERT_COLUMNS, profile_values(QUICK_PROFILE_ID, payload, utc_now())))
+        plan = profiles_runtime_plan([*(item for item in loaded if item["id"] != QUICK_PROFILE_ID), row])
+    except Exception as exc:
+        return {"supported": True, "fits": False, "reason": redact_log_text(str(getattr(exc, "detail", exc)), 200)}
+    if plan["fits"]:
+        return {"supported": True, "fits": True, "reason": "", "incremental_mb": plan["incremental_mb"]}
+    if plan["alias_conflicts"]:
+        why = f"Alias en uso: {', '.join(plan['alias_conflicts'])}"
+    elif plan["port_conflicts"]:
+        why = f"Puertos en uso: {', '.join(map(str, plan['port_conflicts']))}"
+    elif plan["required_mb"] > plan["capacity_mb"]:
+        why = f"Necesita {plan['required_mb'] / 1024:.1f} GB en total y el equipo admite {plan['capacity_mb'] / 1024:.1f} GB"
+    else:
+        why = f"Necesita {plan['incremental_mb'] / 1024:.1f} GB más y hay {max(0, plan['available_mb'] - plan['reserve_mb']) / 1024:.1f} GB libres"
+    return {"supported": True, "fits": False, "reason": why, "incremental_mb": plan["incremental_mb"]}
+
+
+def loaded_model_owner(identity: str) -> str | None:
+    for profile in running_profiles():
+        if any(model_identity(model) == identity for model in running_profile_models(profile)):
+            return str(profile["name"])
+    return None
+
+
+@app.post("/api/models/quick/start", dependencies=secure)
+async def quick_start_model(payload: QuickModelPayload) -> dict[str, Any]:
+    ensure_benchmark_inference_available()
+    identity = f"{payload.source}:{payload.model_id.casefold()}"
+    if _profile_start_lock.locked():
+        raise HTTPException(status_code=409, detail="Hay un perfil arrancando; espera a que termine")
+    async with _profile_start_lock:
+        current = managed_models(QUICK_PROFILE_ID)
+        owner = loaded_model_owner(identity)
+        if owner:
+            raise HTTPException(status_code=409, detail=f"{payload.model_id} ya está cargado en el perfil {owner}")
+        config = quick_model_config(await managed_model_config(payload.source, payload.model_id), payload.model_id)
+        save_managed_models(QUICK_PROFILE_ID, [*current, config])
+        try:
+            runtime = await start_profile_process(
+                db.rows("SELECT * FROM profiles WHERE id=?", (QUICK_PROFILE_ID,))[0],
+                persist_desired=False,
+            )
+        except Exception as exc:
+            save_managed_models(QUICK_PROFILE_ID, current)
+            message = redact_log_text(str(getattr(exc, "detail", exc)), 500)
+            db.audit("model.quick.start", payload.model_id, False, message)
+            raise HTTPException(status_code=409, detail=f"No se pudo encender {payload.model_id}: {message}") from exc
+    db.audit("model.quick.start", payload.model_id, True)
+    return {"started": True, "profile_id": QUICK_PROFILE_ID, "alias": config["model_alias"], "plan": runtime.get("plan")}
+
+
+@app.post("/api/models/quick/stop", dependencies=secure)
+async def quick_stop_model(payload: QuickModelPayload, request: Request) -> dict[str, Any]:
+    identity = f"{payload.source}:{payload.model_id.casefold()}"
+    async with _profile_start_lock:
+        current = managed_models(QUICK_PROFILE_ID)
+        remaining = [model for model in current if model_identity(model) != identity]
+        if len(remaining) == len(current):
+            raise HTTPException(status_code=404, detail=f"{payload.model_id} no está encendido en Quick")
+        await apply_managed_models(QUICK_PROFILE_ID, remaining)
+    db.audit("model.quick.stop", payload.model_id, True, request_origin(request))
+    return {"stopped": True, "remaining": len(remaining)}
+
+
+@app.post("/api/models/stop-all", dependencies=secure)
+async def stop_all_models(request: Request) -> dict[str, Any]:
+    """Free inference memory but keep the chat model, the Default profile and the managed services."""
+    if _profile_start_lock.locked():
+        raise HTTPException(status_code=409, detail="Hay un perfil arrancando; espera a que termine")
+    async with _profile_start_lock:
+        assistant = await resolved_assistant_reference() or ""
+        kept_ids = {DEFAULT_PROFILE_ID}
+        if assistant.startswith("profile:"):
+            kept_ids.add(assistant.split(":", 2)[1])
+        stopped: list[str] = []
+        for profile in running_profiles():
+            if profile["id"] in kept_ids:
+                continue
+            await stop_runtime_profile(profile["id"])
+            stopped.append(str(profile["name"]))
+        kept_ollama = {
+            normalized_ollama_name(str(model.get("model_ref") or ""))
+            for profile in running_profiles()
+            for model in running_profile_models(profile)
+            if model.get("engine") == "ollama"
+        }
+        if assistant and not assistant.startswith("profile:"):
+            kept_ollama.add(normalized_ollama_name(assistant))
+        released: list[str] = []
+        for name in sorted(await benchmark_ollama_residents() or set()):
+            if normalized_ollama_name(name) in kept_ollama:
+                continue
+            try:
+                await ollama_payload("/api/generate", "POST", {"model": name, "keep_alive": 0}, timeout=30)
+                released.append(name)
+            except HTTPException:
+                continue
+    kept = [str(profile["name"]) for profile in running_profiles()]
+    db.audit("models.stop-all", ",".join(stopped + released)[:500], True, request_origin(request))
+    return {"stopped_profiles": stopped, "released_ollama": released, "kept_profiles": kept, "assistant": assistant}
+
+
+@app.post("/api/models/comfyui/release", dependencies=secure)
+async def release_comfyui_memory() -> dict[str, Any]:
+    """ComfyUI's /free unloads every model it holds; it cannot drop a single one."""
+    before = await comfyui_loaded_model_files()
+    await release_comfyui_models()
+    released = _comfyui_freed_at >= time.time() - 5
+    db.audit("model.comfyui.release", ",".join(sorted(before))[:500], released)
+    if not released:
+        raise HTTPException(status_code=502, detail="ComfyUI no respondió a la petición de liberar memoria")
+    return {"released": True, "models": sorted(before)}
+
+
+def hf_architecture_profile(info: Any, selected_weight_bytes: int = 0) -> dict[str, Any]:
+    config = getattr(info, "config", None) or {}
+    if not isinstance(config, dict):
+        config = {}
+    text_config = config.get("text_config")
+    if not isinstance(text_config, dict):
+        text_config = {}
+    combined = {**config, **text_config}
+    evidence = " ".join([
+        str(getattr(info, "id", "")),
+        *(str(tag) for tag in (getattr(info, "tags", None) or [])),
+        str(combined.get("model_type") or ""),
+        " ".join(str(item) for item in (combined.get("architectures") or [])),
+    ]).casefold()
+
+    def positive_number(*keys: str) -> float | None:
+        for key in keys:
+            value = combined.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return float(value)
+            if isinstance(value, str):
+                match = re.search(r"\d+(?:\.\d+)?", value)
+                if match and float(match.group()) > 0:
+                    return float(match.group())
+        return None
+
+    experts = positive_number(
+        "num_experts", "num_local_experts", "n_routed_experts", "moe_num_experts",
+    )
+    active_experts = positive_number(
+        "num_experts_per_tok", "num_selected_experts", "experts_per_token",
+        "num_experts_per_token", "moe_top_k",
+    )
+    parameter_match = re.search(
+        r"(?<!\d)(\d+(?:\.\d+)?)\s*b(?:[-_ ]?a(\d+(?:\.\d+)?)\s*b)?",
+        evidence,
+        re.IGNORECASE,
+    )
+    total_params_b = positive_number("num_parameters", "parameter_count", "total_params")
+    if total_params_b and total_params_b > 1_000_000:
+        total_params_b /= 1_000_000_000
+    if parameter_match:
+        total_params_b = float(parameter_match.group(1))
+    active_params_b = positive_number("active_parameters", "active_params")
+    if active_params_b and active_params_b > 1_000_000:
+        active_params_b /= 1_000_000_000
+    if parameter_match and parameter_match.group(2):
+        active_params_b = float(parameter_match.group(2))
+
+    moe = bool(
+        (experts and experts > 1)
+        or active_params_b
+        or any(marker in evidence for marker in ("mixture-of-experts", "mixture_of_experts", "moe"))
+    )
+    active_ratio = 1.0
+    if total_params_b and active_params_b:
+        active_ratio = max(0.04, min(1.0, active_params_b / total_params_b))
+    elif moe and experts and active_experts:
+        active_ratio = max(0.08, min(0.75, active_experts / experts * 1.25 + 0.08))
+    elif moe:
+        active_ratio = 0.35
+
+    speculative_methods: list[str] = []
+    speculative_markers = {
+        "MTP": ("mtp", "multi-token prediction", "multi_token_prediction", "nextn"),
+        "DFlash": ("dflash", "d-flash"),
+        "DSpark": ("dspark", "d-spark"),
+    }
+    for label, markers in speculative_markers.items():
+        if any(marker in evidence for marker in markers):
+            speculative_methods.append(label)
+    if positive_number(
+        "num_nextn_predict_layers", "num_next_tokens", "mtp_num_layers",
+        "num_mtp_layers", "n_predict",
+    ) and "MTP" not in speculative_methods:
+        speculative_methods.append("MTP")
+
+    speculative_memory_mb = 1536 if speculative_methods else 0
+    active_weight_mb = math.ceil(selected_weight_bytes / (1024 * 1024) * active_ratio)
+    if moe and selected_weight_bytes:
+        active_weight_mb = max(
+            active_weight_mb,
+            math.ceil(selected_weight_bytes / (1024 * 1024) * 0.12),
+        )
+    return {
+        "architecture": "MoE" if moe else "Dense",
+        "is_moe": moe,
+        "experts": int(experts) if experts else None,
+        "active_experts": int(active_experts) if active_experts else None,
+        "total_parameters_b": round(total_params_b, 2) if total_params_b else None,
+        "active_parameters_b": round(active_params_b, 2) if active_params_b else None,
+        "active_parameter_ratio": round(active_ratio, 3),
+        "active_weight_mb": active_weight_mb,
+        "speculative_methods": speculative_methods,
+        "speculative_memory_mb": speculative_memory_mb,
+    }
+
+
+def hf_memory_estimate(
+    weight_bytes: int,
+    context: int,
+    slots: int = 1,
+    speculative_memory_mb: int = 0,
+) -> dict[str, int]:
+    weight_mb = math.ceil(weight_bytes / (1024 * 1024))
+    runtime_mb = 2048
+    kv_mb_per_slot = max(512, math.ceil(context * max(0.06, min(0.38, weight_mb / 220_000))))
+    total_mb = (
+        math.ceil(weight_mb * 1.08)
+        + runtime_mb
+        + speculative_memory_mb
+        + kv_mb_per_slot * slots
+    )
+    return {
+        "weight_mb": weight_mb,
+        "kv_cache_mb": kv_mb_per_slot * slots,
+        "runtime_mb": runtime_mb + speculative_memory_mb,
+        "total_mb": total_mb,
+    }
+
+
+def hf_community_score(
+    downloads: int,
+    likes: int,
+    trending_score: float | int | None = None,
+) -> dict[str, Any]:
+    safe_downloads = max(0, int(downloads or 0))
+    safe_likes = max(0, int(likes or 0))
+    safe_trending = max(0.0, float(trending_score or 0))
+    download_points = min(
+        50.0,
+        50.0 * math.log10(1 + safe_downloads) / math.log10(1 + 10_000_000),
+    )
+    like_points = min(
+        40.0,
+        40.0 * math.log10(1 + safe_likes) / math.log10(1 + 10_000),
+    )
+    trending_points = min(
+        10.0,
+        10.0 * math.log10(1 + safe_trending) / math.log10(1 + 3_000),
+    )
+    return {
+        "score": round(download_points + like_points + trending_points),
+        "downloads": safe_downloads,
+        "likes": safe_likes,
+        "trending_score": round(safe_trending, 2),
+        "download_points": round(download_points, 1),
+        "like_points": round(like_points, 1),
+        "trending_points": round(trending_points, 1),
+    }
+
+
+def spark_memory_budgets(
+    memory_total_mb: int | None = None,
+    memory_available_mb: int | None = None,
+) -> dict[str, int]:
+    memory = psutil.virtual_memory()
+    total_mb = memory_total_mb if memory_total_mb is not None else memory.total // (1024 * 1024)
+    available_mb = memory_available_mb if memory_available_mb is not None else memory.available // (1024 * 1024)
+    spark_count = max(1, min(4, int(settings.spark_cluster_size)))
+    bandwidth_gbps = max(1, int(settings.spark_memory_bandwidth_gbps)) * spark_count
+    reserve_per_spark_mb = (
+        min(16_384, max(12_288, math.ceil(total_mb * 0.12)))
+        if total_mb >= 64 * 1024
+        else min(8192, max(4096, math.ceil(total_mb * 0.20)))
+    )
+    reserve_mb = reserve_per_spark_mb * spark_count
+    budget_mb = max(0, total_mb * spark_count - reserve_mb)
+    available_budget_mb = max(
+        0,
+        min(budget_mb, available_mb * spark_count - 4096 * spark_count),
+    )
+    return {
+        "available_mb": available_mb,
+        "spark_count": spark_count,
+        "bandwidth_gbps": bandwidth_gbps,
+        "budget_mb": budget_mb,
+        "available_budget_mb": available_budget_mb,
+    }
+
+
+def hf_spark_recommendation(
+    info: Any,
+    task: HF_TASK = "any",
+    size: HF_SIZE = "any",
+    runtime: HF_RUNTIME = "any",
+    *,
+    memory_total_mb: int | None = None,
+    memory_available_mb: int | None = None,
+) -> dict[str, Any]:
+    budgets = spark_memory_budgets(memory_total_mb, memory_available_mb)
+    available_mb = budgets["available_mb"]
+    spark_count = budgets["spark_count"]
+    bandwidth_gbps = budgets["bandwidth_gbps"]
+    budget_mb = budgets["budget_mb"]
+    available_budget_mb = budgets["available_budget_mb"]
+    repo_id = str(info.id)
+    tags = list(getattr(info, "tags", None) or [])
+    pipeline_tag = getattr(info, "pipeline_tag", None)
+    capabilities = hf_model_capabilities(repo_id, pipeline_tag, tags)
+    tasks = capabilities["tasks"]
+    uncensored = hf_is_uncensored(repo_id, tags)
+    platform_evidence = " ".join([repo_id, *tags]).casefold()
+    unsupported_platform = next(
+        (marker for marker in ("coreml", "mlx-community", "apple-silicon", "tflite", "executorch") if marker in platform_evidence),
+        None,
+    )
+    siblings = list(getattr(info, "siblings", None) or [])
+    formats = hf_model_formats(siblings)
+    mmproj_files = hf_mmproj_files(siblings)
+    groups = hf_gguf_groups(siblings)
+    external_task = runtime == "external" or (runtime == "any" and not groups)
+    media_weight_bytes = sum(
+        integer_value(getattr(sibling, "size", None)) or 0
+        for sibling in siblings
+        if str(getattr(sibling, "rfilename", "")).lower().endswith(
+            (".safetensors", ".bin", ".onnx", ".ckpt", ".pt", ".pth")
+        )
+    )
+    size_caps = {
+        "any": budget_mb,
+        "compact": min(budget_mb, 16 * 1024),
+        "balanced": min(budget_mb, 48 * 1024),
+        "large": budget_mb,
+    }
+    weight_cap_mb = max(0, size_caps[size] - 4096)
+    quality = {"Q8_0": 8, "Q6_K": 7, "Q6_K_L": 7, "Q5_K_M": 6, "Q5_K_L": 6, "Q4_K_M": 5, "Q4_K_L": 5}
+    fitting = [
+        group for group in groups
+        if group["complete"] and group["size"] > 0 and group["size"] / (1024 * 1024) <= weight_cap_mb
+    ]
+    fitting.sort(key=lambda item: (quality.get(item["quantization"], 3), item["size"]), reverse=True)
+    selected = None if runtime == "external" else (fitting[0] if fitting else (groups[0] if groups else None))
+    architecture = hf_architecture_profile(info, selected["size"] if selected else 0)
+    target_context = 32_768 if task in {"code", "reasoning", "any"} else 16_384
+    if task in {"embedding", "vision"}:
+        target_context = 8192
+    config = getattr(info, "config", None) or {}
+    text_config = config.get("text_config") or {} if isinstance(config, dict) else {}
+    model_max_context = (
+        config.get("max_position_embeddings") if isinstance(config, dict) else None
+    ) or (text_config.get("max_position_embeddings") if isinstance(text_config, dict) else None)
+    if integer_value(model_max_context):
+        target_context = min(target_context, int(model_max_context))
+    target_context = max(8192, target_context)
+    slots = 1
+    estimate = hf_memory_estimate(
+        selected["size"] if selected else 0,
+        target_context,
+        speculative_memory_mb=architecture["speculative_memory_mb"],
+    )
+    if external_task and not selected:
+        target_context = 0
+        task_set = set(tasks)
+        multiplier, runtime_overhead_mb = 1.25, 8192
+        if "image-generation" in task_set:
+            multiplier, runtime_overhead_mb = 1.35, 10_240
+        elif "video-generation" in task_set:
+            multiplier, runtime_overhead_mb = 1.60, 16_384
+        elif task_set.intersection({"asr", "tts"}):
+            multiplier, runtime_overhead_mb = 1.20, 4096
+        elif task_set.intersection({"embedding", "reranking"}):
+            multiplier, runtime_overhead_mb = 1.20, 4096
+        estimate = {
+            "weight_mb": math.ceil(media_weight_bytes / (1024 * 1024)),
+            "kv_cache_mb": 0,
+            "runtime_mb": runtime_overhead_mb,
+            "total_mb": math.ceil(media_weight_bytes / (1024 * 1024) * multiplier) + runtime_overhead_mb,
+        }
+    while target_context > 8192 and estimate["total_mb"] > budget_mb:
+        target_context //= 2
+        estimate = hf_memory_estimate(
+            selected["size"] if selected else 0,
+            target_context,
+            speculative_memory_mb=architecture["speculative_memory_mb"],
+        )
+    estimated_tps = 0.0
+    if selected and architecture["active_weight_mb"]:
+        efficiency = 0.50 if architecture["is_moe"] else 0.58
+        estimated_tps = (
+            bandwidth_gbps * 1024 * efficiency / architecture["active_weight_mb"]
+        )
+        if architecture["speculative_methods"]:
+            estimated_tps *= 1.35
+        estimated_tps = round(estimated_tps, 1)
+    if selected and task in {"any", "chat", "code"}:
+        slot_cap = (
+            8 if architecture["is_moe"] and estimated_tps >= 25
+            else 4 if estimated_tps >= 18
+            else 2 if estimated_tps >= 9
+            else 1
+        )
+        for candidate_slots in range(2, slot_cap + 1):
+            candidate = hf_memory_estimate(
+                selected["size"],
+                target_context,
+                candidate_slots,
+                architecture["speculative_memory_mb"],
+            )
+            if candidate["total_mb"] <= budget_mb * 0.88:
+                slots = candidate_slots
+                estimate = candidate
+            else:
+                break
+
+    card_data = getattr(info, "card_data", None)
+    try:
+        card = card_data.to_dict() if hasattr(card_data, "to_dict") else dict(card_data or {})
+    except (KeyError, TypeError, ValueError):
+        card = {}
+    license_name = card.get("license")
+    private = bool(getattr(info, "private", False))
+    gated = bool(getattr(info, "gated", False))
+    downloads = int(getattr(info, "downloads", 0) or 0)
+    likes = int(getattr(info, "likes", 0) or 0)
+    trending_score = float(getattr(info, "trending_score", 0) or 0)
+    community = hf_community_score(downloads, likes, trending_score)
+    last_modified = getattr(info, "last_modified", None)
+    publisher = repo_id.partition("/")[0].casefold()
+    trusted_publishers = {
+        "bartowski", "deepseek-ai", "google", "ggml-org", "meta-llama",
+        "microsoft", "mistralai", "nvidia", "qwen", "unsloth",
+    }
+    trusted_publisher = publisher in trusted_publishers
+    task_match = task == "any" or task in tasks
+    mmproj_required = bool(selected and "vision" in tasks)
+    mmproj = mmproj_files[0] if mmproj_files else None
+    if selected and mmproj:
+        estimate["weight_mb"] += math.ceil(mmproj["size"] / (1024 * 1024))
+        estimate["total_mb"] += math.ceil(mmproj["size"] / (1024 * 1024) * 1.08)
+    fits = (
+        bool(media_weight_bytes and estimate["total_mb"] <= budget_mb)
+        if external_task and not selected
+        else bool(
+            selected
+            and selected["complete"]
+            and estimate["total_mb"] <= budget_mb
+            and (not mmproj_required or mmproj)
+        )
+    )
+    if unsupported_platform:
+        fits = False
+    needs_gguf = (
+        not groups
+        and bool(media_weight_bytes)
+        and set(tasks) <= {"chat", "code", "reasoning", "vision", "audio-chat", "video-chat"}
+        and not any(shutil.which(binary) for binary in ("vllm", "sglang", "trtllm-serve"))
+    )
+    if needs_gguf:
+        fits = False
+    fits_now = fits and estimate["total_mb"] <= available_budget_mb
+    utilization = estimate["total_mb"] / max(1, budget_mb)
+    score = 10 if groups or media_weight_bytes else 0
+    score += 20 if fits and utilization <= 0.75 else 12 if fits and utilization <= 0.92 else 6 if fits else -25
+    score += 12 if task_match else -8
+    score += quality.get(selected["quantization"], 3) if selected else 0
+    score += 4 if license_name else 0
+    score += 3 if not private and not gated else -12
+    score += 5 if trusted_publisher else 0
+    if selected:
+        if architecture["is_moe"]:
+            active_ratio = float(architecture["active_parameter_ratio"])
+            score += 10 if active_ratio <= 0.25 else 7 if active_ratio <= 0.45 else 3
+        elif estimate["weight_mb"] >= 48 * 1024:
+            score -= 5
+        if architecture["speculative_methods"]:
+            score += 5
+        score += (
+            8 if estimated_tps >= 30
+            else 5 if estimated_tps >= 15
+            else 1 if estimated_tps >= 8
+            else -2 if estimated_tps >= 4
+            else -8
+        )
+        score += min(5, max(0, slots - 1))
+        if spark_count > 1:
+            score += min(4, spark_count)
+    score += round(community["score"] * 0.12)
+    if last_modified:
+        if last_modified.tzinfo is None:
+            last_modified = last_modified.replace(tzinfo=timezone.utc)
+        age_days = max(0, (datetime.now(timezone.utc) - last_modified).days)
+        score += 2 if age_days <= 180 else 1 if age_days <= 365 else 0
+    score = max(0, min(100, score))
+    if (not groups and not external_task) or not fits:
+        status = "No recomendado"
+    elif score >= 82:
+        status = "Ideal"
+    elif score >= 64:
+        status = "Compatible"
+    elif score >= 45:
+        status = "Ajustado"
+    else:
+        status = "No recomendado"
+    if selected and fits and estimated_tps < 5:
+        status = "Ajustado"
+
+    engines = hf_recommended_engines(tasks, formats)
+    runtime_requirement = (
+        f"Runtime externo local · {', '.join(engines[:3])}"
+        if external_task
+        else (
+            f"Runtime distribuido CUDA · {spark_count}× GB10 · tensor parallel"
+            if spark_count > 1
+            else "llama.cpp CUDA · GB10 sm_121"
+        )
+    )
+    verified = next((item for item in ARTIFEX_PROFILES if item["repo"].casefold() == repo_id.casefold()), None)
+    if verified:
+        runtime_requirement = verified["runtime"]
+        score = min(100, score + 8)
+        status = "Ideal" if fits else status
+    reasons = []
+    warnings = []
+    if groups:
+        reasons.append(f"{len(groups)} cuantización(es) GGUF detectadas")
+    elif external_task and media_weight_bytes:
+        reasons.append(f"{math.ceil(media_weight_bytes / (1024 ** 3))} GB de pesos detectados")
+    if selected:
+        reasons.append(f"{selected['quantization']} evaluada con {target_context // 1024}K de contexto")
+        architecture_reason = architecture["architecture"]
+        if architecture["active_parameters_b"]:
+            architecture_reason += f" · {architecture['active_parameters_b']}B activos"
+        reasons.append(architecture_reason)
+        if estimated_tps:
+            reasons.append(
+                f"≈{estimated_tps:g} tok/s y {slots} slot(s) conservadores"
+            )
+    if task_match:
+        reasons.append(f"Adecuado para {', '.join(tasks)}")
+    if verified:
+        reasons.append("Configuración verificada por ARTIFEX")
+    elif trusted_publisher:
+        reasons.append("Editor o cuantizador reconocido")
+    if uncensored:
+        warnings.append("Variante sin censura o abliterada")
+    if not license_name:
+        warnings.append("Licencia no indicada en la ficha")
+    if private or gated:
+        warnings.append("Requiere acceso autenticado en Hugging Face")
+    if selected and not selected["complete"]:
+        warnings.append("El conjunto de shards GGUF parece incompleto")
+    if needs_gguf:
+        warnings.insert(0, "Sin GGUF: llama.cpp no puede ejecutarlo y no hay vLLM ni SGLang instalados; busca su versión GGUF")
+    elif not fits and not unsupported_platform:
+        warnings.append("No cabe en la capacidad segura del equipo")
+    elif fits and not fits_now:
+        warnings.append("Cabe por capacidad, pero requiere liberar memoria o descargar modelos activos")
+    if unsupported_platform:
+        warnings.append(f"Formato {unsupported_platform} no compatible con Linux GB10")
+    if external_task:
+        warnings.append("Requiere un motor local con API OpenAI compatible")
+    if mmproj_required and not mmproj:
+        warnings.append("Falta el archivo mmproj requerido por llama.cpp")
+    elif mmproj:
+        reasons.append(f"Projector visual detectado: {mmproj['name']}")
+    if architecture["speculative_methods"]:
+        reasons.append(
+            f"Decodificación especulativa: {', '.join(architecture['speculative_methods'])}"
+        )
+    elif selected and architecture["is_moe"]:
+        warnings.append("Sin MTP/DFlash/DSpark detectado en metadatos")
+    if spark_count > 1:
+        warnings.append("Tensor parallel requiere interconexión ConnectX-7 configurada")
+    recommended_files = list(selected["files"]) if selected else []
+    if mmproj:
+        recommended_files.append(mmproj["name"])
+    return {
+        "id": repo_id,
+        "downloads": downloads,
+        "likes": likes,
+        "trending_score": community["trending_score"],
+        "community_score": community["score"],
+        "community_signals": community,
+        "pipeline_tag": pipeline_tag,
+        "private": private,
+        "gated": gated,
+        "tags": tags[:12],
+        "updated_at": last_modified.isoformat() if last_modified else None,
+        "tasks": tasks,
+        "input_modalities": capabilities["input_modalities"],
+        "output_modalities": capabilities["output_modalities"],
+        "formats": formats,
+        "recommended_engines": engines,
+        "license": license_name,
+        "recommended_score": score,
+        "recommendation_status": status,
+        "recommended_quantization": selected["quantization"] if selected else None,
+        "recommended_file": selected["files"][0] if selected else None,
+        "recommended_files": recommended_files,
+        "recommended_mmproj_file": mmproj["name"] if mmproj else None,
+        "recommended_context": target_context,
+        "recommended_slots": slots,
+        "architecture": architecture["architecture"],
+        "is_moe": architecture["is_moe"],
+        "total_parameters_b": architecture["total_parameters_b"],
+        "active_parameters_b": architecture["active_parameters_b"],
+        "active_parameter_ratio": architecture["active_parameter_ratio"],
+        "active_weight_mb": architecture["active_weight_mb"],
+        "speculative_methods": architecture["speculative_methods"],
+        "speculative_memory_mb": architecture["speculative_memory_mb"],
+        "estimated_tokens_per_second": estimated_tps,
+        "spark_count": spark_count,
+        "memory_bandwidth_gbps": bandwidth_gbps,
+        "estimated_memory_mb": estimate["total_mb"],
+        "weight_mb": estimate["weight_mb"],
+        "kv_cache_mb": estimate["kv_cache_mb"],
+        "memory_budget_mb": budget_mb,
+        "memory_available_budget_mb": available_budget_mb,
+        "memory_available_mb": available_mb,
+        "runtime_requirement": runtime_requirement,
+        "fits": fits,
+        "fits_now": fits_now,
+        "platform_supported": unsupported_platform is None,
+        "reasons": reasons[:4],
+        "warnings": warnings[:4],
+        "gguf_search": f"{repo_id.rpartition('/')[2]} GGUF" if needs_gguf else "",
+        "artifex_verified": bool(verified),
+        "trusted_publisher": trusted_publisher,
+        "uncensored": uncensored,
+    }
+
+
+HFT_UNCENSORED_URL = "https://hft.md/uncensored-ai/"
+HFT_CATALOG_TTL_SECONDS = 6 * 60 * 60
+HFT_QUANT_ORDER = ("Q4_K_M", "Q3_K_M", "IQ3_M", "Q2_K")
+HFT_REPO_PATTERN = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+_hft_catalog_cache: dict[str, Any] = {"fetched_at": 0.0, "models": []}
+
+
+def _hft_float(value: str | None) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _hft_quants(raw: str) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(html.unescape(raw or ""))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    quants: list[dict[str, Any]] = []
+    for name, value in payload.items():
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Z0-9_]+", name):
+            continue
+        if not isinstance(value, list) or not value:
+            continue
+        try:
+            weight_gb = float(value[0])
+        except (TypeError, ValueError):
+            continue
+        if weight_gb <= 0 or weight_gb > 2000:
+            continue
+        quants.append({"name": name, "weight_gb": weight_gb})
+    return quants
+
+
+def _hf_repo_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or parsed.netloc not in {"huggingface.co", "www.huggingface.co"}:
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return ""
+    repo = f"{parts[0]}/{parts[1]}"
+    return repo if HFT_REPO_PATTERN.fullmatch(repo) else ""
+
+
+def _split_hft_byline(text: str) -> tuple[str, str]:
+    byline = text[3:].strip() if text.lower().startswith("by ") else text.strip()
+    author, separator, base = byline.partition("·")
+    if not separator:
+        return author.strip(), ""
+    base = base.strip()
+    if base.lower().startswith("built on "):
+        base = base[9:].strip()
+    return author.strip(), base
+
+
+class _HftCatalogParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.models: list[dict[str, Any]] = []
+        self._card: dict[str, Any] | None = None
+        self._li_depth = 0
+        self._capture: str | None = None
+        self._capture_tag: str | None = None
+        self._buf: list[str] = []
+        self._in_scores = False
+        self._score_label: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr = {key: value or "" for key, value in attrs}
+        classes = set(attr.get("class", "").split())
+        if self._card is None:
+            if tag == "li" and "um-card" in classes and HFT_REPO_PATTERN.fullmatch(attr.get("data-gguf", "")):
+                self._card = {
+                    "gguf_repo": attr["data-gguf"],
+                    "source_repo": "",
+                    "name": "",
+                    "author": "",
+                    "base_model": "",
+                    "parameters": "",
+                    "badges": [],
+                    "uses": [
+                        item for item in attr.get("data-use", "").split()
+                        if item in {"analysis", "code", "vision", "think"}
+                    ],
+                    "search_text": attr.get("data-q", "").casefold(),
+                    "sort_score": _hft_float(attr.get("data-s")) or 0.0,
+                    "uncensored_iq": _hft_float(attr.get("data-u")),
+                    "reasoning": _hft_float(attr.get("data-n")),
+                    "answers": "",
+                    "summary": "",
+                    "quants": _hft_quants(attr.get("data-qs", "")),
+                }
+                self._li_depth = 1
+            return
+        if tag == "li":
+            self._li_depth += 1
+        if tag == "h2" and not self._card["name"]:
+            self._begin_capture("name", tag)
+        elif "um-by" in classes and not self._card["author"]:
+            self._begin_capture("by", tag)
+        elif "um-b" in classes and not self._in_scores and len(self._card["badges"]) < 5:
+            self._begin_capture("badge", tag)
+        elif "um-scores" in classes:
+            self._in_scores = True
+        elif self._in_scores and tag == "dt":
+            self._begin_capture("score-label", tag)
+        elif self._in_scores and tag == "b" and self._score_label:
+            self._begin_capture("score-value", tag)
+        elif "um-good" in classes and not self._card["summary"]:
+            self._begin_capture("summary", tag)
+        elif tag == "a" and not self._card["source_repo"]:
+            repo = _hf_repo_from_url(attr.get("href", ""))
+            if repo:
+                self._card["source_repo"] = repo
+
+    def handle_data(self, data: str) -> None:
+        if self._capture:
+            self._buf.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._card is None:
+            return
+        if self._capture and tag == self._capture_tag:
+            text = " ".join("".join(self._buf).split())
+            if self._capture == "name":
+                self._card["name"] = text[:160]
+            elif self._capture == "by":
+                author, base = _split_hft_byline(text)
+                self._card["author"] = author[:80]
+                self._card["base_model"] = base[:120]
+            elif self._capture == "badge" and text:
+                self._card["badges"].append(text[:40])
+                if not self._card["parameters"] and re.search(r"\d(?:\.\d+)?B", text):
+                    self._card["parameters"] = text[:40]
+            elif self._capture == "score-label":
+                self._score_label = text
+            elif self._capture == "score-value" and self._score_label == "Answers":
+                self._card["answers"] = text[:16]
+            elif self._capture == "summary":
+                summary = text.split(":", 1)[1].strip() if text.lower().startswith("for trading:") else text
+                self._card["summary"] = summary[:280]
+            self._capture = None
+            self._capture_tag = None
+            self._buf = []
+        if tag == "dl":
+            self._in_scores = False
+            self._score_label = None
+        if tag == "li":
+            self._li_depth -= 1
+            if self._li_depth <= 0:
+                self.models.append(self._card)
+                self._card = None
+                self._capture = None
+                self._in_scores = False
+                self._score_label = None
+
+    def _begin_capture(self, kind: str, tag: str) -> None:
+        self._capture = kind
+        self._capture_tag = tag
+        self._buf = []
+
+
+def parse_hft_uncensored_catalog(page_html: str) -> list[dict[str, Any]]:
+    parser = _HftCatalogParser()
+    parser.feed(page_html)
+    parser.close()
+    seen: set[str] = set()
+    models: list[dict[str, Any]] = []
+    for model in parser.models:
+        key = str(model["gguf_repo"]).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        models.append(model)
+    return models
+
+
+def load_hft_uncensored_catalog() -> list[dict[str, Any]]:
+    """Fetch the fixed hft.md catalog. No redirects, no credentials, stale cache on failure."""
+    now = time.monotonic()
+    cached = list(_hft_catalog_cache["models"])
+    if cached and now - float(_hft_catalog_cache["fetched_at"]) < HFT_CATALOG_TTL_SECONDS:
+        return cached
+    try:
+        with httpx.Client(
+            timeout=12.0,
+            follow_redirects=False,
+            headers={"User-Agent": "MyDGX-Dashboard", "Accept": "text/html"},
+        ) as client:
+            response = client.get(HFT_UNCENSORED_URL)
+        if response.status_code != 200 or len(response.text) > 3_000_000:
+            return cached
+        models = parse_hft_uncensored_catalog(response.text)
+    except Exception:
+        return cached
+    if not models:
+        return cached
+    _hft_catalog_cache["models"] = models
+    _hft_catalog_cache["fetched_at"] = now
+    return models
+
+
+def _hft_fitting_quant(quants: list[dict[str, Any]], cap_gb: float) -> dict[str, Any] | None:
+    by_name = {str(item["name"]): item for item in quants}
+    for name in HFT_QUANT_ORDER:
+        quant = by_name.get(name)
+        if quant and float(quant["weight_gb"]) + 1.5 <= cap_gb:
+            return quant
+    return None
+
+
+def hft_catalog_for_search(
+    models: list[dict[str, Any]],
+    query: str,
+    task: str,
+    modality: str,
+    budget_mb: int,
+    size: str = "any",
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    if task not in {"any", "chat", "code", "reasoning", "vision"}:
+        return []
+    if modality not in {"any", "text", "image"}:
+        return []
+    required_uses: set[str] = set()
+    if task == "code":
+        required_uses.add("code")
+    if task == "reasoning":
+        required_uses.add("think")
+    if task == "vision" or modality == "image":
+        required_uses.add("vision")
+    terms = [term for term in re.findall(r"[a-z0-9.+-]+", query.casefold()) if len(term) >= 2]
+    caps = {
+        "any": budget_mb,
+        "compact": min(budget_mb, 16 * 1024),
+        "balanced": min(budget_mb, 48 * 1024),
+        "large": budget_mb,
+    }
+    cap_gb = max(0, caps.get(size, budget_mb)) / 1024
+    ranked: list[tuple[bool, float, dict[str, Any]]] = []
+    for model in models:
+        uses = set(model.get("uses") or [])
+        if not required_uses.issubset(uses):
+            continue
+        blob = str(model.get("search_text") or "")
+        if terms and not all(term in blob for term in terms):
+            continue
+        ranked.append((_hft_fitting_quant(list(model.get("quants") or []), cap_gb) is not None, float(model.get("sort_score") or 0), model))
+    if not terms:
+        ranked = [item for item in ranked if item[0]]
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in ranked[:limit]]
+
+
+def apply_hft_catalog_metadata(result: dict[str, Any], model: dict[str, Any]) -> None:
+    tasks = list(result.get("tasks") or [])
+    for use, task_name in (("code", "code"), ("vision", "vision"), ("think", "reasoning")):
+        if use in set(model.get("uses") or []) and task_name not in tasks:
+            tasks.append(task_name)
+    result["tasks"] = sorted(tasks)
+    if "vision" in set(model.get("uses") or []):
+        modalities = list(result.get("input_modalities") or [])
+        if "image" not in modalities:
+            modalities.append("image")
+        result["input_modalities"] = sorted(modalities)
+    result["uncensored"] = True
+    result["hft_catalog"] = {
+        "url": HFT_UNCENSORED_URL,
+        "uncensored_iq": model.get("uncensored_iq"),
+        "reasoning": model.get("reasoning"),
+        "answers": model.get("answers") or None,
+        "author": model.get("author") or "",
+        "base_model": model.get("base_model") or "",
+        "summary": model.get("summary") or "",
+    }
+    reason = "Incluido en el catálogo hft.md de modelos sin censura"
+    reasons = [item for item in result.get("reasons") or [] if item != reason]
+    result["reasons"] = [reason, *reasons][:4]
+
+
+@app.get("/api/models/search", dependencies=secure)
+async def search_models(
+    q: str = Query(default="", max_length=120),
+    task: HF_TASK = Query(default="any"),
+    size: HF_SIZE = Query(default="any"),
+    alignment: HF_ALIGNMENT = Query(default="any"),
+    runtime: HF_RUNTIME = Query(default="any"),
+    model_format: HF_FORMAT = Query(default="any", alias="format"),
+    modality: HF_MODALITY = Query(default="any"),
+    limit: int = Query(default=18, ge=1, le=30),
+    page: int = Query(default=0, ge=0, le=9),
+) -> list[dict[str, Any]]:
+    def search() -> list[dict[str, Any]]:
+        api = HfApi(token=huggingface_token())
+        normalized_query = q.strip()
+        pool_size = 120 if alignment == "uncensored" else min(60, max(limit * 3, 30))
+        popular_limit = max(limit, math.ceil(pool_size * 0.7))
+        trending_limit = max(8, pool_size - popular_limit)
+        search_options: dict[str, Any] = {
+            "sort": "downloads",
+            "direction": -1,
+            "limit": popular_limit * (page + 1),
+            "full": True,
+        }
+        if normalized_query:
+            search_options["search"] = normalized_query
+        if runtime == "llama.cpp" or model_format == "gguf":
+            search_options["filter"] = "gguf"
+        popular_all = list(api.list_models(**search_options))
+        trending_options: dict[str, Any] = {
+            "limit": trending_limit * (page + 1),
+        }
+        if normalized_query:
+            trending_options["search"] = normalized_query
+        if search_options.get("filter"):
+            trending_options["filter"] = search_options["filter"]
+        trending_all = list(api.list_models(**trending_options))
+        trending_scores = {
+            str(model.id): float(getattr(model, "trending_score", 0) or 0)
+            for model in trending_all
+        }
+        earlier = {
+            str(model.id)
+            for model in [*trending_all[:trending_limit * page], *popular_all[:popular_limit * page]]
+        }
+        popular_candidates = popular_all[popular_limit * page:]
+        trending_candidates = trending_all[trending_limit * page:]
+        candidates = list({
+            str(model.id): model
+            for model in [*trending_candidates, *popular_candidates]
+            if str(model.id) not in earlier
+        }.values())[:pool_size]
+        catalog_matches: list[dict[str, Any]] = []
+        if alignment == "uncensored":
+            catalog_matches = hft_catalog_for_search(
+                load_hft_uncensored_catalog(),
+                normalized_query,
+                task,
+                modality,
+                spark_memory_budgets()["budget_mb"],
+                size,
+            )
+        catalog_by_repo = {
+            str(item["gguf_repo"]).casefold(): item
+            for item in catalog_matches
+        }
+        for item in catalog_matches:
+            source_repo = str(item.get("source_repo") or "")
+            if source_repo:
+                catalog_by_repo.setdefault(source_repo.casefold(), item)
+        if alignment == "uncensored":
+            candidates = [
+                model for model in candidates
+                if hf_is_uncensored(str(model.id), list(getattr(model, "tags", None) or []))
+                or str(model.id).casefold() in catalog_by_repo
+            ][:max(limit * 3, 24)]
+            present = {str(model.id).casefold() for model in candidates}
+            extras = [
+                SimpleNamespace(
+                    id=item["gguf_repo"],
+                    tags=["gguf", "text-generation"],
+                    pipeline_tag="text-generation",
+                    downloads=0,
+                    likes=0,
+                )
+                for item in catalog_matches
+                if str(item["gguf_repo"]).casefold() not in present
+            ] if page == 0 else []
+            candidates = [*extras, *candidates]
+
+        def analyze(model: Any) -> dict[str, Any] | None:
+            try:
+                info = HfApi(token=huggingface_token()).model_info(
+                    model.id,
+                    files_metadata=True,
+                )
+                info.trending_score = trending_scores.get(str(model.id), 0)
+                result = hf_spark_recommendation(info, task, size, runtime)
+                catalog_item = catalog_by_repo.get(str(model.id).casefold())
+                if catalog_item:
+                    apply_hft_catalog_metadata(result, catalog_item)
+                return result
+            except Exception:
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+            results = [result for result in executor.map(analyze, candidates) if result]
+        if alignment != "any":
+            expected_uncensored = alignment == "uncensored"
+            results = [item for item in results if item["uncensored"] is expected_uncensored]
+        if task != "any":
+            results = [item for item in results if task in item["tasks"]]
+        if modality != "any":
+            results = [item for item in results if modality in item["input_modalities"]]
+        if model_format != "any":
+            results = [item for item in results if model_format in item["formats"]]
+        if runtime == "llama.cpp":
+            results = [item for item in results if "llama.cpp" in item["recommended_engines"]]
+        elif runtime == "external":
+            results = [
+                item for item in results
+                if any(engine != "llama.cpp" for engine in item["recommended_engines"])
+                and any(fmt in item["formats"] for fmt in ("safetensors", "onnx", "pytorch", "diffusers"))
+            ]
+        results.sort(key=lambda item: (
+            item["recommendation_status"] == "No recomendado",
+            -item["recommended_score"],
+            -item["downloads"],
+        ))
+        if catalog_matches and page == 0:
+            catalog_ids = {str(item["gguf_repo"]).casefold() for item in catalog_matches}
+            pinned = [
+                item for item in results
+                if str(item["id"]).casefold() in catalog_ids and item.get("hft_catalog")
+            ]
+            fitting = [item for item in pinned if item.get("fits")]
+            pinned = (fitting or pinned)[:min(4, limit)]
+            pinned_ids = {item["id"] for item in pinned}
+            results = [*pinned, *[item for item in results if item["id"] not in pinned_ids]]
+        return results[:limit]
+
+    try:
+        return await asyncio.to_thread(search)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"No se pudo consultar Hugging Face: {type(exc).__name__}") from exc
+
+
+@app.get("/api/models/huggingface/search", dependencies=secure)
+async def search_all_huggingface(
+    q: str = Query(default="", max_length=120),
+    task: HF_TASK = Query(default="any"),
+    modality: HF_MODALITY = Query(default="any"),
+    limit: int = Query(default=24, ge=1, le=50),
+) -> list[dict[str, Any]]:
+    def search() -> list[dict[str, Any]]:
+        api = HfApi(token=huggingface_token())
+        normalized_query = q.strip()
+        pool_size = min(200, limit * 4) if task != "any" or modality != "any" else max(limit, 24)
+        popular_limit = max(limit, math.ceil(pool_size * 0.7))
+        trending_limit = max(8, pool_size - popular_limit)
+        popular_options: dict[str, Any] = {
+            "sort": "downloads",
+            "direction": -1,
+            "limit": popular_limit,
+            "full": True,
+        }
+        trending_options: dict[str, Any] = {"limit": trending_limit}
+        if normalized_query:
+            popular_options["search"] = normalized_query
+            trending_options["search"] = normalized_query
+        popular = list(api.list_models(**popular_options))
+        trending = list(api.list_models(**trending_options))
+        trending_scores = {
+            str(model.id): float(getattr(model, "trending_score", 0) or 0)
+            for model in trending
+        }
+        models = list({
+            str(model.id): model
+            for model in [*trending, *popular]
+        }.values())[:pool_size]
+        eligible = []
+        for model in models:
+            tags = list(getattr(model, "tags", None) or [])
+            capabilities = hf_model_capabilities(
+                str(model.id),
+                getattr(model, "pipeline_tag", None),
+                tags,
+            )
+            if task != "any" and task not in capabilities["tasks"]:
+                continue
+            if modality != "any" and modality not in capabilities["input_modalities"]:
+                continue
+            eligible.append(model)
+
+        def analyze(model: Any) -> dict[str, Any] | None:
+            try:
+                info = api.model_info(model.id, files_metadata=True)
+                info.trending_score = trending_scores.get(str(model.id), 0)
+                return hf_spark_recommendation(info, task, "any", "any")
+            except Exception:
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+            results = [result for result in executor.map(analyze, eligible) if result]
+        results.sort(key=lambda item: (
+            item["recommendation_status"] == "No recomendado",
+            -item["recommended_score"],
+            -item["downloads"],
+        ))
+        return results[:limit]
+
+    try:
+        return await asyncio.to_thread(search)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"No se pudo consultar Hugging Face: {type(exc).__name__}") from exc
+
+
+class HfFavoritePayload(BaseModel):
+    repo_id: str = Field(
+        min_length=3,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+    )
+    enabled: bool
+
+
+@app.get("/api/models/huggingface/favorites", dependencies=secure)
+async def list_huggingface_favorites() -> list[dict[str, Any]]:
+    return huggingface_favorites()
+
+
+@app.put("/api/models/huggingface/favorites", dependencies=secure)
+async def update_huggingface_favorite(
+    payload: HfFavoritePayload,
+) -> dict[str, Any]:
+    favorites = [
+        item for item in huggingface_favorites()
+        if str(item.get("id") or "").casefold() != payload.repo_id.casefold()
+    ]
+    if payload.enabled:
+        def fetch() -> dict[str, Any]:
+            model = HfApi(token=huggingface_token()).model_info(
+                payload.repo_id,
+                files_metadata=True,
+            )
+            result = hf_spark_recommendation(model)
+            result["favorited_at"] = utc_now()
+            return result
+
+        try:
+            favorites.insert(0, await asyncio.to_thread(fetch))
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"No se pudo guardar el favorito: {type(exc).__name__}",
+            ) from exc
+    save_huggingface_favorites(favorites)
+    db.audit(
+        "huggingface.favorite",
+        payload.repo_id,
+        True,
+        "enabled" if payload.enabled else "disabled",
+    )
+    return {"favorite": payload.enabled, "count": len(favorites)}
+
+
+def hf_cached_model_file(repo_id: str, revision: str, filename: str) -> bool:
+    repo = huggingface_cache_dir() / f"models--{repo_id.replace('/', '--')}"
+    revisions = [revision]
+    ref = repo / "refs" / revision
+    if ref.is_file():
+        try:
+            resolved = ref.read_text(encoding="utf-8").strip()
+            if resolved:
+                revisions.insert(0, resolved)
+        except OSError:
+            pass
+    return any((repo / "snapshots" / candidate / filename).is_file() for candidate in revisions)
+
+
+@app.get("/api/models/huggingface/inspect/{repo_id:path}", dependencies=secure)
+async def inspect_hf_model(repo_id: str, revision: str = Query(default="main", max_length=120)) -> dict[str, Any]:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo_id):
+        raise HTTPException(status_code=400, detail="Repositorio Hugging Face inválido")
+    if not re.fullmatch(r"[A-Za-z0-9._/-]+", revision):
+        raise HTTPException(status_code=400, detail="Revisión inválida")
+    local_path = (
+        huggingface_cache_dir()
+        / f"models--{repo_id.replace('/', '--')}"
+    )
+    local = local_hf_repo_details(local_path) if local_path.is_dir() else None
+    description_record = saved_model_description(repo_id)
+
+    def remote_info() -> dict[str, Any]:
+        info = HfApi(token=huggingface_token()).model_info(
+            repo_id,
+            revision=revision,
+            files_metadata=True,
+        )
+        resolved_revision = str(getattr(info, "sha", None) or revision)
+        try:
+            card_data = info.card_data
+            card = card_data.to_dict() if hasattr(card_data, "to_dict") else dict(card_data or {})
+        except (KeyError, TypeError, ValueError):
+            card = {}
+        files = []
+        for sibling in info.siblings or []:
+            lfs = getattr(sibling, "lfs", None)
+            lfs_sha256 = (
+                lfs.get("sha256")
+                if isinstance(lfs, dict)
+                else getattr(lfs, "sha256", None)
+            )
+            files.append({
+                "name": sibling.rfilename,
+                "size": getattr(sibling, "size", None),
+                "blob_id": getattr(sibling, "blob_id", None),
+                "lfs_sha256": lfs_sha256,
+                "quantization": (
+                    match.group(1).upper()
+                    if (match := QUANTIZATION_PATTERN.search(sibling.rfilename))
+                    else None
+                ),
+                "downloaded": hf_cached_model_file(
+                    repo_id,
+                    resolved_revision,
+                    sibling.rfilename,
+                ),
+            })
+        tags = list(getattr(info, "tags", None) or [])
+        siblings = list(info.siblings or [])
+        capabilities = hf_model_capabilities(
+            repo_id,
+            getattr(info, "pipeline_tag", None),
+            tags,
+        )
+        return {
+            "revision": resolved_revision,
+            "gated": bool(getattr(info, "gated", False)),
+            "private": bool(getattr(info, "private", False)),
+            "license": card.get("license"),
+            "pipeline_tag": getattr(info, "pipeline_tag", None),
+            "tasks": capabilities["tasks"],
+            "input_modalities": capabilities["input_modalities"],
+            "output_modalities": capabilities["output_modalities"],
+            "formats": hf_model_formats(siblings),
+            "recommended_engines": hf_recommended_engines(capabilities["tasks"], hf_model_formats(siblings)),
+            "downloads": getattr(info, "downloads", 0) or 0,
+            "files": files,
+        }
+
+    try:
+        remote = await asyncio.to_thread(remote_info)
+        remote_error = None
+        refreshed = await asyncio.to_thread(
+            refresh_hf_model_description,
+            repo_id,
+            str(remote.get("revision") or revision),
+        )
+        if refreshed:
+            description_record = refreshed
+    except Exception as exc:
+        remote = None
+        remote_error = type(exc).__name__
+    return {
+        "repo_id": repo_id,
+        "description": str((description_record or {}).get("description") or ""),
+        "description_source": str(
+            ((description_record or {}).get("metadata") or {}).get(
+                "_mydgx_description_source",
+                "",
+            )
+        ),
+        "description_revision": str((description_record or {}).get("revision") or ""),
+        "description_fetched_at": (description_record or {}).get("fetched_at"),
+        "local": local,
+        "remote": remote,
+        "remote_error": remote_error,
+        "download_limit_bytes": model_download_memory_limit_bytes(),
+    }
+
+
+class ModelDownloadValidationError(RuntimeError):
+    def __init__(self, detail: str, status_code: int = 413):
+        super().__init__(detail)
+        self.detail = detail
+        self.status_code = status_code
+
+
+def model_download_memory_limit_bytes() -> int:
+    """Maximum individual download size: this host's total physical memory."""
+    return int(psutil.virtual_memory().total)
+
+
+def format_download_size(size: int) -> str:
+    return f"{size / 1024 ** 3:.1f} GB"
+
+
+def ensure_model_download_size(size: int, label: str) -> None:
+    limit = model_download_memory_limit_bytes()
+    if size > limit:
+        raise ModelDownloadValidationError(
+            (
+                f"{label} ocupa {format_download_size(size)} y supera la memoria total "
+                f"del sistema ({format_download_size(limit)}). Descarga bloqueada."
+            )
+        )
+
+
+async def validate_hf_download(
+    repo_id: str,
+    revision: str,
+    filenames: list[str] | None,
+) -> tuple[str, int]:
+    """Resolve a revision and prove that the requested bytes fit in memory."""
+    def inspect() -> tuple[str, int]:
+        info = HfApi(token=huggingface_token()).model_info(
+            repo_id,
+            revision=revision,
+            files_metadata=True,
+        )
+        siblings = {
+            str(sibling.rfilename): sibling
+            for sibling in (info.siblings or [])
+        }
+        requested = list(dict.fromkeys(filenames)) if filenames is not None else list(siblings)
+        missing = [filename for filename in requested if filename not in siblings]
+        if missing:
+            raise ModelDownloadValidationError(
+                f"Archivo no encontrado en Hugging Face: {missing[0]}",
+                status_code=404,
+            )
+        unknown = [
+            filename
+            for filename in requested
+            if not isinstance(getattr(siblings[filename], "size", None), int)
+            or getattr(siblings[filename], "size", 0) < 0
+        ]
+        if unknown:
+            raise ModelDownloadValidationError(
+                (
+                    f"Hugging Face no informa el tamaño de {unknown[0]}; "
+                    "la descarga se bloquea porque no se puede comprobar que cabe."
+                ),
+                status_code=409,
+            )
+        total = sum(int(getattr(siblings[filename], "size")) for filename in requested)
+        ensure_model_download_size(total, repo_id)
+        return str(getattr(info, "sha", None) or revision), total
+
+    try:
+        return await asyncio.to_thread(inspect)
+    except ModelDownloadValidationError:
+        raise
+    except Exception as exc:
+        raise ModelDownloadValidationError(
+            f"No se pudo verificar el tamaño de {repo_id}: {type(exc).__name__}",
+            status_code=502,
+        ) from exc
+
+
+def download_validation_http_error(exc: ModelDownloadValidationError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
+class HfFilesDownloadRequest(BaseModel):
+    repo_id: str = Field(pattern=r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", max_length=200)
+    revision: str = Field(default="main", pattern=r"^[A-Za-z0-9._/-]+$", max_length=120)
+    files: list[str] = Field(min_length=1, max_length=64)
+
+
+HF_PROGRESS_INTERVAL_SECONDS = 2.0
+
+
+def active_hf_download_job(repo_id: str) -> str | None:
+    rows = db.rows(
+        """
+        SELECT id FROM jobs
+        WHERE target=?
+          AND kind IN ('huggingface.download','huggingface.files.download')
+          AND status IN ('queued','running','cancelling')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (repo_id,),
+    )
+    return str(rows[0]["id"]) if rows else None
+
+
+def human_bytes(value: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(value) < 1024 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit in {"B", "KB"} else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+def hf_repo_cache_bytes(repo_id: str) -> int:
+    blobs = huggingface_cache_dir() / f"models--{repo_id.replace('/', '--')}" / "blobs"
+    total = 0
+    try:
+        for item in blobs.iterdir():
+            try:
+                if item.is_file():
+                    total += item.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return 0
+    return total
+
+
+async def track_hf_download_progress(
+    job_id: str,
+    repo_id: str | list[str],
+    total_bytes: int,
+    stop: asyncio.Event,
+    label: Callable[[], str] = lambda: "Descargando",
+    progress_start: float = 0.0,
+    progress_end: float = 100.0,
+) -> None:
+    """Report byte-level progress while huggingface_hub writes blobs/*.incomplete."""
+    if total_bytes <= 0:
+        return
+    repos = list(dict.fromkeys([repo_id] if isinstance(repo_id, str) else repo_id))
+
+    def cached() -> int:
+        return sum(hf_repo_cache_bytes(repo) for repo in repos)
+
+    baseline = await asyncio.to_thread(cached)
+    previous, previous_at = 0, time.monotonic()
+    speed = 0.0
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=HF_PROGRESS_INTERVAL_SECONDS)
+            return
+        except asyncio.TimeoutError:
+            pass
+        if db.job_cancel_requested(job_id):
+            continue
+        current = max(0, await asyncio.to_thread(cached) - baseline)
+        now = time.monotonic()
+        if now > previous_at:
+            instant = max(0, current - previous) / (now - previous_at)
+            speed = instant if speed == 0 else speed * 0.7 + instant * 0.3
+        previous, previous_at = current, now
+        done = min(current, total_bytes)
+        detail = f"{human_bytes(done)} / {human_bytes(total_bytes)}"
+        if speed > 0:
+            remaining = max(0, total_bytes - done) / speed
+            eta = f"{int(remaining // 60)} min" if remaining >= 90 else f"{int(remaining)} s"
+            detail += f" · {human_bytes(speed)}/s · quedan ~{eta}"
+        fraction = min(1.0, done / total_bytes)
+        db.update_job(
+            job_id,
+            "running",
+            min(99.0, progress_start + (progress_end - progress_start) * fraction),
+            f"{label()} · {detail}",
+        )
+
+
+async def stop_hf_progress(stop: asyncio.Event, monitor: asyncio.Task[None]) -> None:
+    stop.set()
+    if not monitor.done():
+        monitor.cancel()
+    with suppress(asyncio.CancelledError):
+        await monitor
+
+
+async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_bytes: int = 0) -> None:
+    stop = asyncio.Event()
+    batch_label = {"text": "Descargando"}
+    monitor = asyncio.create_task(track_hf_download_progress(
+        job_id, payload.repo_id, total_bytes, stop, lambda: batch_label["text"],
+    ))
+    try:
+        downloaded = []
+        workers = min(huggingface_download_workers(), len(payload.files))
+        for offset in range(0, len(payload.files), workers):
+            if db.job_cancel_requested(job_id):
+                db.update_job(
+                    job_id,
+                    "cancelled",
+                    offset / len(payload.files) * 100,
+                    "Descarga cancelada",
+                )
+                return
+            batch = payload.files[offset:offset + workers]
+            batch_label["text"] = (
+                "Descargando" if len(payload.files) == 1
+                else f"Archivos {offset + 1}-{offset + len(batch)}/{len(payload.files)}"
+            )
+            if not total_bytes:
+                db.update_job(
+                    job_id,
+                    "running",
+                    offset / len(payload.files) * 100,
+                    f"Descargando {offset + 1}-{offset + len(batch)}/{len(payload.files)} en paralelo",
+                )
+            paths = await asyncio.gather(*[
+                asyncio.to_thread(
+                    hf_hub_download,
+                    repo_id=payload.repo_id,
+                    filename=filename,
+                    revision=payload.revision,
+                    cache_dir=str(huggingface_cache_dir()),
+                    token=huggingface_token(),
+                )
+                for filename in batch
+            ])
+            downloaded.extend(str(Path(path).name) for path in paths)
+            if not total_bytes:
+                db.update_job(
+                    job_id,
+                    "running",
+                    len(downloaded) / len(payload.files) * 100,
+                    f"Preparados {len(downloaded)}/{len(payload.files)}",
+                )
+        await stop_hf_progress(stop, monitor)
+        if db.job_cancel_requested(job_id):
+            db.update_job(job_id, "cancelled", 99, "Descarga cancelada · los archivos ya bajados quedan en la caché")
+            return
+        db.update_job(job_id, "running", 99, "Descarga completa · registrando el modelo")
+        if "README.md" not in payload.files:
+            # Task tags and the uncensored flag are read from the card next to the weights.
+            try:
+                await asyncio.to_thread(
+                    hf_hub_download,
+                    repo_id=payload.repo_id,
+                    filename="README.md",
+                    revision=payload.revision,
+                    cache_dir=str(huggingface_cache_dir()),
+                    token=huggingface_token(),
+                )
+            except Exception:
+                pass
+        await asyncio.to_thread(
+            refresh_hf_model_description,
+            payload.repo_id,
+            payload.revision,
+        )
+        db.execute(
+            "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
+            (job_id, json.dumps({"files": downloaded}), utc_now()),
+        )
+        db.update_job(job_id, "completed", 100, f"{len(downloaded)} archivo(s) preparados")
+    except Exception as exc:
+        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: descarga no completada")
+    finally:
+        await stop_hf_progress(stop, monitor)
+
+
+@app.post("/api/models/huggingface/files/download", dependencies=secure)
+async def start_hf_files_download(
+    payload: HfFilesDownloadRequest,
+    background: BackgroundTasks,
+) -> dict[str, str | bool]:
+    ensure_benchmark_inference_available()
+    if existing_job_id := active_hf_download_job(payload.repo_id):
+        return {"job_id": existing_job_id, "deduplicated": True}
+    for filename in payload.files:
+        if (
+            len(filename) > 1000
+            or filename.startswith("/")
+            or ".." in Path(filename).parts
+        ):
+            raise HTTPException(status_code=400, detail="Nombre de archivo inválido")
+    try:
+        resolved_revision, total_bytes = await validate_hf_download(
+            payload.repo_id,
+            payload.revision,
+            payload.files,
+        )
+    except ModelDownloadValidationError as exc:
+        db.audit("huggingface.files.download.rejected", payload.repo_id, False, exc.detail)
+        raise download_validation_http_error(exc) from exc
+    payload = payload.model_copy(update={"revision": resolved_revision})
+    if existing_job_id := active_hf_download_job(payload.repo_id):
+        return {"job_id": existing_job_id, "deduplicated": True}
+    already_downloaded = [
+        filename for filename in payload.files
+        if hf_cached_model_file(payload.repo_id, resolved_revision, filename)
+    ]
+    if already_downloaded:
+        detail = (
+            f"El archivo ya está descargado: {already_downloaded[0]}"
+            if len(already_downloaded) == 1
+            else f"{len(already_downloaded)} archivos seleccionados ya están descargados"
+        )
+        db.audit("huggingface.files.download.rejected", payload.repo_id, False, detail)
+        raise HTTPException(status_code=409, detail=detail)
+    job_id = db.create_job("huggingface.files.download", payload.repo_id)
+    background.add_task(download_hf_files, job_id, payload, total_bytes)
+    return {"job_id": job_id, "deduplicated": False}
+
+
+async def verify_hf_integrity(job_id: str, repo_id: str) -> None:
+    directory = (
+        huggingface_cache_dir()
+        / f"models--{repo_id.replace('/', '--')}"
+    )
+    blobs = [
+        item for item in (directory / "blobs").glob("*")
+        if item.is_file() and re.fullmatch(r"[a-fA-F0-9]{64}", item.name)
+    ] if directory.is_dir() else []
+    def blob_digest(blob: Path) -> str | None:
+        digest = hashlib.sha256()
+        with blob.open("rb") as stream:
+            for index, chunk in enumerate(iter(lambda: stream.read(8 * 1024 * 1024), b"")):
+                if index % 32 == 31 and db.job_cancel_requested(job_id):
+                    return None
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    results = []
+    for index, blob in enumerate(blobs):
+        if db.job_cancel_requested(job_id):
+            db.update_job(job_id, "cancelled", index / max(1, len(blobs)) * 100, "Verificación cancelada")
+            return
+        try:
+            actual = await asyncio.to_thread(blob_digest, blob)
+            if actual is None:
+                db.update_job(job_id, "cancelled", index / max(1, len(blobs)) * 100, "Verificación cancelada")
+                return
+            results.append({"blob": blob.name, "valid": hmac.compare_digest(actual, blob.name.lower())})
+        except OSError:
+            results.append({"blob": blob.name, "valid": False})
+        db.update_job(
+            job_id,
+            "running",
+            (index + 1) / max(1, len(blobs)) * 100,
+            f"Verificado {index + 1}/{len(blobs)}",
+        )
+    db.execute(
+        "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
+        (job_id, json.dumps({"repo_id": repo_id, "checksums": results}), utc_now()),
+    )
+    invalid = sum(1 for item in results if not item["valid"])
+    db.update_job(job_id, "completed", 100, f"Verificación completa · {invalid} inválido(s)")
+
+
+@app.post("/api/models/huggingface/integrity/{repo_id:path}", dependencies=secure)
+async def start_hf_integrity(repo_id: str, background: BackgroundTasks) -> dict[str, str]:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo_id):
+        raise HTTPException(status_code=400, detail="Repositorio inválido")
+    job_id = db.create_job("huggingface.integrity", repo_id)
+    background.add_task(verify_hf_integrity, job_id, repo_id)
+    return {"job_id": job_id}
+
+
+class OllamaPullRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:/-]+$")
+
+
+_job_cancel_events: dict[str, asyncio.Event] = {}
+
+
+async def pull_ollama(job_id: str, name: str) -> None:
+    db.update_job(job_id, "running", 0, "Conectando con Ollama")
+    cancel_event = _job_cancel_events.setdefault(job_id, asyncio.Event())
+    try:
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream(
+                "POST",
+                f"{settings.ollama_url.rstrip('/')}/api/pull",
+                json={"name": name, "stream": True},
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if cancel_event.is_set() or db.job_cancel_requested(job_id):
+                        db.update_job(job_id, "cancelled", 0, "Descarga cancelada")
+                        db.audit("ollama.pull.cancel", name, True)
+                        return
+                    if not line:
+                        continue
+                    event = json.loads(line)
+                    total = int(event.get("total") or 0)
+                    completed = int(event.get("completed") or 0)
+                    if total:
+                        ensure_model_download_size(total, name)
+                    progress = (completed / total * 100) if total else 0
+                    db.update_job(job_id, "running", progress, event.get("status", "Descargando"))
+        db.update_job(job_id, "completed", 100, "Modelo listo")
+        db.audit("ollama.pull", name, True)
+        enqueue_automatic_benchmark(f"ollama:{name}", "ollama.pull")
+    except Exception as exc:
+        message = exc.detail if isinstance(exc, ModelDownloadValidationError) else f"{type(exc).__name__}: operación no completada"
+        db.update_job(job_id, "failed", 0, message)
+        db.audit("ollama.pull", name, False, message)
+    finally:
+        _job_cancel_events.pop(job_id, None)
+
+
+@app.post("/api/models/ollama/pull", dependencies=secure)
+async def start_ollama_pull(payload: OllamaPullRequest, background: BackgroundTasks) -> dict[str, str]:
+    ensure_benchmark_inference_available()
+    job_id = db.create_job("ollama.pull", payload.name)
+    background.add_task(pull_ollama, job_id, payload.name)
+    return {"job_id": job_id}
+
+
+@app.post("/api/models/ollama/update", dependencies=secure)
+async def update_ollama_model(payload: OllamaPullRequest, background: BackgroundTasks) -> dict[str, str]:
+    ensure_benchmark_inference_available()
+    job_id = db.create_job("ollama.update", payload.name)
+    background.add_task(pull_ollama, job_id, payload.name)
+    return {"job_id": job_id}
+
+
+class OllamaMemoryRequest(OllamaPullRequest):
+    keep_alive: str = Field(default="10m", pattern=r"^(?:0|[1-9][0-9]*[smh])$", max_length=20)
+
+
+@app.post("/api/models/ollama/load", dependencies=secure)
+async def load_ollama_model(payload: OllamaMemoryRequest) -> dict[str, bool]:
+    await ollama_payload(
+        "/api/generate",
+        "POST",
+        {
+            "model": payload.name,
+            "prompt": "",
+            "stream": False,
+            "keep_alive": payload.keep_alive,
+        },
+        timeout=600,
+    )
+    db.audit("ollama.load", payload.name, True, f"keep_alive={payload.keep_alive}")
+    return {"loaded": True}
+
+
+@app.post("/api/models/ollama/unload", dependencies=secure)
+async def unload_ollama_model(payload: OllamaPullRequest) -> dict[str, bool]:
+    await ollama_payload(
+        "/api/generate",
+        "POST",
+        {"model": payload.name, "prompt": "", "stream": False, "keep_alive": 0},
+        timeout=60,
+    )
+    db.audit("ollama.unload", payload.name, True)
+    return {"unloaded": True}
+
+
+@app.delete("/api/models/ollama/{name:path}", dependencies=secure)
+async def delete_ollama_model(name: str, confirm: str = Query()) -> dict[str, bool]:
+    if confirm != name:
+        raise HTTPException(status_code=400, detail="La confirmación no coincide")
+    owner = loaded_model_owner(f"ollama:{name.casefold()}")
+    if owner:
+        raise HTTPException(status_code=409, detail=f"Detén antes el perfil {owner}, que tiene cargado este modelo")
+    assistant_reference = await resolved_assistant_reference()
+    if assistant_reference and assistant_reference.casefold() == name.casefold():
+        raise HTTPException(
+            status_code=409,
+            detail="No se puede borrar el modelo que está usando el chatbot",
+        )
+    await ollama_payload("/api/delete", "DELETE", {"name": name})
+    save_persistent_models([
+        item for item in persistent_models()
+        if model_identity(item) != f"ollama:{name.casefold()}"
+    ])
+    db.audit("ollama.delete", name, True)
+    return {"deleted": True}
+
+
+class HfDownloadRequest(BaseModel):
+    repo_id: str = Field(pattern=r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", max_length=200)
+    revision: str = Field(default="main", pattern=r"^[A-Za-z0-9._/-]+$", max_length=120)
+
+
+async def download_hf(job_id: str, repo_id: str, revision: str, total_bytes: int = 0) -> None:
+    db.update_job(job_id, "running", 0, "Descargando desde Hugging Face")
+    stop = asyncio.Event()
+    monitor = asyncio.create_task(track_hf_download_progress(job_id, repo_id, total_bytes, stop))
+    try:
+        await asyncio.to_thread(
+            snapshot_download,
+            repo_id=repo_id,
+            revision=revision,
+            cache_dir=str(huggingface_cache_dir()),
+            token=huggingface_token(),
+            max_workers=huggingface_download_workers(),
+        )
+        await stop_hf_progress(stop, monitor)
+        db.update_job(job_id, "running", 99, "Descarga completa · registrando el modelo")
+        await asyncio.to_thread(refresh_hf_model_description, repo_id, revision)
+        db.update_job(job_id, "completed", 100, "Modelo almacenado en caché")
+        db.audit("huggingface.download", repo_id, True)
+    except Exception as exc:
+        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: operación no completada")
+        db.audit("huggingface.download", repo_id, False, type(exc).__name__)
+    finally:
+        await stop_hf_progress(stop, monitor)
+
+
+@app.post("/api/models/huggingface/download", dependencies=secure)
+async def start_hf_download(payload: HfDownloadRequest, background: BackgroundTasks) -> dict[str, str | bool]:
+    ensure_benchmark_inference_available()
+    if existing_job_id := active_hf_download_job(payload.repo_id):
+        return {"job_id": existing_job_id, "deduplicated": True}
+    try:
+        resolved_revision, total_bytes = await validate_hf_download(
+            payload.repo_id,
+            payload.revision,
+            None,
+        )
+    except ModelDownloadValidationError as exc:
+        db.audit("huggingface.download.rejected", payload.repo_id, False, exc.detail)
+        raise download_validation_http_error(exc) from exc
+    if existing_job_id := active_hf_download_job(payload.repo_id):
+        return {"job_id": existing_job_id, "deduplicated": True}
+    job_id = db.create_job("huggingface.download", payload.repo_id)
+    background.add_task(download_hf, job_id, payload.repo_id, resolved_revision, total_bytes)
+    return {"job_id": job_id, "deduplicated": False}
+
+
+@app.delete("/api/models/huggingface/{repo_id:path}", dependencies=secure)
+async def delete_hf_model(repo_id: str, confirm: str = Query()) -> dict[str, bool]:
+    if confirm != repo_id or not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo_id):
+        raise HTTPException(status_code=400, detail="Confirmación o identificador inválido")
+    owner = loaded_model_owner(f"huggingface:{repo_id.casefold()}")
+    if owner:
+        raise HTTPException(status_code=409, detail=f"Detén antes el perfil {owner}, que tiene cargado este modelo")
+    assistant_reference = await resolved_assistant_reference()
+    if assistant_reference and assistant_reference.startswith("profile:"):
+        assistant_profile = assistant_profile_model(assistant_reference)
+        if (
+            assistant_profile
+            and str(assistant_profile.get("model_repo") or "").casefold() == repo_id.casefold()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="No se puede borrar el modelo que está usando el chatbot",
+            )
+    repo_key = repo_id.casefold()
+    users = [
+        profile["name"]
+        for profile in running_profiles()
+        for model in running_profile_models(profile)
+        if repo_key in {str(model.get("model_repo") or "").casefold(), str(model.get("mmproj_repo") or "").casefold()}
+    ]
+    if users:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Detén antes el perfil que lo tiene cargado: {', '.join(dict.fromkeys(users))}",
+        )
+    if db.rows(
+        "SELECT id FROM jobs WHERE target=? AND status IN ('queued','running','cancelling') LIMIT 1",
+        (repo_id,),
+    ):
+        raise HTTPException(status_code=409, detail="Hay una descarga o verificación en curso de este modelo")
+    base = huggingface_cache_dir().resolve()
+    target = (base / f"models--{repo_id.replace('/', '--')}").resolve()
+    if base not in target.parents or not target.exists():
+        raise HTTPException(status_code=404, detail="Modelo no encontrado")
+    await asyncio.to_thread(shutil.rmtree, target)
+    save_persistent_models([
+        item for item in persistent_models()
+        if model_identity(item) != f"huggingface:{repo_id.casefold()}"
+    ])
+    db.audit("huggingface.delete", repo_id, True)
+    return {"deleted": True}
+
+
+class ModelPayload(BaseModel):
+    engine: Literal[
+        "llama.cpp", "ollama", "vllm", "sglang", "tensorrt-llm",
+        "openai-compatible", "comfyui", "diffusers", "whisper", "riva", "nvidia-nim",
+    ]
+    model_ref: str = Field(min_length=1, max_length=300)
+    model_file: str = Field(default="", max_length=1000)
+    model_repo: str = Field(default="", max_length=300)
+    model_filename: str = Field(default="", max_length=1000)
+    model_files: list[str] = Field(default_factory=list, max_length=32)
+    mmproj_file: str = Field(default="", max_length=1000)
+    mmproj_repo: str = Field(default="", max_length=300)
+    mmproj_filename: str = Field(default="", max_length=1000)
+    model_alias: str = Field(default="", max_length=200)
+    port: int = Field(default=8080, ge=1024, le=65535)
+    context_size: int = Field(default=8192, ge=512, le=1_048_576)
+    gpu_layers: int = Field(default=-1, ge=-1, le=999)
+    threads: int = Field(default=1, ge=1, le=512)
+    parallel: int = Field(default=1, ge=1, le=8)
+    batch_size: int = Field(default=512, ge=1, le=8192)
+    ubatch_size: int = Field(default=256, ge=1, le=8192)
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    top_p: float = Field(default=0.95, ge=0.01, le=1)
+    top_k: int = Field(default=0, ge=0, le=100)
+    min_p: float = Field(default=0, ge=0, le=1)
+    repeat_penalty: float = Field(default=0, ge=0, le=2)
+    presence_penalty: float = Field(default=0, ge=0, le=2)
+    flash_attention: bool = True
+    cache_type_k: Literal["", "f16", "q8_0", "q4_0"] = ""
+    cache_type_v: Literal["", "f16", "q8_0", "q4_0"] = ""
+    reasoning_off: bool = True
+    reasoning_effort: Literal["", "low", "medium", "high"] = ""
+    kv_unified_per_slot: bool = True
+    jinja: bool = True
+    min_free_memory_mb: int = Field(default=0, ge=0, le=1_048_576)
+    source: str = Field(default="", max_length=300)
+    runtime_requirement: str = Field(default="", max_length=300)
+    task: Literal[
+        "chat", "vision", "embeddings", "image-generation", "asr", "tts",
+        "video-generation", "reranking",
+    ] = "chat"
+    input_modalities: list[Literal["text", "image", "audio", "video"]] = Field(
+        default_factory=lambda: ["text"], min_length=1, max_length=4
+    )
+    output_modalities: list[Literal["text", "image", "audio", "video", "embedding", "scores"]] = Field(
+        default_factory=lambda: ["text"], min_length=1, max_length=4
+    )
+    runtime_backend: Literal["native", "external", "compose"] = "native"
+    endpoint_url: str = Field(default="", max_length=500)
+    api_protocol: Literal[
+        "openai", "ollama", "comfyui", "tts-lab", "voice-agent", "ragkit",
+        "security-app",
+    ] = "openai"
+    estimated_memory_mb: int = Field(default=0, ge=0, le=1_048_576)
+    max_input_mb: int = Field(default=32, ge=1, le=1024)
+    timeout_seconds: int = Field(default=600, ge=10, le=86_400)
+    enabled: bool = True
+
+
+class AdditionalModelPayload(ModelPayload):
+    id: str = Field(default="", max_length=80, pattern=r"^[A-Za-z0-9._-]*$")
+    name: str = Field(min_length=2, max_length=80, pattern=r"^[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+$")
+
+
+class ProfilePayload(ModelPayload):
+    name: str = Field(min_length=2, max_length=80, pattern=r"^[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+$")
+    additional_models: list[AdditionalModelPayload] = Field(default_factory=list, max_length=12)
+    memory_reserve_mb: int = Field(default=4096, ge=1024, le=131_072)
+    auto_fit_context: bool = True
+    minimum_context_size: int = Field(default=8192, ge=512, le=1_048_576)
+    app: str = Field(default="", max_length=64, pattern=rf"^({PROFILE_APP_NAME})?$")
+
+
+class ProfileFavoritePayload(BaseModel):
+    favorite: bool
+
+
+def validate_model(payload: ModelPayload) -> None:
+    if payload.engine == "llama.cpp":
+        has_local = payload.model_file.lower().endswith(".gguf")
+        has_hf = bool(payload.model_repo and payload.model_filename)
+        if not has_local and not has_hf:
+            raise HTTPException(status_code=400, detail="llama.cpp requiere un GGUF local o repositorio y archivo Hugging Face")
+        if payload.model_repo and not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", payload.model_repo):
+            raise HTTPException(status_code=400, detail="Repositorio Hugging Face inválido")
+        filenames = payload.model_files or ([payload.model_filename] if payload.model_filename else [])
+        if any(
+            not filename.lower().endswith(".gguf")
+            or filename.startswith("/")
+            or ".." in Path(filename).parts
+            for filename in filenames
+        ):
+            raise HTTPException(status_code=400, detail="Lista de archivos GGUF inválida")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", payload.model_alias or payload.model_ref):
+            raise HTTPException(status_code=400, detail="Alias de modelo inválido")
+        if payload.task == "vision":
+            has_mmproj_local = payload.mmproj_file.lower().endswith(".gguf")
+            has_mmproj_hf = bool(
+                (payload.mmproj_repo or payload.model_repo) and payload.mmproj_filename
+            )
+            if not has_mmproj_local and not has_mmproj_hf:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Visión con llama.cpp requiere un proyector multimodal GGUF",
+                )
+            if payload.mmproj_repo and not re.fullmatch(
+                r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", payload.mmproj_repo
+            ):
+                raise HTTPException(status_code=400, detail="Repositorio mmproj inválido")
+            if payload.mmproj_filename and (
+                not payload.mmproj_filename.lower().endswith(".gguf")
+                or payload.mmproj_filename.startswith("/")
+                or ".." in Path(payload.mmproj_filename).parts
+            ):
+                raise HTTPException(status_code=400, detail="Archivo mmproj inválido")
+    if payload.engine == "ollama" and "/" in payload.model_ref:
+        raise HTTPException(status_code=400, detail="El nombre de Ollama no puede contener rutas")
+    if payload.runtime_backend == "native" and payload.engine not in {"llama.cpp", "ollama"}:
+        raise HTTPException(status_code=400, detail="Este motor requiere runtime externo o Compose")
+    if payload.runtime_backend == "compose":
+        raise HTTPException(
+            status_code=400,
+            detail="El runtime Compose aún no está habilitado; usa un endpoint externo local",
+        )
+    if payload.engine not in {"llama.cpp", "ollama"}:
+        parsed = urlparse(payload.endpoint_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="El endpoint del motor debe ser una URL local sin credenciales",
+            )
+    if payload.api_protocol == "tts-lab":
+        if payload.task != "tts" or payload.engine != "openai-compatible":
+            raise HTTPException(
+                status_code=400,
+                detail="El protocolo tts-lab requiere motor openai-compatible y tarea TTS",
+            )
+        if not re.fullmatch(r"/api/projects/[A-Za-z0-9_-]+", parsed.path.rstrip("/")):
+            raise HTTPException(
+                status_code=400,
+                detail="El endpoint tts-lab debe identificar un proyecto local",
+            )
+    if payload.api_protocol in {"voice-agent", "ragkit", "security-app"} and payload.engine in {"llama.cpp", "ollama"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Este protocolo requiere un runtime externo local",
+        )
+    expected = {
+        "chat": ({"text"}, {"text"}),
+        "vision": ({"image"}, {"text"}),
+        "embeddings": ({"text"}, {"embedding"}),
+        "image-generation": ({"text"}, {"image"}),
+        "asr": ({"audio"}, {"text"}),
+        "tts": ({"text"}, {"audio"}),
+        "video-generation": ({"text"}, {"video"}),
+        "reranking": ({"text"}, {"scores"}),
+    }
+    required_input, required_output = expected[payload.task]
+    if not required_input.issubset(payload.input_modalities) or not required_output.issubset(payload.output_modalities):
+        raise HTTPException(status_code=400, detail="Las modalidades no coinciden con la tarea seleccionada")
+    if payload.engine == "llama.cpp" and payload.task not in {"chat", "vision", "embeddings"}:
+        raise HTTPException(status_code=400, detail="llama.cpp no admite esta tarea en MyDGX")
+    if payload.engine == "ollama" and payload.task not in {"chat", "vision", "embeddings"}:
+        raise HTTPException(status_code=400, detail="Ollama no admite esta tarea en MyDGX")
+
+
+def validate_profile(payload: ProfilePayload) -> None:
+    validate_model(payload)
+    ports = [payload.port]
+    aliases = [payload.model_alias or payload.model_ref]
+    for model in payload.additional_models:
+        validate_model(model)
+        if model.enabled:
+            ports.append(model.port)
+            aliases.append(model.model_alias or model.model_ref)
+    if len(ports) != len(set(ports)):
+        raise HTTPException(status_code=400, detail="Cada modelo habilitado del perfil necesita un puerto distinto")
+    gateway = gateway_runtime_config()
+    reserved_gateway_ports = {int(gateway["port"]), settings.gateway_litellm_port}
+    if gateway["enabled"] and reserved_gateway_ports.intersection(ports):
+        raise HTTPException(status_code=400, detail="Un modelo no puede usar un puerto del gateway")
+    app_ports = {config["port"]: name for name, config in profile_app_web_configs().items()}
+    taken = next((port for port in ports if port in app_ports), None)
+    if taken is not None:
+        raise HTTPException(status_code=400, detail=f"El puerto {taken} lo usa la app web {app_ports[taken]}")
+    normalized_aliases = [alias.casefold() for alias in aliases]
+    if len(normalized_aliases) != len(set(normalized_aliases)):
+        raise HTTPException(status_code=400, detail="Cada modelo habilitado necesita un alias OpenAI distinto")
+    if payload.minimum_context_size > payload.context_size:
+        raise HTTPException(status_code=400, detail="El contexto mínimo no puede superar al contexto configurado")
+    if payload.app and profile_app_dir(payload.app) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"La app {payload.app} no está en {profile_apps_root()} o no tiene un start.sh propio y no escribible por otros",
+        )
+
+
+def profile_values(profile_id: str, payload: ProfilePayload, now: str) -> tuple[Any, ...]:
+    return (
+        profile_id, payload.name, payload.engine, payload.model_ref, payload.model_file,
+        payload.model_repo, payload.model_filename, json.dumps(payload.model_files),
+        payload.mmproj_file, payload.mmproj_repo, payload.mmproj_filename,
+        payload.model_alias or payload.model_ref, payload.port, payload.context_size,
+        payload.gpu_layers, payload.threads, payload.parallel, payload.batch_size,
+        payload.ubatch_size, payload.temperature, payload.top_p, payload.top_k,
+        payload.min_p, payload.repeat_penalty, payload.presence_penalty,
+        int(payload.flash_attention), payload.cache_type_k, payload.cache_type_v,
+        int(payload.reasoning_off), payload.reasoning_effort,
+        int(payload.kv_unified_per_slot), int(payload.jinja), payload.min_free_memory_mb,
+        payload.source, payload.runtime_requirement,
+        payload.task, json.dumps(payload.input_modalities), json.dumps(payload.output_modalities),
+        payload.runtime_backend, payload.endpoint_url.rstrip("/"), payload.api_protocol,
+        payload.estimated_memory_mb, payload.max_input_mb, payload.timeout_seconds,
+        serialize_additional_models(payload.additional_models),
+        payload.memory_reserve_mb, int(payload.auto_fit_context), payload.minimum_context_size,
+        0, now, now,
+    )
+
+
+PROFILE_INSERT_SQL = """
+    INSERT INTO profiles(
+        id,name,engine,model_ref,model_file,model_repo,model_filename,model_files_json,
+        mmproj_file,mmproj_repo,mmproj_filename,model_alias,port,context_size,
+        gpu_layers,threads,parallel,batch_size,ubatch_size,
+        temperature,top_p,top_k,min_p,repeat_penalty,presence_penalty,flash_attention,
+        cache_type_k,cache_type_v,reasoning_off,reasoning_effort,kv_unified_per_slot,
+        jinja,min_free_memory_mb,source,runtime_requirement,task,input_modalities_json,
+        output_modalities_json,runtime_backend,endpoint_url,api_protocol,
+        estimated_memory_mb,max_input_mb,timeout_seconds,additional_models_json,
+        memory_reserve_mb,auto_fit_context,minimum_context_size,active,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+"""
+PROFILE_INSERT_COLUMNS = [
+    column.strip() for column in PROFILE_INSERT_SQL.split("(", 1)[1].split(")", 1)[0].split(",")
+]
+MANAGED_MODEL_NAME_INVALID = re.compile(r"[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+")
+
+
+def managed_profile_payload(profile_id: str, models: list[dict[str, Any]]) -> ProfilePayload:
+    entries: list[AdditionalModelPayload] = []
+    for model in models:
+        values = {key: model[key] for key in AdditionalModelPayload.model_fields if key in model}
+        values["threads"] = max(1, int(values.get("threads") or 1))
+        values["id"] = f"m-{hashlib.sha256(model_identity(model).encode()).hexdigest()[:12]}"
+        name = MANAGED_MODEL_NAME_INVALID.sub(" ", str(model.get("model_ref") or "")).strip()[:80]
+        values["name"] = name if len(name) >= 2 else "Modelo"
+        entries.append(AdditionalModelPayload.model_validate(values))
+    primary = entries[0].model_dump(exclude={"id", "name"})
+    return ProfilePayload.model_validate({
+        **primary,
+        "name": MANAGED_PROFILES[profile_id]["name"],
+        "additional_models": entries[1:],
+        "minimum_context_size": min(8192, int(primary["context_size"])),
+    })
+
+
+def sync_managed_profile(profile_id: str) -> None:
+    """Rebuild the read-only Default or Quick row from its model list; no models means no profile."""
+    models = managed_models(profile_id)
+    payload = managed_profile_payload(profile_id, models) if models else None
+    if payload:
+        validate_profile(payload)
+    with db.connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("DELETE FROM profiles WHERE id=?", (profile_id,))
+        if payload:
+            connection.execute(PROFILE_INSERT_SQL, profile_values(profile_id, payload, utc_now()))
+        connection.commit()
+
+
+def ensure_profile_editable(profile_id: str) -> None:
+    if profile_id in MANAGED_PROFILES:
+        raise HTTPException(
+            status_code=403,
+            detail=f"El perfil {MANAGED_PROFILES[profile_id]['name']} es de solo lectura; se gestiona desde Modelos",
+        )
+
+
+def seed_default_profiles() -> None:
+    catalog_path = ROOT / "config" / "default-profiles.json"
+    if not catalog_path.is_file():
+        return
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    if catalog.get("version") != 1 or not isinstance(catalog.get("profiles"), list):
+        raise RuntimeError("El catálogo de perfiles predeterminados no es válido")
+    now = utc_now()
+    statement = PROFILE_INSERT_SQL.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
+    existing = {str(row["id"]) for row in db.rows("SELECT id FROM profiles")}
+    with db.connect() as connection:
+        for value in catalog["profiles"]:
+            if not isinstance(value, dict):
+                raise RuntimeError("El catálogo contiene un perfil no válido")
+            profile_id = str(value.get("id") or "")
+            if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}", profile_id):
+                raise RuntimeError("El catálogo contiene un identificador de perfil no válido")
+            if profile_id in existing:
+                continue
+            payload = ProfilePayload.model_validate({
+                key: item for key, item in value.items() if key != "id"
+            })
+            try:
+                validate_profile(payload)
+            except HTTPException as exc:
+                db.log("warning", "profile", "profile.seed.skipped", f"{profile_id}: {exc.detail}", entity_type="profile", entity_id=profile_id)
+                continue
+            connection.execute(statement, profile_values(profile_id, payload, now))
+        connection.commit()
+
+
+@app.get("/api/profiles", dependencies=secure)
+async def profiles() -> dict[str, Any]:
+    profile_rows = db.rows(
+        "SELECT * FROM profiles ORDER BY favorite DESC, active DESC, name COLLATE NOCASE"
+    )
+    try:
+        ollama_installed = {
+            str(item.get("name") or "")
+            for item in (await ollama_payload("/api/tags")).get("models", [])
+        }
+    except HTTPException:
+        ollama_installed = set()
+    loaded_profiles = running_profiles()
+    for profile in profile_rows:
+        models = profile_models(profile)
+        plan = profile_memory_plan(profile)
+        try:
+            profile["model_files"] = json.loads(profile.pop("model_files_json") or "[]")
+        except json.JSONDecodeError:
+            profile["model_files"] = []
+        try:
+            profile["additional_models"] = json.loads(profile.pop("additional_models_json") or "[]")
+        except json.JSONDecodeError:
+            profile["additional_models"] = []
+        for key, fallback in (
+            ("input_modalities", ["text"]),
+            ("output_modalities", ["text"]),
+        ):
+            try:
+                profile[key] = json.loads(profile.pop(f"{key}_json") or "[]") or fallback
+            except json.JSONDecodeError:
+                profile[key] = fallback
+        for model in models:
+            model["downloaded"] = (
+                model["model_ref"] in ollama_installed
+                if model["engine"] == "ollama"
+                else profile_model_is_downloaded(model)
+            )
+            model.pop("additional_models_json", None)
+            model.pop("model_files_json", None)
+        profile["downloaded"] = all(model["downloaded"] for model in models if model.get("enabled", True))
+        profile["models"] = models
+        profile["read_only"] = profile["id"] in MANAGED_PROFILES
+        profile["model_labels"] = profile_model_labels(profile)
+        profile["memory_plan"] = plan
+        profile["runtime_plan"] = profiles_runtime_plan([
+            *[
+                running
+                for running in loaded_profiles
+                if running["id"] != profile["id"]
+            ],
+            profile,
+        ])
+        profile["runs"] = db.rows(
+            "SELECT * FROM profile_model_runs WHERE profile_id=? ORDER BY model_name",
+            (profile["id"],),
+        )
+    return {
+        "profiles": profile_rows,
+        "runtime": profile_runtime_status(),
+        "autostart_enabled": settings.enable_profile_autostart,
+        "llama_cpp_available": bool(llama_binary()),
+        "apps": profile_apps_overview(),
+    }
+
+
+@app.post("/api/profiles", dependencies=secure)
+async def create_profile(payload: ProfilePayload) -> dict[str, str]:
+    validate_profile(payload)
+    profile_id = str(uuid.uuid4())
+    now = utc_now()
+    try:
+        db.execute(
+            """
+            INSERT INTO profiles(
+                id,name,engine,model_ref,model_file,model_repo,model_filename,model_files_json,
+                mmproj_file,mmproj_repo,mmproj_filename,model_alias,port,context_size,
+                gpu_layers,threads,parallel,batch_size,ubatch_size,
+                temperature,top_p,top_k,min_p,repeat_penalty,presence_penalty,flash_attention,
+                cache_type_k,cache_type_v,reasoning_off,reasoning_effort,kv_unified_per_slot,
+                jinja,min_free_memory_mb,source,runtime_requirement,task,input_modalities_json,
+                output_modalities_json,runtime_backend,endpoint_url,api_protocol,
+                estimated_memory_mb,max_input_mb,timeout_seconds,additional_models_json,
+                memory_reserve_mb,auto_fit_context,minimum_context_size,active,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            profile_values(profile_id, payload, now),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Ya existe un perfil con ese nombre") from exc
+    db.execute("UPDATE profiles SET app=? WHERE id=?", (payload.app, profile_id))
+    db.audit("profile.create", payload.name, True)
+    return {"id": profile_id}
+
+
+@app.put("/api/profiles/{profile_id}", dependencies=secure)
+async def update_profile(profile_id: str, payload: ProfilePayload) -> dict[str, bool]:
+    ensure_profile_editable(profile_id)
+    validate_profile(payload)
+    existing = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    try:
+        db.execute(
+            """
+            UPDATE profiles SET
+                name=?,engine=?,model_ref=?,model_file=?,model_repo=?,model_filename=?,
+                model_files_json=?,mmproj_file=?,mmproj_repo=?,mmproj_filename=?,
+                model_alias=?,port=?,context_size=?,gpu_layers=?,threads=?,
+                parallel=?,batch_size=?,ubatch_size=?,temperature=?,top_p=?,top_k=?,min_p=?,
+                repeat_penalty=?,presence_penalty=?,flash_attention=?,cache_type_k=?,cache_type_v=?,
+                reasoning_off=?,reasoning_effort=?,kv_unified_per_slot=?,jinja=?,
+                min_free_memory_mb=?,source=?,runtime_requirement=?,task=?,
+                input_modalities_json=?,output_modalities_json=?,runtime_backend=?,endpoint_url=?,
+                api_protocol=?,estimated_memory_mb=?,max_input_mb=?,timeout_seconds=?,
+                additional_models_json=?,
+                memory_reserve_mb=?,auto_fit_context=?,minimum_context_size=?,app=?,updated_at=?
+            WHERE id=?
+            """,
+            (
+                payload.name, payload.engine, payload.model_ref, payload.model_file,
+                payload.model_repo, payload.model_filename, json.dumps(payload.model_files),
+                payload.mmproj_file, payload.mmproj_repo, payload.mmproj_filename,
+                payload.model_alias or payload.model_ref, payload.port, payload.context_size,
+                payload.gpu_layers, payload.threads, payload.parallel, payload.batch_size,
+                payload.ubatch_size, payload.temperature, payload.top_p, payload.top_k,
+                payload.min_p, payload.repeat_penalty, payload.presence_penalty,
+                int(payload.flash_attention), payload.cache_type_k, payload.cache_type_v,
+                int(payload.reasoning_off), payload.reasoning_effort,
+                int(payload.kv_unified_per_slot), int(payload.jinja),
+                payload.min_free_memory_mb, payload.source, payload.runtime_requirement,
+                payload.task, json.dumps(payload.input_modalities),
+                json.dumps(payload.output_modalities), payload.runtime_backend,
+                payload.endpoint_url.rstrip("/"), payload.api_protocol,
+                payload.estimated_memory_mb, payload.max_input_mb, payload.timeout_seconds,
+                serialize_additional_models(payload.additional_models),
+                payload.memory_reserve_mb, int(payload.auto_fit_context),
+                payload.minimum_context_size, payload.app, utc_now(), profile_id,
+            ),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Ya existe un perfil con ese nombre") from exc
+    db.audit("profile.update", payload.name, True)
+    return {"updated": True}
+
+
+@app.patch("/api/profiles/{profile_id}/favorite", dependencies=secure)
+async def set_profile_favorite(
+    profile_id: str,
+    payload: ProfileFavoritePayload,
+) -> dict[str, bool]:
+    rows = db.rows("SELECT name FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    db.execute(
+        "UPDATE profiles SET favorite=?,updated_at=? WHERE id=?",
+        (int(payload.favorite), utc_now(), profile_id),
+    )
+    db.audit("profile.favorite", rows[0]["name"], True, str(payload.favorite).lower())
+    return {"favorite": payload.favorite}
+
+
+class ProfileStartCancelled(RuntimeError):
+    pass
+
+
+def profile_model_download_files(model: dict[str, Any]) -> list[str]:
+    files = model.get("model_files") or []
+    if not files:
+        try:
+            files = json.loads(model.get("model_files_json") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            files = []
+    if not files and model.get("model_filename"):
+        files = [model["model_filename"]]
+    return [str(filename) for filename in files if filename]
+
+
+def ensure_profile_start_not_cancelled(job_id: str) -> None:
+    if db.job_cancel_requested(job_id):
+        raise ProfileStartCancelled("Preparación cancelada")
+
+
+async def download_hf_profile_file(
+    job_id: str,
+    repo: str,
+    filename: str,
+) -> str:
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        ensure_profile_start_not_cancelled(job_id)
+        try:
+            path = await asyncio.to_thread(
+                hf_hub_download,
+                repo_id=repo,
+                filename=filename,
+                cache_dir=str(huggingface_cache_dir()),
+                token=huggingface_token(),
+            )
+            resolved = Path(path)
+            if not resolved.is_file() or resolved.stat().st_size <= 0:
+                raise RuntimeError("el archivo descargado está vacío")
+            return str(resolved.resolve())
+        except ProfileStartCancelled:
+            raise
+        except Exception as exc:
+            last_error = exc
+            if attempt < 3:
+                await asyncio.sleep(attempt)
+    if isinstance(last_error, OSError) and last_error.errno == 28:
+        raise RuntimeError(f"Espacio insuficiente para descargar {filename}")
+    raise RuntimeError(
+        f"No se pudo preparar {filename} tras 3 intentos ({type(last_error).__name__})"
+    )
+
+
+def persist_profile_model_paths(
+    profile_id: str,
+    model: dict[str, Any],
+    model_file: str,
+    mmproj_file: str,
+) -> None:
+    model_id = str(model.get("id") or "primary")
+    if model_id == "primary":
+        db.execute(
+            "UPDATE profiles SET model_file=?,mmproj_file=?,updated_at=? WHERE id=?",
+            (model_file, mmproj_file or model.get("mmproj_file", ""), utc_now(), profile_id),
+        )
+        return
+    rows = db.rows("SELECT additional_models_json FROM profiles WHERE id=?", (profile_id,))
+    values = json.loads(rows[0]["additional_models_json"] or "[]") if rows else []
+    for value in values:
+        if value.get("id") == model_id:
+            value["model_file"] = model_file
+            if mmproj_file:
+                value["mmproj_file"] = mmproj_file
+            break
+    db.execute(
+        "UPDATE profiles SET additional_models_json=?,updated_at=? WHERE id=?",
+        (json.dumps(values), utc_now(), profile_id),
+    )
+
+
+async def ensure_hf_profile_model(
+    job_id: str,
+    profile_id: str,
+    model: dict[str, Any],
+    progress_start: float,
+    progress_end: float,
+) -> bool:
+    files = profile_model_download_files(model)
+    repo = str(model.get("model_repo") or "")
+    if profile_model_is_downloaded(model):
+        if not repo or not files:
+            return False
+        try:
+            cached_files = [
+                cached_hf_file(repo, filename)
+                for filename in files
+            ]
+            if all(Path(path).is_file() and Path(path).stat().st_size > 0 for path in cached_files):
+                mmproj = resolve_mmproj_file(model) if model.get("task") == "vision" else None
+                persist_profile_model_paths(
+                    profile_id,
+                    model,
+                    str(Path(cached_files[0]).resolve()),
+                    str(mmproj) if mmproj else "",
+                )
+                return False
+        except Exception:
+            pass
+    if not repo or not files:
+        raise RuntimeError(
+            f"{model['name']}: falta el repositorio o la lista de archivos Hugging Face"
+        )
+    mmproj_filename = (
+        str(model.get("mmproj_filename") or "")
+        if model.get("task") == "vision"
+        else ""
+    )
+    work = [(repo, filename) for filename in files]
+    if mmproj_filename:
+        work.append((str(model.get("mmproj_repo") or repo), mmproj_filename))
+    files_by_repo: dict[str, list[str]] = {}
+    for item_repo, filename in work:
+        files_by_repo.setdefault(item_repo, []).append(filename)
+    verified_size = 0
+    for item_repo, item_files in files_by_repo.items():
+        _, item_size = await validate_hf_download(item_repo, "main", item_files)
+        verified_size += item_size
+    ensure_model_download_size(verified_size, str(model.get("name") or repo))
+    downloaded: list[str] = []
+    workers = min(huggingface_download_workers(), len(work))
+    batch_label = {"text": f"{model['name']}: descargando"}
+    stop = asyncio.Event()
+    monitor = asyncio.create_task(track_hf_download_progress(
+        job_id, list(files_by_repo), verified_size, stop, lambda: batch_label["text"],
+        progress_start, progress_end,
+    ))
+    try:
+        for offset in range(0, len(work), workers):
+            ensure_profile_start_not_cancelled(job_id)
+            batch = work[offset:offset + workers]
+            batch_label["text"] = (
+                f"{model['name']}: descargando"
+                if len(work) == 1
+                else f"{model['name']}: archivos {offset + 1}-{offset + len(batch)}/{len(work)}"
+            )
+            if not verified_size:
+                db.update_job(
+                    job_id,
+                    "running",
+                    progress_start + (progress_end - progress_start) * offset / max(1, len(work)),
+                    (
+                        f"{model['name']}: descargando "
+                        f"{offset + 1}-{offset + len(batch)}/{len(work)} en paralelo"
+                    ),
+                )
+            downloaded.extend(await asyncio.gather(*[
+                download_hf_profile_file(job_id, item_repo, filename)
+                for item_repo, filename in batch
+            ]))
+    finally:
+        await stop_hf_progress(stop, monitor)
+    model_paths = downloaded[:len(files)]
+    if len(model_paths) != len(files) or any(not Path(path).is_file() for path in model_paths):
+        raise RuntimeError(f"{model['name']}: descarga GGUF incompleta")
+    mmproj_path = downloaded[-1] if mmproj_filename else ""
+    persist_profile_model_paths(profile_id, model, model_paths[0], mmproj_path)
+    return True
+
+
+async def ollama_model_names() -> set[str]:
+    payload = await ollama_payload("/api/tags", timeout=15)
+    return {
+        str(item.get("name") or "")
+        for item in payload.get("models", [])
+        if item.get("name")
+    }
+
+
+async def ensure_ollama_profile_model(
+    job_id: str,
+    model: dict[str, Any],
+    progress_start: float,
+    progress_end: float,
+) -> bool:
+    name = str(model.get("model_ref") or "")
+    if not name:
+        raise RuntimeError(f"{model['name']}: falta el nombre del modelo Ollama")
+    if name in await ollama_model_names():
+        return False
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        ensure_profile_start_not_cancelled(job_id)
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST",
+                    f"{settings.ollama_url.rstrip('/')}/api/pull",
+                    json={"name": name, "stream": True},
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        ensure_profile_start_not_cancelled(job_id)
+                        if not line:
+                            continue
+                        event = json.loads(line)
+                        total = int(event.get("total") or 0)
+                        completed = int(event.get("completed") or 0)
+                        if total:
+                            ensure_model_download_size(total, name)
+                        fraction = completed / total if total else 0
+                        db.update_job(
+                            job_id,
+                            "running",
+                            progress_start + (progress_end - progress_start) * fraction,
+                            f"{model['name']}: {event.get('status', 'descargando')}",
+                        )
+            if name in await ollama_model_names():
+                return True
+            raise RuntimeError("Ollama no confirmó el modelo después de descargarlo")
+        except ProfileStartCancelled:
+            raise
+        except ModelDownloadValidationError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            if attempt < 3:
+                await asyncio.sleep(attempt)
+    raise RuntimeError(
+        f"{model['name']}: Ollama no completó la descarga ({type(last_error).__name__})"
+    )
+
+
+async def prepare_profile_models(job_id: str, profile: dict[str, Any]) -> int:
+    models = [model for model in profile_models(profile) if model.get("enabled", True)]
+    downloaded = 0
+    for index, model in enumerate(models):
+        start = 5 + 70 * index / max(1, len(models))
+        end = 5 + 70 * (index + 1) / max(1, len(models))
+        engine = str(model.get("engine") or "")
+        if engine == "llama.cpp":
+            downloaded += int(
+                await ensure_hf_profile_model(job_id, profile["id"], model, start, end)
+            )
+        elif engine == "ollama":
+            downloaded += int(
+                await ensure_ollama_profile_model(job_id, model, start, end)
+            )
+        elif not model.get("endpoint_url"):
+            raise RuntimeError(
+                f"{model['name']}: el motor externo no tiene endpoint configurado"
+            )
+    return downloaded
+
+
+def set_active_profile(profile_id: str | None) -> None:
+    with db.connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("UPDATE profiles SET active=0,updated_at=? WHERE active=1", (utc_now(),))
+        if profile_id:
+            connection.execute(
+                "UPDATE profiles SET active=1,updated_at=? WHERE id=?",
+                (utc_now(), profile_id),
+            )
+        connection.commit()
+
+
+async def prepare_activate_and_start_profile(job_id: str, profile_id: str) -> None:
+    async with _profile_start_lock:
+        previous = active_profile()
+        activated = False
+        profile_rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+        if not profile_rows:
+            db.update_job(job_id, "failed", 0, "Perfil no encontrado")
+            return
+        profile = profile_rows[0]
+        try:
+            ensure_profile_start_not_cancelled(job_id)
+            current_profiles = [
+                current for current in running_profiles() if current["id"] != profile_id
+            ]
+            profile, initial_port_assignments = managed_profile_ports(
+                profile, current_profiles
+            )
+            plan = profiles_runtime_plan([*current_profiles, profile])
+            if not plan["fits"]:
+                raise RuntimeError(
+                    "La combinación de perfiles no cabe o contiene conflictos de alias o puertos"
+                )
+            db.update_job(job_id, "running", 5, "Comprobando modelos del perfil")
+            downloaded = await prepare_profile_models(job_id, profile)
+            ensure_profile_start_not_cancelled(job_id)
+            db.update_job(
+                job_id,
+                "running",
+                76,
+                "Modelos preparados; comprobando archivos, memoria y puertos",
+            )
+            refreshed = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))[0]
+            missing = [
+                model["name"]
+                for model in profile_models(refreshed)
+                if model.get("enabled", True)
+                and model["engine"] == "llama.cpp"
+                and not profile_model_is_downloaded(model)
+            ]
+            if missing:
+                raise RuntimeError(f"Descarga incompleta: {', '.join(missing)}")
+            current_profiles = [
+                current for current in running_profiles() if current["id"] != profile_id
+            ]
+            refreshed, port_assignments = managed_profile_ports(
+                refreshed, current_profiles
+            )
+            if port_assignments:
+                persist_managed_profile_ports(refreshed)
+                db.log(
+                    "info",
+                    "profile",
+                    "profile.ports.assigned",
+                    f"{len(port_assignments)} puerto(s) reasignado(s) automáticamente",
+                    entity_type="profile",
+                    entity_id=profile_id,
+                    job_id=job_id,
+                    detail={"assignments": port_assignments},
+                )
+            elif initial_port_assignments:
+                persist_managed_profile_ports(profile)
+                refreshed = profile
+            plan = profiles_runtime_plan([*current_profiles, refreshed])
+            if not plan["fits"]:
+                raise RuntimeError(
+                    "Tras descargar, la combinación supera la memoria segura o tiene conflictos"
+                )
+            enabled_count = sum(
+                1 for model in profile_models(refreshed) if model.get("enabled", True)
+            )
+            db.update_job(
+                job_id,
+                "running",
+                82,
+                f"Arrancando {enabled_count} modelo(s) y comprobando su estado",
+            )
+            if profile_id not in MANAGED_PROFILES:
+                set_active_profile(profile_id)
+                activated = True
+            runtime = await start_profile_process(refreshed, persist_desired=profile_id not in MANAGED_PROFILES)
+            reused = int(runtime.get("reused_models") or 0)
+            db.update_job(
+                job_id,
+                "running",
+                96,
+                (
+                    f"Modelos cargados; {reused} proceso(s) compatible(s) conservado(s)"
+                    if reused
+                    else "Modelos cargados; finalizando el perfil"
+                ),
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
+                (
+                    job_id,
+                    json.dumps({"runtime": runtime, "downloaded_models": downloaded}),
+                    utc_now(),
+                ),
+            )
+            db.update_job(
+                job_id,
+                "completed",
+                100,
+                (
+                    f"Perfil arrancado · {downloaded} descargado(s) · "
+                    f"{reused} conservado(s)"
+                ),
+            )
+            db.audit(
+                "profile.prepare_start",
+                profile["name"],
+                True,
+                f"{downloaded} descargas",
+            )
+            try:
+                queue_profile_benchmarks(refreshed)
+            except Exception as exc:
+                db.audit("benchmark.auto.queue", profile["name"], False, type(exc).__name__)
+        except ProfileStartCancelled:
+            db.update_job(job_id, "cancelled", 0, "Preparación cancelada; no se cambió el perfil")
+            db.audit("profile.prepare_start", profile["name"], False, "cancelled")
+        except Exception as exc:
+            rollback_error = ""
+            if activated:
+                previous_id = previous["id"] if previous else None
+                set_active_profile(previous_id)
+            message = f"{str(exc)[:700]}{rollback_error}"
+            db.update_job(job_id, "failed", 0, message)
+            db.audit("profile.prepare_start", profile["name"], False, type(exc).__name__)
+
+
+async def download_profile_models(job_id: str, profile: dict[str, Any]) -> None:
+    repo = profile.get("model_repo", "")
+    files = profile.get("model_files") or []
+    if not files:
+        try:
+            files = json.loads(profile.get("model_files_json") or "[]")
+        except json.JSONDecodeError:
+            files = []
+    if not files and profile.get("model_filename"):
+        files = [profile["model_filename"]]
+    if not repo or not files:
+        db.update_job(job_id, "failed", 0, "El perfil no contiene archivos Hugging Face")
+        return
+    downloaded: list[str] = []
+    try:
+        _, total_bytes = await validate_hf_download(repo, "main", files)
+    except ModelDownloadValidationError as exc:
+        db.update_job(job_id, "failed", 0, exc.detail)
+        db.audit("profile.download.rejected", repo, False, exc.detail)
+        return
+    file_label = {"text": "Descargando"}
+    stop = asyncio.Event()
+    monitor = asyncio.create_task(track_hf_download_progress(
+        job_id, repo, total_bytes, stop, lambda: file_label["text"],
+    ))
+    try:
+        for index, filename in enumerate(files):
+            file_label["text"] = f"Descargando {index + 1}/{len(files)}: {filename}"
+            if not total_bytes:
+                db.update_job(
+                    job_id,
+                    "running",
+                    index / len(files) * 100,
+                    f"Descargando {index + 1}/{len(files)}: {filename}",
+                )
+            path = await asyncio.to_thread(
+                hf_hub_download,
+                repo_id=repo,
+                filename=filename,
+                cache_dir=str(huggingface_cache_dir()),
+                token=huggingface_token(),
+            )
+            downloaded.append(path)
+        await stop_hf_progress(stop, monitor)
+        mmproj_path = ""
+        mmproj_filename = str(profile.get("mmproj_filename") or "")
+        if profile.get("task") == "vision" and mmproj_filename:
+            mmproj_path = await asyncio.to_thread(
+                hf_hub_download,
+                repo_id=str(profile.get("mmproj_repo") or repo),
+                filename=mmproj_filename,
+                cache_dir=str(huggingface_cache_dir()),
+                token=huggingface_token(),
+            )
+        profile_id = profile.get("_profile_id") or profile["id"]
+        if profile.get("_is_additional"):
+            rows = db.rows("SELECT additional_models_json FROM profiles WHERE id=?", (profile_id,))
+            values = json.loads(rows[0]["additional_models_json"] or "[]") if rows else []
+            for value in values:
+                if value.get("id") == profile["id"]:
+                    value["model_file"] = downloaded[0]
+                    if mmproj_path:
+                        value["mmproj_file"] = mmproj_path
+                    break
+            db.execute(
+                "UPDATE profiles SET additional_models_json=?,updated_at=? WHERE id=?",
+                (json.dumps(values), utc_now(), profile_id),
+            )
+        else:
+            db.execute(
+                "UPDATE profiles SET model_file=?,mmproj_file=?,updated_at=? WHERE id=?",
+                (downloaded[0], mmproj_path or profile.get("mmproj_file", ""), utc_now(), profile_id),
+            )
+        total = len(downloaded) + int(bool(mmproj_path))
+        db.update_job(job_id, "completed", 100, f"{total} archivo(s) GGUF preparados")
+        db.audit("profile.download", profile["name"], True, repo)
+    except Exception as exc:
+        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: descarga no completada")
+        db.audit("profile.download", profile["name"], False, type(exc).__name__)
+    finally:
+        await stop_hf_progress(stop, monitor)
+
+
+@app.post("/api/profiles/{profile_id}/download", dependencies=secure)
+async def download_profile(profile_id: str, background: BackgroundTasks) -> dict[str, str]:
+    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    profile = rows[0]
+    if profile["engine"] != "llama.cpp":
+        raise HTTPException(status_code=400, detail="La descarga por perfil solo aplica a llama.cpp")
+    job_id = db.create_job("profile.download", profile["name"])
+    background.add_task(download_profile_models, job_id, profile)
+    return {"job_id": job_id}
+
+
+@app.post("/api/profiles/{profile_id}/models/{model_id}/download", dependencies=secure)
+async def download_additional_profile_model(
+    profile_id: str,
+    model_id: str,
+    background: BackgroundTasks,
+) -> dict[str, str]:
+    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    model = next((item for item in profile_models(rows[0]) if item["id"] == model_id), None)
+    if not model:
+        raise HTTPException(status_code=404, detail="Modelo no encontrado")
+    if model["engine"] != "llama.cpp":
+        raise HTTPException(status_code=400, detail="La descarga solo aplica a llama.cpp")
+    model["_profile_id"] = profile_id
+    model["_is_additional"] = model_id != "primary"
+    job_id = db.create_job("profile.download", model["name"])
+    background.add_task(download_profile_models, job_id, model)
+    return {"job_id": job_id}
+
+
+@app.post("/api/profiles/{profile_id}/activate", dependencies=secure)
+async def activate_profile(profile_id: str) -> dict[str, bool]:
+    ensure_profile_editable(profile_id)
+    rows = db.rows("SELECT name FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    with db.connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("UPDATE profiles SET active=0, updated_at=? WHERE active=1", (utc_now(),))
+        connection.execute("UPDATE profiles SET active=1, updated_at=? WHERE id=?", (utc_now(), profile_id))
+        connection.commit()
+    db.audit("profile.activate", rows[0]["name"], True)
+    return {"active": True}
+
+
+@app.post("/api/profiles/{profile_id}/start", dependencies=secure)
+async def start_profile(profile_id: str, background: BackgroundTasks) -> dict[str, str]:
+    ensure_benchmark_inference_available()
+    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    job_id = str(uuid.uuid4())
+    now = utc_now()
+    with db.connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        pending = connection.execute(
+            """
+            SELECT id FROM jobs
+            WHERE kind='profile.prepare-start'
+                AND status IN ('queued','running','cancelling')
+            LIMIT 1
+            """
+        ).fetchone()
+        if not pending:
+            connection.execute(
+                """
+                INSERT INTO jobs(
+                    id,kind,target,status,progress,message,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (
+                    job_id, "profile.prepare-start", profile_id, "queued", 0,
+                    "En cola", now, now,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO job_events(job_id,status,progress,message,created_at) VALUES(?,?,?,?,?)",
+                (job_id, "queued", 0, "En cola para preparar el perfil", now),
+            )
+        connection.commit()
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail="Ya hay otro perfil preparándose o arrancando",
+        )
+    db.log(
+        "info",
+        "profile",
+        "profile.prepare_start.queued",
+        f"Preparación del perfil en cola: {rows[0]['name']}",
+        entity_type="profile",
+        entity_id=profile_id,
+        job_id=job_id,
+    )
+    background.add_task(prepare_activate_and_start_profile, job_id, profile_id)
+    return {"job_id": job_id}
+
+
+@app.get("/api/profiles/{profile_id}/runtime-plan", dependencies=secure)
+async def runtime_plan(profile_id: str) -> dict[str, Any]:
+    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    profiles = [
+        profile for profile in running_profiles() if profile["id"] != profile_id
+    ]
+    managed, assignments = managed_profile_ports(rows[0], profiles)
+    profiles.append(managed)
+    plan = profiles_runtime_plan(profiles)
+    plan["port_assignments"] = assignments
+    return plan
+
+
+def request_origin(request: Request) -> str:
+    """Which client asked for a stop, so an unexpected one can be traced; never the raw headers."""
+    agent = request.headers.get("user-agent", "")
+    if "MyDGXTray" in agent:
+        return "origen: bandeja macOS"
+    if "Mozilla" in agent:
+        return "origen: navegador"
+    return f"origen: {re.sub(r'[^A-Za-z0-9._/ -]', '', agent.split(' ', 1)[0])[:40] or 'desconocido'}"
+
+
+@app.post("/api/profiles/stop", dependencies=secure)
+async def stop_profile(request: Request) -> dict[str, bool]:
+    await stop_profile_process()
+    db.audit("profile.stop", "runtime", True, request_origin(request))
+    return {"stopped": True}
+
+
+@app.post("/api/profiles/{profile_id}/stop", dependencies=secure)
+async def stop_one_profile(profile_id: str, request: Request) -> dict[str, bool]:
+    if profile_id not in _runtime_profile_ids:
+        raise HTTPException(status_code=409, detail="El perfil no está cargado")
+    await stop_runtime_profile(profile_id)
+    db.audit("profile.stop", profile_id, True, request_origin(request))
+    return {"stopped": True}
+
+
+@app.post("/api/profile-apps/{name}/{action}", dependencies=secure)
+async def profile_app_action(name: str, action: Literal["start", "stop", "restart", "status"]) -> dict[str, Any]:
+    if profile_app_dir(name) is None:
+        raise HTTPException(status_code=404, detail=f"La app {name} no está disponible en {profile_apps_root()}")
+    async with _profile_app_locks.setdefault(name, asyncio.Lock()):
+        if action != "status":
+            set_profile_app_state(name, "stopping" if action == "stop" else "starting", f"start.sh {action} manual")
+        try:
+            code = await run_profile_app_action(name, action)
+        except RuntimeError as exc:
+            set_profile_app_state(name, "error", redact_log_text(str(exc), 500))
+            raise HTTPException(status_code=504, detail=redact_log_text(str(exc), 500)) from exc
+        if action == "status":
+            set_profile_app_state(name, "running" if code == 0 else "stopped")
+        elif code == 0:
+            set_profile_app_state(name, "stopped" if action == "stop" else "running")
+        else:
+            set_profile_app_state(name, "error", f"start.sh {action} terminó con código {code}: {profile_app_log_tail(name)}")
+    if action != "status":
+        db.audit(f"profile.app.{action}", name, code == 0)
+    return {"name": name, "action": action, "exit_code": code, **_profile_app_state[name]}
+
+
+class ProfileAppWebPayload(BaseModel):
+    alias: str = Field(default="", max_length=40)
+    port: int | None = Field(default=None, ge=1024, le=65535)
+
+
+@app.put("/api/profile-apps/{name}/web", dependencies=secure)
+async def update_profile_app_web(name: str, payload: ProfileAppWebPayload) -> dict[str, Any]:
+    if profile_app_dir(name) is None:
+        raise HTTPException(status_code=404, detail=f"La app {name} no está disponible en {profile_apps_root()}")
+    alias = payload.alias.strip() or name
+    configs = {key: {"alias": value["alias"], "port": value["port"]} for key, value in profile_app_web_configs().items()}
+    if payload.port is None:
+        configs.pop(name, None)
+    else:
+        if not PROFILE_APP_ALIAS.fullmatch(alias):
+            raise HTTPException(status_code=400, detail="El alias admite letras, números, espacios, punto, guion y guion bajo (máximo 40)")
+        if any(other != name and value["alias"].casefold() == alias.casefold() for other, value in configs.items()):
+            raise HTTPException(status_code=409, detail=f"El alias {alias} ya lo usa otra app")
+        conflict = profile_app_port_conflict(name, payload.port)
+        if conflict:
+            raise HTTPException(status_code=409, detail=f"No se puede usar ese puerto: {conflict}")
+        configs[name] = {"alias": alias, "port": payload.port}
+    db.execute(
+        """
+        INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+        """,
+        (PROFILE_APP_WEB_KEY, json.dumps(configs), utc_now()),
+    )
+    db.audit("profile.app.web", name, True)
+    running = _profile_app_state.get(name, {}).get("state") == "running"
+    return {"name": name, "web": profile_app_web_configs().get(name), "restart_required": running}
+
+
+@app.delete("/api/profiles/{profile_id}", dependencies=secure)
+async def delete_profile(profile_id: str, confirm: str = Query()) -> dict[str, bool]:
+    ensure_profile_editable(profile_id)
+    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    profile = rows[0]
+    if confirm != profile["name"]:
+        raise HTTPException(status_code=400, detail="La confirmación no coincide")
+    if profile_id in _runtime_profile_ids:
+        await stop_runtime_profile(profile_id)
+    remove_desired_profile_id(profile_id)
+    db.execute("DELETE FROM profiles WHERE id=?", (profile_id,))
+    db.audit("profile.delete", profile["name"], True)
+    return {"deleted": True}
+
+
+def hf_profile_recommendation(
+    repo_id: str,
+    task: HF_TASK = "any",
+    runtime: HF_RUNTIME = "any",
+) -> dict[str, Any]:
+    api_client = HfApi(token=huggingface_token())
+    info = api_client.model_info(repo_id, files_metadata=True)
+    files = []
+    for sibling in info.siblings or []:
+        filename = sibling.rfilename
+        if filename.lower().endswith(".gguf"):
+            files.append({"name": filename, "size": getattr(sibling, "size", None)})
+    preferred_patterns = ("Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0")
+    recommended_file = next(
+        (item["name"] for pattern in preferred_patterns for item in files if pattern.lower() in item["name"].lower()),
+        files[0]["name"] if files else None,
+    )
+    model_context: int | None = None
+    source = "valor seguro de MyDGX"
+    try:
+        config_path = hf_hub_download(
+            repo_id=repo_id,
+            filename="config.json",
+            cache_dir=str(huggingface_card_cache_dir()),
+            token=huggingface_token(),
+        )
+        config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        text_config = config.get("text_config") or {}
+        model_context = config.get("max_position_embeddings") or text_config.get("max_position_embeddings")
+        if model_context:
+            source = "config.json"
+    except Exception:
+        pass
+    card_context: int | None = None
+    try:
+        readme_path = hf_hub_download(
+            repo_id=repo_id,
+            filename="README.md",
+            cache_dir=str(huggingface_card_cache_dir()),
+            token=huggingface_token(),
+        )
+        readme = Path(readme_path).read_text(encoding="utf-8", errors="ignore")
+        matches = re.findall(r"(?:--ctx-size|-c)\s*[= ]\s*(\d{3,7})", readme, re.IGNORECASE)
+        if matches:
+            card_context = max(int(value) for value in matches)
+            source = "README.md"
+    except Exception:
+        pass
+    maximum = card_context or model_context
+    recommended_context = min(maximum, 32768) if maximum else 8192
+    tags = list(info.tags or [])
+    spark = hf_spark_recommendation(info, task, "any", runtime)
+    task_candidates = spark["tasks"]
+    profile_task = next(
+        (item for item in task_candidates if item in {
+            "vision", "embedding", "image-generation", "asr", "tts", "video-generation", "reranking",
+        }),
+        "chat",
+    )
+    if profile_task == "embedding":
+        profile_task = "embeddings"
+    engine_names = {
+        "llama.cpp": "llama.cpp",
+        "vLLM": "vllm",
+        "SGLang": "sglang",
+        "TensorRT-LLM": "tensorrt-llm",
+        "ComfyUI": "comfyui",
+        "Diffusers": "diffusers",
+        "Whisper": "whisper",
+        "Riva": "riva",
+        "NIM": "nvidia-nim",
+    }
+    recommended_engine = next(
+        (engine_names[item] for item in spark["recommended_engines"] if item in engine_names),
+        "openai-compatible",
+    )
+    return {
+        "repo_id": repo_id,
+        "gguf_files": files[:100],
+        "recommended_file": spark["recommended_file"] or recommended_file,
+        "recommended_files": spark["recommended_files"],
+        "recommended_mmproj_file": spark["recommended_mmproj_file"],
+        "recommended_context": spark["recommended_context"] or recommended_context,
+        "model_max_context": maximum,
+        "context_source": source,
+        "task": profile_task,
+        "input_modalities": spark["input_modalities"],
+        "output_modalities": spark["output_modalities"],
+        "recommended_engine": recommended_engine,
+        "recommended_engines": spark["recommended_engines"],
+        "formats": spark["formats"],
+        "estimated_memory_mb": spark["estimated_memory_mb"],
+        "runtime_requirement": spark["runtime_requirement"],
+        "fits": spark["fits"],
+        "parameters": {
+            "gpu_layers": -1,
+            "batch_size": 512,
+            "temperature": 0.7,
+            "top_p": 0.95,
+            "repeat_penalty": 1.1,
+            "flash_attention": True,
+        },
+        "tags": tags[:30],
+        "warning": "La recomendación se revisa antes de guardarse y nunca se ejecuta desde el README.",
+    }
+
+
+@app.get("/api/profiles/recommend/{repo_id:path}", dependencies=secure)
+async def recommend_profile(
+    repo_id: str,
+    task: HF_TASK = Query(default="any"),
+    runtime: HF_RUNTIME = Query(default="any"),
+) -> dict[str, Any]:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo_id):
+        raise HTTPException(status_code=400, detail="Identificador de Hugging Face inválido")
+    try:
+        return await asyncio.to_thread(hf_profile_recommendation, repo_id, task, runtime)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"No se pudo analizar el modelo: {type(exc).__name__}") from exc
+
+
+MULTIMODAL_ENDPOINTS = {
+    "chat": "/v1/chat/completions",
+    "vision": "/v1/chat/completions",
+    "embeddings": "/v1/embeddings",
+    "image-generation": "/v1/images/generations",
+    "asr": "/v1/audio/transcriptions",
+    "tts": "/v1/audio/speech",
+    "video-generation": "/v1/videos/generations",
+    "reranking": "/v1/rerank",
+}
+MULTIMODAL_MIME_TYPES = {
+    "image/jpeg", "image/png", "image/webp",
+    "audio/mpeg", "audio/mp4", "audio/wav", "audio/x-wav", "audio/webm", "audio/ogg",
+    "video/mp4", "video/webm",
+}
+COMFYUI_WORKFLOW_DIR = ROOT / "config" / "comfyui"
+COMFYUI_MANAGED_MODELS = {
+    "comfyui-image": {
+        "id": "comfyui-image",
+        "name": "ComfyUI · FLUX.1 Schnell FP8",
+        "engine": "comfyui",
+        "model_ref": "flux1-schnell-fp8.safetensors",
+        "model_alias": "comfyui-image",
+        "endpoint_url": "http://127.0.0.1:8188",
+        "api_protocol": "comfyui",
+        "task": "image-generation",
+        "input_modalities": ["text"],
+        "output_modalities": ["image"],
+        "max_input_mb": 32,
+        "timeout_seconds": 600,
+    },
+    "comfyui-video": {
+        "id": "comfyui-video",
+        "name": "ComfyUI · Wan 2.1 T2V 1.3B",
+        "engine": "comfyui",
+        "model_ref": "wan2.1_t2v_1.3B_bf16.safetensors",
+        "model_alias": "comfyui-video",
+        "endpoint_url": "http://127.0.0.1:8188",
+        "api_protocol": "comfyui",
+        "task": "video-generation",
+        "input_modalities": ["text"],
+        "output_modalities": ["video"],
+        "max_input_mb": 32,
+        "timeout_seconds": 1800,
+    },
+}
+
+
+def managed_comfyui_root() -> Path:
+    return Path.home() / ".local" / "share" / "mydgx" / "comfyui"
+
+
+def managed_comfyui_source() -> Path:
+    root = managed_comfyui_root()
+    installed = root / "ComfyUI"
+    return installed if installed.is_dir() else root / "source"
+
+
+def managed_flux_checkpoint() -> Path:
+    return (
+        managed_comfyui_source()
+        / "models"
+        / "checkpoints"
+        / str(COMFYUI_MANAGED_MODELS["comfyui-image"]["model_ref"])
+    )
+
+
+@lru_cache(maxsize=8)
+def sha256_file_identity(path: str, size: int, modified_ns: int) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def managed_flux_benchmark_model() -> dict[str, Any] | None:
+    checkpoint = managed_flux_checkpoint()
+    try:
+        resolved = checkpoint.resolve(strict=True)
+        stat = resolved.stat()
+    except OSError:
+        return None
+    if not resolved.is_file() or stat.st_size <= 0:
+        return None
+    digest = sha256_file_identity(str(resolved), stat.st_size, stat.st_mtime_ns)
+    model = dict(COMFYUI_MANAGED_MODELS["comfyui-image"])
+    model.update({
+        "model_file": str(resolved),
+        "model_filename": resolved.name,
+        "_benchmark_target": "comfyui:flux1-schnell-fp8",
+        "_benchmark_artifact_digest": digest,
+        "_benchmark_artifact_size": stat.st_size,
+    })
+    return model
+
+
+def managed_wan_benchmark_model() -> dict[str, Any] | None:
+    workflow_path = COMFYUI_WORKFLOW_DIR / "video-workflow-api.json"
+    try:
+        workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+        references = [
+            ("diffusion_model", "diffusion_models", str(workflow["37"]["inputs"]["unet_name"])),
+            ("text_encoder", "text_encoders", str(workflow["38"]["inputs"]["clip_name"])),
+            ("vae", "vae", str(workflow["39"]["inputs"]["vae_name"])),
+        ]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+    components: list[dict[str, Any]] = []
+    models_root = managed_comfyui_source() / "models"
+    for role, directory, filename in references:
+        if not filename or Path(filename).name != filename:
+            return None
+        try:
+            resolved = (models_root / directory / filename).resolve(strict=True)
+            stat = resolved.stat()
+        except OSError:
+            return None
+        if not resolved.is_file() or stat.st_size <= 0:
+            return None
+        components.append({
+            "role": role,
+            "filename": filename,
+            "size": stat.st_size,
+            "sha256": sha256_file_identity(
+                str(resolved), stat.st_size, stat.st_mtime_ns,
+            ),
+        })
+    workflow_digest = hashlib.sha256(workflow_path.read_bytes()).hexdigest()
+    identity = {
+        "workflow": {
+            "filename": "config/comfyui/video-workflow-api.json",
+            "sha256": workflow_digest,
+        },
+        "components": components,
+    }
+    model = dict(COMFYUI_MANAGED_MODELS["comfyui-video"])
+    model.update({
+        "model_filename": ", ".join(item["filename"] for item in components),
+        "_benchmark_target": "comfyui:wan2.1-t2v-1.3b",
+        "_benchmark_artifact_digest": content_hash(identity),
+        "_benchmark_artifact_size": sum(int(item["size"]) for item in components),
+        "_benchmark_artifact_components": components,
+        "_benchmark_workflow_sha256": workflow_digest,
+    })
+    return model
+
+
+def managed_comfyui_enabled() -> bool:
+    root = managed_comfyui_root()
+    return (
+        (root / "enabled").is_file()
+        and (root / "comfyui.env").is_file()
+        and COMFYUI_WORKFLOW_DIR.is_dir()
+    )
+
+
+def comfyui_workflow(
+    task: str,
+    prompt: str,
+    *,
+    seed: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    steps: int | None = None,
+    frames: int | None = None,
+    persist_output: bool = True,
+) -> dict[str, Any]:
+    filename = (
+        "image-workflow-api.json"
+        if task == "image-generation"
+        else "video-workflow-api.json"
+    )
+    try:
+        workflow = json.loads((COMFYUI_WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=503, detail="El workflow administrado de ComfyUI no está disponible") from exc
+    if task == "image-generation":
+        workflow["6"]["inputs"]["text"] = prompt or "A detailed image"
+        workflow["3"]["inputs"]["seed"] = (
+            int(seed) if seed is not None else int.from_bytes(os.urandom(6), "big")
+        )
+        if width is not None:
+            workflow["5"]["inputs"]["width"] = int(width)
+        if height is not None:
+            workflow["5"]["inputs"]["height"] = int(height)
+        if steps is not None:
+            workflow["3"]["inputs"]["steps"] = int(steps)
+        if not persist_output:
+            workflow["9"] = {
+                "inputs": {"images": ["8", 0]},
+                "class_type": "PreviewImage",
+            }
+    else:
+        workflow["6"]["inputs"]["text"] = prompt or "A cinematic scene with natural motion"
+        workflow["3"]["inputs"]["seed"] = (
+            int(seed) if seed is not None else int.from_bytes(os.urandom(6), "big")
+        )
+        if width is not None:
+            workflow["40"]["inputs"]["width"] = int(width)
+        if height is not None:
+            workflow["40"]["inputs"]["height"] = int(height)
+        if frames is not None:
+            workflow["40"]["inputs"]["length"] = int(frames)
+        if steps is not None:
+            workflow["3"]["inputs"]["steps"] = int(steps)
+    return workflow
+
+
+def delete_managed_comfyui_output(output_file: dict[str, Any]) -> None:
+    filename = str(output_file.get("filename") or "")
+    subfolder = str(output_file.get("subfolder") or "")
+    output_type = str(output_file.get("type") or "output")
+    directory = "temp" if output_type == "temp" else "output"
+    root = (managed_comfyui_source() / directory).resolve()
+    candidate = (root / subfolder / filename).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ValueError("Ruta de salida ComfyUI inválida")
+    try:
+        candidate.unlink(missing_ok=True)
+    except OSError as exc:
+        raise ValueError("No se pudo eliminar la salida temporal de ComfyUI") from exc
+
+
+async def fetch_comfyui_view(
+    client: httpx.AsyncClient,
+    base_url: str,
+    output_file: dict[str, Any],
+    maximum_bytes: int,
+) -> tuple[bytes, str]:
+    filename = str(output_file.get("filename") or "")
+    if not filename or Path(filename).name != filename:
+        raise ValueError("Nombre de salida ComfyUI inválido")
+    subfolder = str(output_file.get("subfolder") or "")
+    if subfolder and (
+        Path(subfolder).is_absolute()
+        or ".." in Path(subfolder).parts
+        or not re.fullmatch(r"[A-Za-z0-9._/-]+", subfolder)
+    ):
+        raise ValueError("Subcarpeta de salida ComfyUI inválida")
+    chunks: list[bytes] = []
+    size = 0
+    async with client.stream(
+        "GET",
+        f"{base_url.rstrip('/')}/view",
+        params={
+            "filename": filename,
+            "subfolder": subfolder,
+            "type": output_file.get("type", "output"),
+        },
+    ) as response:
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "application/octet-stream")
+        async for chunk in response.aiter_bytes():
+            size += len(chunk)
+            if size > maximum_bytes:
+                raise ValueError("La salida de ComfyUI supera el límite permitido")
+            chunks.append(chunk)
+    return b"".join(chunks), content_type
+
+
+async def execute_managed_comfyui(
+    task: str,
+    prompt: str,
+    timeout: float,
+    base_url: str,
+    *,
+    seed: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    steps: int | None = None,
+    frames: int | None = None,
+    persist_output: bool = True,
+) -> dict[str, Any]:
+    workflow = comfyui_workflow(
+        task,
+        prompt,
+        seed=seed,
+        width=width,
+        height=height,
+        steps=steps,
+        frames=frames,
+        persist_output=persist_output,
+    )
+    client_id = str(uuid.uuid4())
+    base_url = base_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0)) as client:
+            queued = await client.post(
+                f"{base_url}/prompt",
+                json={"prompt": workflow, "client_id": client_id},
+            )
+            queued.raise_for_status()
+            prompt_id = str(queued.json().get("prompt_id") or "")
+            if not re.fullmatch(r"[A-Za-z0-9-]{8,}", prompt_id):
+                raise ValueError("prompt_id inválido")
+            deadline = time.monotonic() + timeout
+            history: dict[str, Any] | None = None
+            while time.monotonic() < deadline:
+                response = await client.get(
+                    f"{base_url}/history/{prompt_id}"
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if isinstance(payload, dict) and isinstance(payload.get(prompt_id), dict):
+                    history = payload[prompt_id]
+                    break
+                await asyncio.sleep(1)
+            if not history:
+                raise httpx.TimeoutException("ComfyUI agotó el tiempo")
+            output_file = next(
+                (
+                    item
+                    for output in (history.get("outputs") or {}).values()
+                    if isinstance(output, dict)
+                    for key in ("images", "gifs", "videos", "audio")
+                    for item in (output.get(key) or [])
+                    if isinstance(item, dict) and item.get("filename")
+                ),
+                None,
+            )
+            if not output_file:
+                raise ValueError("ComfyUI no devolvió un archivo")
+            try:
+                content, upstream_content_type = await fetch_comfyui_view(
+                    client,
+                    base_url,
+                    output_file,
+                    settings.multimodal_max_upload_mb * 1024 * 1024,
+                )
+            finally:
+                if task == "video-generation" and not persist_output:
+                    await asyncio.to_thread(delete_managed_comfyui_output, output_file)
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="ComfyUI no completó el workflow") from exc
+    suffix = Path(str(output_file["filename"])).suffix.lower()
+    content_type = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".webm": "video/webm",
+        ".mp4": "video/mp4",
+    }.get(suffix, upstream_content_type)
+    if task == "image-generation":
+        return {
+            "content_type": content_type,
+            "data_base64": base64.b64encode(content).decode("ascii"),
+        }
+    if not persist_output:
+        return {
+            "content_type": content_type,
+            "data_base64": base64.b64encode(content).decode("ascii"),
+            "size_bytes": len(content),
+        }
+    artifact_id = str(uuid.uuid4())
+    artifact_dir = Path(settings.database_path).expanduser().resolve().parent / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / f"{artifact_id}{suffix or '.webm'}"
+    artifact_path.write_bytes(content)
+    os.chmod(artifact_path, 0o600)
+    return {
+        "content_type": content_type,
+        "artifact_id": artifact_id,
+        "artifact_url": f"/api/artifacts/{artifact_id}",
+        "size_bytes": len(content),
+    }
+
+
+def model_endpoint(model: dict[str, Any]) -> str:
+    if model["engine"] == "ollama":
+        return settings.ollama_url.rstrip("/")
+    if model["engine"] == "llama.cpp":
+        return f"http://127.0.0.1:{int(model.get('_runtime_port') or model['port'])}"
+    return str(model.get("endpoint_url") or "").rstrip("/")
+
+
+def active_model_by_alias(alias: str) -> dict[str, Any]:
+    if managed_comfyui_enabled() and alias in COMFYUI_MANAGED_MODELS:
+        return dict(COMFYUI_MANAGED_MODELS[alias])
+    profiles = running_profiles()
+    runtime_ids = {profile["id"] for profile in profiles}
+    if not profiles:
+        fallback = active_profile()
+        profiles = [fallback] if fallback else []
+    if not profiles:
+        raise HTTPException(status_code=503, detail="No hay perfiles cargados")
+    for profile in profiles:
+        sources = (
+            running_profile_models(profile)
+            if profile["id"] in runtime_ids
+            else [model for model in profile_models(profile) if model.get("enabled", True)]
+        )
+        for model in sources:
+            current_alias = model.get("model_alias") or model["model_ref"]
+            if current_alias == alias:
+                return model
+    raise HTTPException(status_code=404, detail="Modelo no encontrado en los perfiles cargados")
+
+
+def decode_media_data_url(data_url: str, maximum_bytes: int) -> tuple[str, bytes]:
+    match = re.fullmatch(r"data:([a-z0-9.+-]+/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)", data_url)
+    if not match or match.group(1) not in MULTIMODAL_MIME_TYPES:
+        raise HTTPException(status_code=415, detail="Tipo de archivo multimedia no permitido")
+    try:
+        content = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Archivo multimedia inválido") from exc
+    if not content or len(content) > maximum_bytes:
+        raise HTTPException(status_code=413, detail="Archivo multimedia demasiado grande")
+    return match.group(1), content
+
+
+class MultimodalRunRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+    task: Literal[
+        "chat", "vision", "embeddings", "image-generation", "asr", "tts",
+        "video-generation", "reranking",
+    ]
+    prompt: str = Field(default="", max_length=32_000)
+    data_url: str = Field(default="", max_length=100_000_000)
+    documents: list[str] = Field(default_factory=list, max_length=100)
+    voice: str = Field(default="alloy", pattern=r"^[A-Za-z0-9._-]+$", max_length=80)
+    response_format: Literal["json", "b64_json", "url", "mp3", "wav", "flac", "opus", "aac"] = "json"
+
+
+class OpenWebUIVideoToolRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+    prompt: str = Field(min_length=1, max_length=32_000)
+
+
+@app.get("/api/multimodal/capabilities", dependencies=secure)
+async def multimodal_capabilities() -> dict[str, Any]:
+    profiles = running_profiles()
+    runtime_ids = {profile["id"] for profile in profiles}
+    if not profiles:
+        fallback = active_profile()
+        profiles = [fallback] if fallback else []
+    models = []
+    if managed_comfyui_enabled():
+        models.extend(
+            {
+                "id": model["id"],
+                "alias": model["model_alias"],
+                "name": model["name"],
+                "engine": model["engine"],
+                "task": model["task"],
+                "input_modalities": model["input_modalities"],
+                "output_modalities": model["output_modalities"],
+                "max_input_mb": model["max_input_mb"],
+                "endpoint": MULTIMODAL_ENDPOINTS[model["task"]],
+            }
+            for model in COMFYUI_MANAGED_MODELS.values()
+        )
+    for profile in profiles:
+        sources = (
+            running_profile_models(profile)
+            if profile["id"] in runtime_ids
+            else [model for model in profile_models(profile) if model.get("enabled", True)]
+        )
+        for model in sources:
+            models.append({
+                "id": model["id"],
+                "alias": model.get("model_alias") or model["model_ref"],
+                "name": model.get("name") or model["model_ref"],
+                "engine": model["engine"],
+                "task": model.get("task", "chat"),
+                "input_modalities": model.get("input_modalities", ["text"]),
+                "output_modalities": model.get("output_modalities", ["text"]),
+                "max_input_mb": int(model.get("max_input_mb") or 32),
+                "endpoint": MULTIMODAL_ENDPOINTS.get(model.get("task", "chat")),
+            })
+    return {
+        "profile_id": profiles[-1]["id"] if profiles else None,
+        "profile_ids": [profile["id"] for profile in profiles],
+        "models": models,
+        "tasks": [
+            {"id": task, "endpoint": endpoint}
+            for task, endpoint in MULTIMODAL_ENDPOINTS.items()
+        ],
+        "max_upload_mb": settings.multimodal_max_upload_mb,
+    }
+
+
+async def execute_multimodal_request(payload: MultimodalRunRequest) -> dict[str, Any]:
+    model = active_model_by_alias(payload.model)
+    task = str(model.get("task") or "chat")
+    if task != payload.task:
+        raise HTTPException(status_code=400, detail="La tarea no coincide con la capacidad del modelo")
+    protocol = str(model.get("api_protocol") or "openai")
+    if protocol not in {"openai", "tts-lab", "comfyui"}:
+        raise HTTPException(status_code=409, detail="Este motor necesita un adaptador de protocolo específico")
+    if protocol == "comfyui":
+        if task not in {"image-generation", "video-generation"}:
+            raise HTTPException(status_code=409, detail="El adaptador ComfyUI solo admite imagen y vídeo")
+        return await execute_managed_comfyui(
+            task,
+            payload.prompt,
+            float(model.get("timeout_seconds") or 600),
+            model_endpoint(model) or settings.comfyui_url,
+        )
+    if protocol == "tts-lab" and task != "tts":
+        raise HTTPException(status_code=409, detail="El adaptador tts-lab solo admite síntesis de voz")
+    endpoint = MULTIMODAL_ENDPOINTS[task]
+    upstream_model = (
+        (model.get("model_alias") or model["model_ref"])
+        if model["engine"] == "llama.cpp"
+        else model["model_ref"]
+    )
+    request_json: dict[str, Any] | None = None
+    request_files: dict[str, tuple[str, bytes, str]] | None = None
+    request_data: dict[str, str] | None = None
+    if task in {"chat", "vision"}:
+        content: str | list[dict[str, Any]] = payload.prompt
+        if task == "vision":
+            if not payload.data_url:
+                raise HTTPException(status_code=400, detail="La tarea de visión requiere una imagen")
+            maximum = min(
+                settings.multimodal_max_upload_mb,
+                int(model.get("max_input_mb") or 32),
+            ) * 1024 * 1024
+            mime, _ = decode_media_data_url(payload.data_url, maximum)
+            if not mime.startswith("image/"):
+                raise HTTPException(status_code=415, detail="Visión requiere una imagen")
+            content = [
+                {"type": "text", "text": payload.prompt or "Describe la imagen."},
+                {"type": "image_url", "image_url": {"url": payload.data_url}},
+            ]
+        request_json = {
+            "model": upstream_model,
+            "messages": [{"role": "user", "content": content}],
+            "stream": False,
+        }
+    elif task == "embeddings":
+        request_json = {"model": upstream_model, "input": payload.prompt}
+    elif task == "image-generation":
+        request_json = {
+            "model": upstream_model, "prompt": payload.prompt, "n": 1,
+            "response_format": payload.response_format if payload.response_format in {"url", "b64_json"} else "b64_json",
+        }
+    elif task == "asr":
+        maximum = min(
+            settings.multimodal_max_upload_mb,
+            int(model.get("max_input_mb") or 32),
+        ) * 1024 * 1024
+        mime, content = decode_media_data_url(payload.data_url, maximum)
+        if not mime.startswith("audio/"):
+            raise HTTPException(status_code=415, detail="La transcripción requiere audio")
+        extension = mime.split("/", 1)[1].replace("x-", "")
+        request_files = {"file": (f"audio.{extension}", content, mime)}
+        request_data = {"model": upstream_model}
+    elif task == "tts":
+        output_format = (
+            payload.response_format
+            if payload.response_format in {"mp3", "wav", "flac", "opus"}
+            else "mp3"
+        )
+        if protocol == "tts-lab":
+            request_json = {
+                "text": payload.prompt,
+                "model": upstream_model,
+                "format": output_format,
+                "source": "export",
+            }
+        else:
+            request_json = {
+                "model": upstream_model, "input": payload.prompt,
+                "voice": payload.voice,
+                "response_format": output_format,
+            }
+    elif task == "video-generation":
+        request_json = {"model": upstream_model, "prompt": payload.prompt}
+    else:
+        if not payload.documents:
+            raise HTTPException(status_code=400, detail="Reranking requiere documentos")
+        if any(len(document) > 32_000 for document in payload.documents):
+            raise HTTPException(status_code=400, detail="Un documento supera el límite permitido")
+        request_json = {
+            "model": upstream_model, "query": payload.prompt, "documents": payload.documents,
+        }
+    timeout = float(model.get("timeout_seconds") or 600)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            if protocol == "tts-lab":
+                project_response = await client.get(model_endpoint(model))
+                project_response.raise_for_status()
+                project_type = str(project_response.json().get("project_type") or "clone")
+                request_json = {**(request_json or {}), "clone": project_type != "design"}
+                upstream_url = f"{model_endpoint(model)}/tts"
+            else:
+                upstream_url = f"{model_endpoint(model)}{endpoint}"
+            response = await client.post(
+                upstream_url,
+                json=request_json,
+                data=request_data,
+                files=request_files,
+            )
+            response.raise_for_status()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="El servicio multimodal no está disponible") from exc
+    content_type = response.headers.get("content-type", "application/json").split(";", 1)[0]
+    if content_type == "application/json":
+        try:
+            return {"content_type": content_type, "result": response.json()}
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail="El motor devolvió JSON inválido") from exc
+    if len(response.content) > settings.multimodal_max_upload_mb * 1024 * 1024:
+        raise HTTPException(status_code=502, detail="La respuesta multimedia supera el límite")
+    return {
+        "content_type": content_type,
+        "data_base64": base64.b64encode(response.content).decode("ascii"),
+    }
+
+
+@app.post("/api/multimodal/run", dependencies=secure)
+async def run_multimodal(payload: MultimodalRunRequest) -> dict[str, Any]:
+    ensure_interactive_inference_available()
+    if payload.task == "video-generation":
+        raise HTTPException(status_code=400, detail="La generación de vídeo debe ejecutarse como trabajo")
+    result = await execute_multimodal_request(payload)
+    db.audit("multimodal.run", payload.model, True, payload.task)
+    return result
+
+
+async def execute_video_job(job_id: str, payload: MultimodalRunRequest) -> None:
+    db.update_job(job_id, "running", 10, "Generando vídeo")
+    try:
+        result = await execute_multimodal_request(payload)
+        if "data_base64" in result:
+            db.update_job(job_id, "failed", 0, "El motor devolvió vídeo binario; configura salida por URL")
+            return
+        serialized = json.dumps(result)
+        if len(serialized) > 1_000_000:
+            db.update_job(job_id, "failed", 0, "La respuesta del motor supera el límite persistente")
+            return
+        db.execute(
+            "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
+            (job_id, serialized, utc_now()),
+        )
+        db.update_job(job_id, "completed", 100, "Generación de vídeo completada")
+        db.audit("multimodal.video", payload.model, True)
+    except Exception as exc:
+        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: generación no completada")
+        db.audit("multimodal.video", payload.model, False, type(exc).__name__)
+
+
+@app.post("/api/multimodal/video/jobs", dependencies=secure)
+async def start_video_job(
+    payload: MultimodalRunRequest,
+    background: BackgroundTasks,
+) -> dict[str, str]:
+    if payload.task != "video-generation":
+        raise HTTPException(status_code=400, detail="Este endpoint solo acepta generación de vídeo")
+    model = active_model_by_alias(payload.model)
+    if model.get("task") != "video-generation":
+        raise HTTPException(status_code=400, detail="El modelo no genera vídeo")
+    job_id = db.create_job("multimodal.video", payload.model)
+    background.add_task(execute_video_job, job_id, payload)
+    return {"job_id": job_id}
+
+
+@app.get("/api/artifacts/{artifact_id}", dependencies=secure)
+async def artifact(artifact_id: str) -> FileResponse:
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f-]{27,}", artifact_id):
+        raise HTTPException(status_code=404, detail="Artefacto no encontrado")
+    artifact_dir = Path(settings.database_path).expanduser().resolve().parent / "artifacts"
+    for suffix, content_type in (
+        (".webm", "video/webm"),
+        (".mp4", "video/mp4"),
+        (".png", "image/png"),
+        (".webp", "image/webp"),
+    ):
+        path = artifact_dir / f"{artifact_id}{suffix}"
+        if path.is_file() and not path.is_symlink():
+            return FileResponse(path, media_type=content_type, filename=path.name)
+    raise HTTPException(status_code=404, detail="Artefacto no encontrado")
+
+
+@app.get(
+    "/api/openwebui/tools/openapi.json",
+    dependencies=openwebui_tool_secure,
+    include_in_schema=False,
+)
+async def openwebui_tools_openapi() -> dict[str, Any]:
+    task_schema = {
+        "type": "string",
+        "enum": ["chat", "embeddings", "reranking"],
+    }
+    run_schema = {
+        "type": "object",
+        "required": ["model", "task"],
+        "properties": {
+            "model": {"type": "string", "description": "Alias de un modelo cargado"},
+            "task": task_schema,
+            "prompt": {"type": "string", "maxLength": 32000},
+            "documents": {
+                "type": "array",
+                "items": {"type": "string", "maxLength": 32000},
+                "maxItems": 100,
+            },
+            "voice": {"type": "string", "default": "alloy"},
+            "response_format": {
+                "type": "string",
+                "enum": ["json", "b64_json", "url", "mp3", "wav", "flac", "opus", "aac"],
+                "default": "json",
+            },
+        },
+    }
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "MyDGX AI Laboratory",
+            "version": "1.0.0",
+            "description": "Herramientas seguras para consultar capacidades y ejecutar modelos locales.",
+        },
+        "paths": {
+            "/api/openwebui/tools/capabilities": {
+                "get": {
+                    "operationId": "list_mydgx_capabilities",
+                    "summary": "Lista modelos y tareas disponibles en MyDGX",
+                    "responses": {"200": {"description": "Capacidades disponibles"}},
+                }
+            },
+            "/api/openwebui/tools/run": {
+                "post": {
+                    "operationId": "run_mydgx_laboratory_task",
+                    "summary": "Ejecuta una tarea local del Laboratorio IA",
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": run_schema}},
+                    },
+                    "responses": {"200": {"description": "Resultado de la tarea"}},
+                }
+            },
+            "/api/openwebui/tools/video/jobs": {
+                "post": {
+                    "operationId": "start_mydgx_video_generation",
+                    "summary": "Inicia una generación de vídeo asíncrona",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["model", "prompt"],
+                                    "properties": {
+                                        "model": {"type": "string"},
+                                        "prompt": {"type": "string", "maxLength": 32000},
+                                        "task": {"type": "string", "const": "video-generation"},
+                                    },
+                                }
+                            }
+                        },
+                    },
+                    "responses": {"200": {"description": "Identificador del trabajo"}},
+                }
+            },
+            "/api/openwebui/tools/jobs/{job_id}": {
+                "get": {
+                    "operationId": "get_mydgx_job",
+                    "summary": "Consulta progreso y estado de un trabajo",
+                    "parameters": [{
+                        "name": "job_id", "in": "path", "required": True,
+                        "schema": {"type": "string", "format": "uuid"},
+                    }],
+                    "responses": {"200": {"description": "Estado del trabajo"}},
+                }
+            },
+            "/api/openwebui/tools/jobs/{job_id}/result": {
+                "get": {
+                    "operationId": "get_mydgx_job_result",
+                    "summary": "Obtiene el resultado final de un trabajo",
+                    "parameters": [{
+                        "name": "job_id", "in": "path", "required": True,
+                        "schema": {"type": "string", "format": "uuid"},
+                    }],
+                    "responses": {"200": {"description": "Resultado persistido"}},
+                }
+            },
+        },
+    }
+
+
+@app.get("/api/openwebui/tools/capabilities", dependencies=openwebui_tool_secure)
+async def openwebui_tool_capabilities() -> dict[str, Any]:
+    return await multimodal_capabilities()
+
+
+@app.post("/api/openwebui/tools/run", dependencies=openwebui_tool_secure)
+async def openwebui_tool_run(payload: MultimodalRunRequest) -> dict[str, Any]:
+    if payload.task in {"vision", "asr", "image-generation", "tts", "video-generation"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Usa la función nativa de imagen o el trabajo de vídeo para esas tareas",
+        )
+    return await run_multimodal(payload)
+
+
+@app.post("/api/openwebui/tools/video/jobs", dependencies=openwebui_tool_secure)
+async def openwebui_tool_video_job(
+    payload: OpenWebUIVideoToolRequest,
+    background: BackgroundTasks,
+) -> dict[str, str]:
+    return await start_video_job(
+        MultimodalRunRequest(
+            model=payload.model,
+            task="video-generation",
+            prompt=payload.prompt,
+        ),
+        background,
+    )
+
+
+@app.get("/api/openwebui/tools/jobs/{job_id}", dependencies=openwebui_tool_secure)
+async def openwebui_tool_job(job_id: str) -> dict[str, Any]:
+    return await job(job_id)
+
+
+@app.get("/api/openwebui/tools/jobs/{job_id}/result", dependencies=openwebui_tool_secure)
+async def openwebui_tool_job_result(job_id: str) -> dict[str, Any]:
+    return await job_result(job_id)
+
+
+class BenchmarkRunRequest(BaseModel):
+    target: str = Field(min_length=1, max_length=300)
+    protocol_id: str = Field(default=BENCHMARK_PROTOCOL_ID, max_length=100)
+    repetitions: int = Field(default=settings.benchmark_repetitions, ge=1, le=10)
+    strict_isolation: bool = True
+
+
+class BenchmarkSuiteRequest(BaseModel):
+    repetitions: int = Field(default=settings.benchmark_repetitions, ge=1, le=10)
+    candidate_keys: list[str] | None = Field(default=None, max_length=1000)
+
+
+class BenchmarkImportRequest(BaseModel):
+    bundle: dict[str, Any]
+
+
+_benchmark_lock = asyncio.Lock()
+_benchmark_active_job_id: str | None = None
+_benchmark_background_tasks: set[asyncio.Task[None]] = set()
+_benchmark_suite_task: asyncio.Task[None] | None = None
+
+
+BENCHMARK_GATE_KEY = "benchmark.gate"
+BENCHMARK_QUEUE_MAX_ATTEMPTS = 6
+GATEWAY_ACTIVITY_KEY = "gateway.last_inference"
+GATEWAY_ACTIVITY_WRITE_INTERVAL = 5.0
+_last_interactive_inference_at = 0.0
+_last_gateway_activity_write = float("-inf")
+
+
+def benchmark_is_active() -> bool:
+    return _benchmark_lock.locked() or benchmark_gate_active()
+
+
+def set_benchmark_gate(job_id: str | None, ttl_seconds: float = 0) -> None:
+    """Share the isolation window with the gateway process through SQLite."""
+    if not job_id:
+        db.execute("DELETE FROM preferences WHERE key=?", (BENCHMARK_GATE_KEY,))
+        return
+    value = json.dumps({"job_id": job_id, "expires_at": time.time() + max(30.0, ttl_seconds)})
+    db.execute(
+        """
+        INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+        """,
+        (BENCHMARK_GATE_KEY, value, utc_now()),
+    )
+
+
+def benchmark_gate_active() -> bool:
+    raw = preference_value(BENCHMARK_GATE_KEY)
+    if not raw:
+        return False
+    try:
+        return float(json.loads(raw).get("expires_at") or 0) > time.time()
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
+def mark_interactive_inference() -> None:
+    global _last_interactive_inference_at
+    _last_interactive_inference_at = time.monotonic()
+
+
+def mark_gateway_inference() -> None:
+    """Share gateway activity with the panel process through SQLite."""
+    global _last_gateway_activity_write
+    now = time.monotonic()
+    if now - _last_gateway_activity_write < GATEWAY_ACTIVITY_WRITE_INTERVAL:
+        return
+    _last_gateway_activity_write = now
+    try:
+        db.execute(
+            """
+            INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+            """,
+            (GATEWAY_ACTIVITY_KEY, str(time.time()), utc_now()),
+        )
+    except sqlite3.Error:
+        pass
+
+
+def benchmark_quiet_remaining() -> float:
+    quiet = float(settings.benchmark_quiet_seconds)
+    remaining = 0.0
+    if _last_interactive_inference_at:
+        remaining = quiet - (time.monotonic() - _last_interactive_inference_at)
+    try:
+        gateway_at = float(preference_value(GATEWAY_ACTIVITY_KEY) or 0)
+    except ValueError:
+        gateway_at = 0.0
+    if gateway_at:
+        remaining = max(remaining, quiet - (time.time() - gateway_at))
+    return max(0.0, remaining)
+
+
+def benchmark_auto_enabled() -> bool:
+    return bool(settings.benchmark_enabled and settings.benchmark_auto_new_models)
+
+
+def enqueue_automatic_benchmark(target: str, reason: str = "model.new") -> bool:
+    if not benchmark_auto_enabled():
+        return False
+    if target.startswith("ollama:"):
+        target = f"ollama:{normalized_ollama_name(target.removeprefix('ollama:'))}"
+    now = utc_now()
+    try:
+        db.execute(
+            """
+            INSERT INTO benchmark_queue(id,target,reason,status,created_at,updated_at)
+            VALUES(?,?,?,'pending',?,?)
+            """,
+            (str(uuid.uuid4()), target[:300], reason[:80], now, now),
+        )
+    except sqlite3.IntegrityError:
+        return False
+    db.log(
+        "info",
+        "benchmark",
+        "benchmark.auto.queued",
+        "Benchmark automático en cola hasta que el sistema esté libre",
+        entity_type="model",
+        entity_id=target[:300],
+        detail={"reason": reason[:80]},
+    )
+    return True
+
+
+def queue_profile_benchmarks(profile: dict[str, Any]) -> int:
+    queued = 0
+    for model in running_profile_models(profile):
+        if not model.get("enabled", True):
+            continue
+        if str(model.get("task") or "chat") not in {
+            "chat", "vision", "tts", "embeddings", "reranking",
+        }:
+            continue
+        if str(model.get("engine") or "") not in {
+            "llama.cpp", "ollama", "openai-compatible", "vllm", "sglang",
+            "tensorrt-llm", "nvidia-nim",
+        }:
+            continue
+        if str(model.get("task") or "") in {"vision", "tts", "embeddings", "reranking"}:
+            try:
+                if not local_benchmark_endpoint(model_endpoint(model)):
+                    continue
+            except (KeyError, TypeError, ValueError):
+                continue
+        target = (
+            f"ollama:{model['model_ref']}"
+            if model.get("engine") == "ollama"
+            and str(model.get("task") or "chat") in {"chat", "vision"}
+            else f"profile:{profile['id']}:{model['id']}"
+        )
+        queued += int(enqueue_automatic_benchmark(target, "profile.loaded"))
+    return queued
+
+
+async def benchmark_runtime_busy() -> str:
+    """Return a reason when a loaded llama.cpp server is processing someone else's request."""
+    endpoints: set[str] = set()
+    for profile in running_profiles():
+        for model in running_profile_models(profile):
+            if model.get("engine") == "llama.cpp":
+                try:
+                    endpoints.add(model_endpoint(model))
+                except (KeyError, TypeError, ValueError):
+                    continue
+    if not endpoints:
+        return ""
+    async with httpx.AsyncClient(timeout=3) as client:
+        for endpoint in sorted(endpoints):
+            try:
+                response = await client.get(f"{endpoint}/slots")
+                if response.status_code != 200:
+                    continue
+                slots = response.json()
+            except (httpx.HTTPError, ValueError):
+                continue
+            if not isinstance(slots, list):
+                continue
+            for slot in slots:
+                if not isinstance(slot, dict):
+                    continue
+                if slot.get("is_processing") is True or slot.get("state") == 1:
+                    return f"Inferencia activa en {endpoint.rsplit(':', 1)[-1]}"
+    return ""
+
+
+async def benchmark_preflight_reason(target: str) -> str:
+    if _benchmark_lock.locked():
+        return "Otro benchmark en ejecución"
+    active = db.rows(
+        "SELECT kind FROM jobs WHERE status IN ('queued','running','cancelling') LIMIT 1"
+    )
+    if active:
+        return f"Esperando a que termine {active[0]['kind']}"
+    remaining = benchmark_quiet_remaining()
+    if remaining > 0:
+        return f"Periodo de calma tras uso interactivo ({int(remaining)} s)"
+    busy = await benchmark_runtime_busy()
+    if busy:
+        return busy
+    return ""
+
+
+def automatic_benchmark_protocol(model: dict[str, Any] | None) -> str:
+    return {
+        "asr": ASR_BENCHMARK_PROTOCOL_ID,
+        "vision": VISION_BENCHMARK_PROTOCOL_ID,
+        "tts": TTS_BENCHMARK_PROTOCOL_ID,
+        "image-generation": IMAGE_BENCHMARK_PROTOCOL_ID,
+        "video-generation": VIDEO_BENCHMARK_PROTOCOL_ID,
+        "embeddings": EMBEDDINGS_BENCHMARK_PROTOCOL_ID,
+        "reranking": RERANKING_BENCHMARK_PROTOCOL_ID,
+    }.get(str((model or {}).get("task") or ""), BENCHMARK_PROTOCOL_ID)
+
+
+async def automatic_benchmark_duplicate(model: dict[str, Any], protocol_id: str) -> str | None:
+    try:
+        model_id = await register_benchmark_model(model)
+        environment_id = await asyncio.to_thread(register_benchmark_environment)
+        _, runtime_hash = benchmark_runtime_config(model)
+    except Exception:
+        return None
+    return equivalent_benchmark_run(model_id, environment_id, runtime_hash, protocol_id)
+
+
+async def process_benchmark_queue_once() -> str | None:
+    if not benchmark_auto_enabled():
+        return None
+    now = utc_now()
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=settings.benchmark_queue_max_age_hours)
+    ).isoformat()
+    db.execute(
+        """
+        UPDATE benchmark_queue SET status='expired',updated_at=?
+        WHERE status='pending' AND created_at<?
+        """,
+        (now, cutoff),
+    )
+    rows = db.rows(
+        "SELECT * FROM benchmark_queue WHERE status='pending' ORDER BY created_at LIMIT 1"
+    )
+    if not rows:
+        return None
+    entry = rows[0]
+    reason = await benchmark_preflight_reason(entry["target"])
+    resolved_model: dict[str, Any] | None = None
+    if not reason:
+        try:
+            resolved_model = await resolve_benchmark_target(entry["target"])
+        except HTTPException as exc:
+            db.execute(
+                """
+                UPDATE benchmark_queue SET status='skipped',last_reason=?,updated_at=?
+                WHERE id=?
+                """,
+                (str(exc.detail)[:300], utc_now(), entry["id"]),
+            )
+            return None
+    if reason:
+        db.execute(
+            "UPDATE benchmark_queue SET last_reason=?,updated_at=? WHERE id=?",
+            (reason[:300], utc_now(), entry["id"]),
+        )
+        return None
+    protocol_id = automatic_benchmark_protocol(resolved_model)
+    if resolved_model is not None and await automatic_benchmark_duplicate(resolved_model, protocol_id):
+        # Reloading a profile re-queues its models; an already measured one needs no job or isolation.
+        db.execute(
+            "UPDATE benchmark_queue SET status='done',last_reason='duplicate',updated_at=? WHERE id=?",
+            (utc_now(), entry["id"]),
+        )
+        return None
+    job_id = db.create_job("benchmark.run", entry["target"])
+    db.execute(
+        """
+        UPDATE benchmark_queue
+        SET status='running',job_id=?,attempts=attempts+1,last_reason='',updated_at=?
+        WHERE id=?
+        """,
+        (job_id, utc_now(), entry["id"]),
+    )
+    request = BenchmarkRunRequest(
+        target=entry["target"],
+        protocol_id=protocol_id,
+        repetitions=settings.benchmark_repetitions,
+        strict_isolation=True,
+    )
+    outcome = await run_benchmark_job(job_id, str(uuid.uuid4()), request, automatic=True)
+    attempts = int(entry["attempts"] or 0) + 1
+    if outcome in {"completed", "duplicate"}:
+        status = "done"
+    elif outcome == "retry" and attempts < BENCHMARK_QUEUE_MAX_ATTEMPTS:
+        status = "pending"
+    else:
+        status = "failed" if outcome != "cancelled" else "skipped"
+    db.execute(
+        "UPDATE benchmark_queue SET status=?,last_reason=?,updated_at=? WHERE id=?",
+        (status, outcome or "", utc_now(), entry["id"]),
+    )
+    return job_id
+
+
+async def benchmark_scheduler() -> None:
+    set_benchmark_gate(None)
+    db.execute(
+        """
+        UPDATE benchmark_queue SET status='pending',updated_at=?
+        WHERE status='running'
+        """,
+        (utc_now(),),
+    )
+    while True:
+        try:
+            await process_benchmark_queue_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            db.log(
+                "warning",
+                "benchmark",
+                "benchmark.scheduler.error",
+                "El planificador de benchmarks encontró un error",
+                detail={"error": type(exc).__name__},
+            )
+        await asyncio.sleep(max(5, int(settings.benchmark_queue_poll_seconds)))
+
+
+def ensure_benchmark_inference_available() -> None:
+    if benchmark_is_active():
+        raise HTTPException(
+            status_code=423,
+            detail="Hay un benchmark aislado en ejecución; la inferencia interactiva está pausada",
+        )
+
+
+def ensure_interactive_inference_available() -> None:
+    ensure_benchmark_inference_available()
+    mark_interactive_inference()
+
+
+def benchmark_percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * percentile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def benchmark_mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def asr_normalize_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value).casefold()
+    normalized = "".join(character for character in normalized if not unicodedata.combining(character))
+    return " ".join(re.findall(r"[^\W_]+", normalized, flags=re.UNICODE))
+
+
+def asr_edit_rate(reference: str, hypothesis: str, *, characters: bool = False) -> float:
+    reference_text = asr_normalize_text(reference)
+    hypothesis_text = asr_normalize_text(hypothesis)
+    expected = list(reference_text.replace(" ", "")) if characters else reference_text.split()
+    actual = list(hypothesis_text.replace(" ", "")) if characters else hypothesis_text.split()
+    if not expected:
+        return 0.0 if not actual else 1.0
+    previous = list(range(len(actual) + 1))
+    for row, expected_item in enumerate(expected, start=1):
+        current = [row]
+        for column, actual_item in enumerate(actual, start=1):
+            current.append(min(
+                current[-1] + 1,
+                previous[column] + 1,
+                previous[column - 1] + int(expected_item != actual_item),
+            ))
+        previous = current
+    return previous[-1] / len(expected)
+
+
+def asr_benchmark_summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    valid = [sample for sample in samples if sample["valid"]]
+    metrics = [json.loads(sample.get("native_metrics_json") or "{}") for sample in valid]
+    total_values = [float(sample["total_ms"]) for sample in valid]
+    rtf_values = [float(item["rtf"]) for item in metrics if item.get("rtf") is not None]
+    wer_values = [float(item["wer"]) for item in metrics if item.get("wer") is not None]
+    cer_values = [float(item["cer"]) for item in metrics if item.get("cer") is not None]
+    reliability = len(valid) / max(1, len(samples)) * 100
+    mean_wer = benchmark_mean(wer_values)
+    mean_cer = benchmark_mean(cer_values)
+    mean_rtf = benchmark_mean(rtf_values)
+    quality = 0.0 if mean_wer is None else max(0.0, 100 * (1 - min(1.0, mean_wer)))
+    speed = 0.0 if mean_rtf is None else min(100.0, 100 / max(1.0, mean_rtf))
+    score = quality * 0.7 + speed * 0.2 + reliability * 0.1
+    return {
+        "sample_count": len(samples),
+        "valid_sample_count": len(valid),
+        "reliability_percent": round(reliability, 2),
+        "total_ms": {
+            "p50": round(benchmark_percentile(total_values, 0.5), 2) if total_values else None,
+            "p95": round(benchmark_percentile(total_values, 0.95), 2) if total_values else None,
+        },
+        "duration_seconds": round(benchmark_mean([
+            float(item["duration_seconds"]) for item in metrics
+            if item.get("duration_seconds") is not None
+        ]) or 0, 3),
+        "real_time_factor": {
+            "mean": round(mean_rtf, 4) if mean_rtf is not None else None,
+            "p50": round(benchmark_percentile(rtf_values, 0.5), 4) if rtf_values else None,
+        },
+        "word_error_rate": round(mean_wer, 4) if mean_wer is not None else None,
+        "character_error_rate": round(mean_cer, 4) if mean_cer is not None else None,
+        "score": round(score, 1),
+        "score_provisional": len(valid) < 2,
+        "score_dimensions": {
+            "quality": round(quality, 1),
+            "speed": round(speed, 1),
+            "reliability": round(reliability, 1),
+        },
+        "score_algorithm": ASR_BENCHMARK_SCORE_ALGORITHM,
+    }
+
+
+def image_benchmark_summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    valid = [sample for sample in samples if sample["valid"]]
+    metrics = [json.loads(sample.get("native_metrics_json") or "{}") for sample in valid]
+    total_values = [float(sample["total_ms"]) for sample in valid]
+    integrity = sum(item.get("png_integrity") is True for item in metrics) / max(1, len(samples)) * 100
+    resolution = sum(item.get("resolution_matches") is True for item in metrics) / max(1, len(samples)) * 100
+    hashes = [str(item.get("pixel_sha256") or "") for item in metrics]
+    reproducibility = (
+        max(hashes.count(value) for value in set(hashes)) / len(hashes) * 100
+        if hashes else 0.0
+    )
+    mean_seconds = (benchmark_mean(total_values) or 0) / 1000
+    performance = 100 * math.exp(-mean_seconds / 60) if total_values else 0.0
+    reliability = len(valid) / max(1, len(samples)) * 100
+    dimensions = {
+        "performance": performance,
+        "png_integrity": integrity,
+        "expected_resolution": resolution,
+        "pixel_reproducibility": reproducibility,
+        "reliability": reliability,
+    }
+    score = (
+        performance * 0.25
+        + integrity * 0.20
+        + resolution * 0.15
+        + reproducibility * 0.30
+        + reliability * 0.10
+    )
+    return {
+        "sample_count": len(samples),
+        "valid_sample_count": len(valid),
+        "reliability_percent": round(reliability, 2),
+        "total_ms": {
+            "mean": round(benchmark_mean(total_values), 2) if total_values else None,
+            "p50": round(benchmark_percentile(total_values, 0.5), 2) if total_values else None,
+            "p95": round(benchmark_percentile(total_values, 0.95), 2) if total_values else None,
+        },
+        "image_validation": {
+            "png_integrity_percent": round(integrity, 2),
+            "expected_resolution_percent": round(resolution, 2),
+            "pixel_reproducibility_percent": round(reproducibility, 2),
+            "method": "CRC PNG + dimensiones IHDR + SHA256 de píxeles desfiltrados",
+        },
+        "score": round(score, 1),
+        "score_provisional": len(valid) < 2,
+        "score_dimensions": {
+            key: round(value, 1) for key, value in dimensions.items()
+        },
+        "score_algorithm": IMAGE_BENCHMARK_SCORE_ALGORITHM,
+    }
+
+
+def video_benchmark_summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    valid = [sample for sample in samples if sample["valid"]]
+    metrics = [json.loads(sample.get("native_metrics_json") or "{}") for sample in valid]
+    total_values = [float(sample["total_ms"]) for sample in valid]
+    reliability = len(valid) / max(1, len(samples)) * 100
+    integrity = (
+        sum(item.get("container_integrity") is True for item in metrics)
+        / max(1, len(samples)) * 100
+    )
+    dimensions = [
+        item["dimensions_match"] for item in metrics
+        if isinstance(item.get("dimensions_match"), bool)
+    ]
+    temporal = [
+        item["temporal_match"] for item in metrics
+        if isinstance(item.get("temporal_match"), bool)
+    ]
+
+    def reproducibility(field: str) -> float | None:
+        hashes = [str(item.get(field) or "") for item in metrics if item.get(field)]
+        if not hashes:
+            return None
+        return max(hashes.count(value) for value in set(hashes)) / len(hashes) * 100
+
+    exact_reproducibility = reproducibility("video_sha256")
+    perceptual_reproducibility = reproducibility("perceptual_sha256")
+    size_values = [
+        float(item["size_bytes"]) for item in metrics
+        if item.get("size_bytes") is not None
+    ]
+    mean_seconds = (benchmark_mean(total_values) or 0) / 1000
+    performance = 100 * math.exp(-mean_seconds / 300) if total_values else 0.0
+    available: dict[str, tuple[float, float]] = {
+        "performance": (performance, 0.20),
+        "container_integrity": (integrity, 0.25),
+        "reliability": (reliability, 0.10),
+    }
+    if dimensions:
+        available["expected_dimensions"] = (
+            sum(dimensions) / len(dimensions) * 100, 0.15,
+        )
+    if temporal:
+        available["expected_temporal_extent"] = (
+            sum(temporal) / len(temporal) * 100, 0.10,
+        )
+    if exact_reproducibility is not None:
+        available["exact_reproducibility"] = (exact_reproducibility, 0.10)
+    if perceptual_reproducibility is not None:
+        available["perceptual_reproducibility"] = (
+            perceptual_reproducibility, 0.10,
+        )
+    measured_weight = sum(weight for _, weight in available.values())
+    score = (
+        sum(value * weight for value, weight in available.values())
+        / max(measured_weight, 0.0001)
+    )
+    complete_validation = bool(dimensions and temporal and perceptual_reproducibility is not None)
+    return {
+        "sample_count": len(samples),
+        "valid_sample_count": len(valid),
+        "reliability_percent": round(reliability, 2),
+        "total_ms": {
+            "mean": round(benchmark_mean(total_values), 2) if total_values else None,
+            "p50": round(benchmark_percentile(total_values, 0.5), 2) if total_values else None,
+            "p95": round(benchmark_percentile(total_values, 0.95), 2) if total_values else None,
+        },
+        "output_size_bytes": {
+            "mean": round(benchmark_mean(size_values), 2) if size_values else None,
+        },
+        "video_validation": {
+            "container_integrity_percent": round(integrity, 2),
+            "expected_dimensions_percent": (
+                round(sum(dimensions) / len(dimensions) * 100, 2)
+                if dimensions else None
+            ),
+            "expected_temporal_extent_percent": (
+                round(sum(temporal) / len(temporal) * 100, 2)
+                if temporal else None
+            ),
+            "exact_reproducibility_percent": (
+                round(exact_reproducibility, 2)
+                if exact_reproducibility is not None else None
+            ),
+            "perceptual_reproducibility_percent": (
+                round(perceptual_reproducibility, 2)
+                if perceptual_reproducibility is not None else None
+            ),
+            "metadata_method": (
+                "ffprobe local cuando está disponible; firma de contenedor en caso contrario"
+            ),
+            "quality_claim": (
+                "No se infiere calidad visual; solo integridad, parámetros observables "
+                "y reproducibilidad objetiva"
+            ),
+        },
+        "score": round(score, 1),
+        "score_provisional": len(valid) < 2 or not complete_validation,
+        "score_dimensions": {
+            key: round(value, 1) for key, (value, _) in available.items()
+        },
+        "score_measured_weight": round(measured_weight, 2),
+        "score_algorithm": VIDEO_BENCHMARK_SCORE_ALGORITHM,
+    }
+
+
+def vision_benchmark_summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    valid = [sample for sample in samples if sample["valid"]]
+    metrics = [json.loads(sample.get("native_metrics_json") or "{}") for sample in valid]
+    recalls = [
+        float(item["normalized_concept_recall"])
+        for item in metrics
+        if item.get("normalized_concept_recall") is not None
+    ]
+    total_values = [float(sample["total_ms"]) for sample in valid]
+    reliability = len(valid) / max(1, len(samples)) * 100
+    quality = (benchmark_mean(recalls) or 0) * 100
+    latency = benchmark_percentile(total_values, 0.5)
+    performance = 0.0 if latency is None else 100 * math.exp(-latency / 5000)
+    score = quality * 0.70 + performance * 0.20 + reliability * 0.10
+    return {
+        "sample_count": len(samples),
+        "valid_sample_count": len(valid),
+        "reliability_percent": round(reliability, 2),
+        "total_ms": {
+            "p50": round(latency, 2) if latency is not None else None,
+            "p95": (
+                round(benchmark_percentile(total_values, 0.95), 2)
+                if total_values else None
+            ),
+        },
+        "vision_quality": {
+            "normalized_concept_recall": (
+                round(benchmark_mean(recalls), 4) if recalls else None
+            ),
+            "method": "recall normalizado de conceptos esperados versionados",
+            "fixture_sha256": VISION_FIXTURE_SHA256,
+        },
+        "score": round(score, 1),
+        "score_provisional": len(valid) < 2,
+        "score_dimensions": {
+            "concept_recall": round(quality, 1),
+            "performance": round(performance, 1),
+            "reliability": round(reliability, 1),
+        },
+        "score_algorithm": VISION_BENCHMARK_SCORE_ALGORITHM,
+    }
+
+
+def tts_benchmark_summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    valid = [sample for sample in samples if sample["valid"]]
+    metrics = [json.loads(sample.get("native_metrics_json") or "{}") for sample in valid]
+    total_values = [float(sample["total_ms"]) for sample in valid]
+    rtf_values = [
+        float(item["rtf"]) for item in metrics if item.get("rtf") is not None
+    ]
+    duration_values = [
+        float(item["duration_seconds"])
+        for item in metrics if item.get("duration_seconds") is not None
+    ]
+    wer_values = [
+        float(item["wer"]) for item in metrics
+        if item.get("intelligibility_available") is True and item.get("wer") is not None
+    ]
+    intelligibility_complete = bool(metrics) and len(wer_values) == len(metrics)
+    reliability = len(valid) / max(1, len(samples)) * 100
+    integrity = (
+        sum(
+            item.get("audio_integrity") is True and item.get("non_silent") is True
+            for item in metrics
+        )
+        / max(1, len(samples))
+        * 100
+    )
+    mean_rtf = benchmark_mean(rtf_values)
+    performance = (
+        0.0 if mean_rtf is None else min(100.0, 100 / max(1.0, mean_rtf))
+    )
+    intelligibility = (
+        max(0.0, 100 * (1 - min(1.0, benchmark_mean(wer_values) or 0)))
+        if intelligibility_complete else 0.0
+    )
+    # Intelligibility keeps its full fixed weight. Missing ASR therefore lowers,
+    # rather than renormalizes, the score and prevents a false quality claim.
+    score = (
+        intelligibility * 0.50
+        + performance * 0.20
+        + integrity * 0.20
+        + reliability * 0.10
+    )
+    return {
+        "sample_count": len(samples),
+        "valid_sample_count": len(valid),
+        "reliability_percent": round(reliability, 2),
+        "total_ms": {
+            "p50": (
+                round(benchmark_percentile(total_values, 0.5), 2)
+                if total_values else None
+            ),
+            "p95": (
+                round(benchmark_percentile(total_values, 0.95), 2)
+                if total_values else None
+            ),
+        },
+        "duration_seconds": {
+            "mean": (
+                round(benchmark_mean(duration_values), 4) if duration_values else None
+            ),
+        },
+        "real_time_factor": {
+            "mean": round(mean_rtf, 4) if mean_rtf is not None else None,
+        },
+        "audio_validation": {
+            "integrity_percent": round(integrity, 2),
+            "formats": sorted({
+                str(item.get("container") or "") for item in metrics
+                if item.get("container")
+            }),
+            "sample_rates_hz": sorted({
+                int(item["sample_rate_hz"]) for item in metrics
+                if item.get("sample_rate_hz") is not None
+            }),
+        },
+        "intelligibility": {
+            "available": intelligibility_complete,
+            "word_error_rate": (
+                round(benchmark_mean(wer_values), 4)
+                if intelligibility_complete else None
+            ),
+            "method": (
+                "round-trip con Whisper local; audio y transcripción no persistidos"
+                if intelligibility_complete
+                else "no medida: Whisper local no disponible o falló"
+            ),
+            "quality_claim": (
+                "inteligibilidad medida mediante ASR local"
+                if intelligibility_complete
+                else "sin afirmación de inteligibilidad; score penalizado"
+            ),
+        },
+        "score": round(score, 1),
+        "score_provisional": len(valid) < 2 or not intelligibility_complete,
+        "score_dimensions": {
+            "intelligibility": round(intelligibility, 1),
+            "performance": round(performance, 1),
+            "audio_integrity": round(integrity, 1),
+            "reliability": round(reliability, 1),
+        },
+        "score_algorithm": TTS_BENCHMARK_SCORE_ALGORITHM,
+    }
+
+
+def semantic_benchmark_summary(
+    samples: list[dict[str, Any]],
+    protocol_id: str,
+) -> dict[str, Any]:
+    valid = [sample for sample in samples if sample["valid"]]
+    metrics = [json.loads(sample.get("native_metrics_json") or "{}") for sample in valid]
+    total_values = [float(sample["total_ms"]) for sample in valid]
+    reliability = len(valid) / max(1, len(samples)) * 100
+    if protocol_id == EMBEDDINGS_BENCHMARK_PROTOCOL_ID:
+        quality_values = [
+            float(item["pair_accuracy"]) for item in metrics
+            if item.get("pair_accuracy") is not None
+        ]
+        margin_values = [
+            float(item["semantic_margin"]) for item in metrics
+            if item.get("semantic_margin") is not None
+        ]
+        throughput_values = [
+            float(item["items_per_second"]) for item in metrics
+            if item.get("items_per_second") is not None
+        ]
+        quality = (benchmark_mean(quality_values) or 0) * 100
+        speed = min(100.0, math.log1p(benchmark_mean(throughput_values) or 0) / math.log1p(500) * 100)
+        score = quality * 0.65 + speed * 0.25 + reliability * 0.10
+        return {
+            "sample_count": len(samples),
+            "valid_sample_count": len(valid),
+            "reliability_percent": round(reliability, 2),
+            "total_ms": {
+                "p50": round(benchmark_percentile(total_values, 0.5), 2) if total_values else None,
+                "p95": round(benchmark_percentile(total_values, 0.95), 2) if total_values else None,
+            },
+            "items_per_second": {
+                "mean": round(benchmark_mean(throughput_values), 2) if throughput_values else None,
+            },
+            "semantic_quality": {
+                "pair_accuracy": round(benchmark_mean(quality_values), 4) if quality_values else None,
+                "mean_margin": round(benchmark_mean(margin_values), 4) if margin_values else None,
+            },
+            "score": round(score, 1),
+            "score_provisional": len(valid) < 2,
+            "score_dimensions": {
+                "quality": round(quality, 1),
+                "speed": round(speed, 1),
+                "reliability": round(reliability, 1),
+            },
+            "score_algorithm": EMBEDDINGS_BENCHMARK_SCORE_ALGORITHM,
+        }
+    ndcg_values = [
+        float(item["ndcg"]) for item in metrics if item.get("ndcg") is not None
+    ]
+    mrr_values = [
+        float(item["mrr"]) for item in metrics if item.get("mrr") is not None
+    ]
+    quality = ((benchmark_mean(ndcg_values) or 0) + (benchmark_mean(mrr_values) or 0)) * 50
+    latency = benchmark_percentile(total_values, 0.5)
+    speed = 0.0 if latency is None else 100 * math.exp(-latency / 1000)
+    score = quality * 0.75 + speed * 0.15 + reliability * 0.10
+    return {
+        "sample_count": len(samples),
+        "valid_sample_count": len(valid),
+        "reliability_percent": round(reliability, 2),
+        "total_ms": {
+            "p50": round(latency, 2) if latency is not None else None,
+            "p95": round(benchmark_percentile(total_values, 0.95), 2) if total_values else None,
+        },
+        "ranking_quality": {
+            "ndcg_mean": round(benchmark_mean(ndcg_values), 4) if ndcg_values else None,
+            "mrr_mean": round(benchmark_mean(mrr_values), 4) if mrr_values else None,
+        },
+        "score": round(score, 1),
+        "score_provisional": len(valid) < 2,
+        "score_dimensions": {
+            "quality": round(quality, 1),
+            "latency": round(speed, 1),
+            "reliability": round(reliability, 1),
+        },
+        "score_algorithm": RERANKING_BENCHMARK_SCORE_ALGORITHM,
+    }
+
+
+def benchmark_summary(run_id: str) -> dict[str, Any]:
+    samples = db.rows(
+        """
+        SELECT * FROM benchmark_samples
+        WHERE run_id=? AND phase='measured'
+        ORDER BY case_id,repetition
+        """,
+        (run_id,),
+    )
+    protocol_rows = db.rows("SELECT protocol_id FROM benchmark_runs WHERE id=?", (run_id,))
+    if protocol_rows:
+        if protocol_rows[0]["protocol_id"] == ASR_BENCHMARK_PROTOCOL_ID:
+            return asr_benchmark_summary(samples)
+        if protocol_rows[0]["protocol_id"] == IMAGE_BENCHMARK_PROTOCOL_ID:
+            return image_benchmark_summary(samples)
+        if protocol_rows[0]["protocol_id"] == VIDEO_BENCHMARK_PROTOCOL_ID:
+            return video_benchmark_summary(samples)
+        if protocol_rows[0]["protocol_id"] == VISION_BENCHMARK_PROTOCOL_ID:
+            return vision_benchmark_summary(samples)
+        if protocol_rows[0]["protocol_id"] == TTS_BENCHMARK_PROTOCOL_ID:
+            return tts_benchmark_summary(samples)
+        if protocol_rows[0]["protocol_id"] in {
+            EMBEDDINGS_BENCHMARK_PROTOCOL_ID,
+            RERANKING_BENCHMARK_PROTOCOL_ID,
+        }:
+            return semantic_benchmark_summary(samples, protocol_rows[0]["protocol_id"])
+    valid = [sample for sample in samples if sample["valid"]]
+    ttft_values = [float(sample["ttft_ms"]) for sample in valid if sample["ttft_ms"] is not None]
+    tps_values = [float(sample["output_tps"]) for sample in valid if sample["output_tps"] is not None]
+    chars_values = [
+        float(sample["chars_per_second"])
+        for sample in valid
+        if sample["chars_per_second"] is not None
+    ]
+    total_values = [float(sample["total_ms"]) for sample in valid]
+    mean_tps = benchmark_mean(tps_values)
+    cases: dict[str, dict[str, Any]] = {}
+    case_variations: list[float] = []
+    for case_id in dict.fromkeys(sample["case_id"] for sample in samples):
+        case_samples = [sample for sample in samples if sample["case_id"] == case_id]
+        case_valid = [sample for sample in case_samples if sample["valid"]]
+        case_tps = [float(item["output_tps"]) for item in case_valid if item["output_tps"] is not None]
+        case_ttft = [float(item["ttft_ms"]) for item in case_valid if item["ttft_ms"] is not None]
+        case_mean = benchmark_mean(case_tps)
+        case_cv = None
+        if case_mean and len(case_tps) > 1:
+            variance = sum((value - case_mean) ** 2 for value in case_tps) / len(case_tps)
+            case_cv = math.sqrt(variance) / case_mean
+            case_variations.append(case_cv)
+        cases[case_id] = {
+            "samples": len(case_samples),
+            "valid_samples": len(case_valid),
+            "ttft_ms_p50": round(benchmark_percentile(case_ttft, 0.5), 2) if case_ttft else None,
+            "output_tokens_per_second_mean": round(case_mean, 2) if case_mean is not None else None,
+            "coefficient_of_variation": round(case_cv, 4) if case_cv is not None else None,
+            "early_stops": sum(
+                1 for item in case_valid
+                if json.loads(item.get("native_metrics_json") or "{}").get("early_stop")
+            ),
+        }
+    tps_cv = benchmark_mean(case_variations)
+    reliability = len(valid) / max(1, len(samples)) * 100
+    ttft_p50 = benchmark_percentile(ttft_values, 0.5)
+    latency_score = 0.0 if ttft_p50 is None else 100 * math.exp(-ttft_p50 / 1800)
+    throughput_score = 0.0 if mean_tps is None else min(
+        100.0,
+        math.log1p(max(0, mean_tps)) / math.log1p(100) * 100,
+    )
+    stability_score = (
+        None if tps_cv is None else max(0.0, 100 - min(100, tps_cv * 250))
+    )
+    weights = {"throughput": 0.35, "latency": 0.30, "stability": 0.20, "reliability": 0.15}
+    dimensions: dict[str, float | None] = {
+        "throughput": throughput_score,
+        "latency": latency_score,
+        "stability": stability_score,
+        "reliability": reliability,
+    }
+    available_weight = sum(weights[key] for key, value in dimensions.items() if value is not None)
+    score = sum(
+        float(value) * weights[key]
+        for key, value in dimensions.items()
+        if value is not None
+    ) / max(available_weight, 0.0001)
+    telemetry = db.rows(
+        """
+        SELECT AVG(gpu_power_watts) AS avg_power,MAX(gpu_power_watts) AS max_power,
+            MAX(gpu_memory_used) AS max_gpu_memory,MAX(memory_used) AS max_memory,
+            MAX(gpu_temperature) AS max_temperature,AVG(gpu_utilization) AS avg_gpu_utilization
+        FROM benchmark_telemetry WHERE run_id=?
+        """,
+        (run_id,),
+    )[0]
+    output_tokens = sum(int(sample["output_tokens"] or 0) for sample in valid)
+    measured_seconds = sum(float(sample["total_ms"]) for sample in valid) / 1000
+    average_power = telemetry.get("avg_power")
+    joules_per_token = (
+        float(average_power) * measured_seconds / output_tokens
+        if average_power is not None and output_tokens > 0
+        else None
+    )
+    return {
+        "sample_count": len(samples),
+        "valid_sample_count": len(valid),
+        "reliability_percent": round(reliability, 2),
+        "ttft_ms": {
+            "p50": round(ttft_p50, 2) if ttft_p50 is not None else None,
+            "p95": round(benchmark_percentile(ttft_values, 0.95), 2) if ttft_values else None,
+        },
+        "total_ms": {
+            "p50": round(benchmark_percentile(total_values, 0.5), 2) if total_values else None,
+            "p95": round(benchmark_percentile(total_values, 0.95), 2) if total_values else None,
+        },
+        "output_tokens_per_second": {
+            "mean": round(mean_tps, 2) if mean_tps is not None else None,
+            "p50": round(benchmark_percentile(tps_values, 0.5), 2) if tps_values else None,
+            "coefficient_of_variation": round(tps_cv, 4) if tps_cv is not None else None,
+        },
+        "characters_per_second": {
+            "mean": round(benchmark_mean(chars_values), 2) if chars_values else None,
+        },
+        "resources": {
+            "average_gpu_power_watts": average_power,
+            "max_gpu_power_watts": telemetry.get("max_power"),
+            "max_gpu_memory_bytes": telemetry.get("max_gpu_memory"),
+            "max_memory_bytes": telemetry.get("max_memory"),
+            "max_gpu_temperature_c": telemetry.get("max_temperature"),
+            "average_gpu_utilization": telemetry.get("avg_gpu_utilization"),
+            "joules_per_output_token": round(joules_per_token, 4) if joules_per_token else None,
+            "energy_method": "potencia GPU media del run × tiempo medido",
+        },
+        "cases": cases,
+        "score": round(score, 1),
+        "score_provisional": stability_score is None,
+        "score_dimensions": {
+            key: round(value, 1) if value is not None else None
+            for key, value in dimensions.items()
+        },
+        "score_algorithm": BENCHMARK_SCORE_ALGORITHM,
+    }
+
+
+BENCHMARK_GGUF_PORT = 18_990
+BENCHMARK_GGUF_PROFILE = {"id": "benchmark-gguf", "name": "Benchmark GGUF"}
+GGUF_AUXILIARY_PATTERN = re.compile(r"(?i)(?:^|/)(?:mtp|dspark|draft|eagle)[-_/]")
+
+
+def local_gguf_benchmark_artifacts() -> list[dict[str, Any]]:
+    """Every complete GGUF group in the local Hugging Face cache, with or without a profile."""
+    hub = huggingface_cache_dir()
+    if not hub.is_dir():
+        return []
+    artifacts: list[dict[str, Any]] = []
+    for directory in sorted(hub.glob("models--*")):
+        repo_id = directory.name.removeprefix("models--").replace("--", "/")
+        details = local_hf_repo_details(directory)
+        snapshots = details["snapshots"]
+        preferred = details["refs"].get("main")
+        snapshot = next((item for item in snapshots if item["commit"] == preferred), None)
+        snapshot = snapshot or (snapshots[-1] if snapshots else None)
+        if not snapshot:
+            continue
+        siblings = [
+            SimpleNamespace(rfilename=item["name"], size=item["size"])
+            for item in snapshot["files"]
+            if item["complete"] and not GGUF_AUXILIARY_PATTERN.search(item["name"])
+        ]
+        mmproj = hf_mmproj_files(siblings)
+        for group in hf_gguf_groups(siblings):
+            if not group["complete"] or not group["size"]:
+                continue
+            basename = Path(str(group["name"])).name
+            quant_match = QUANTIZATION_PATTERN.search(basename)
+            key = content_hash({
+                "repo": repo_id,
+                "revision": snapshot["commit"],
+                "files": group["files"],
+            })[:16]
+            artifacts.append({
+                "key": key,
+                "repo_id": repo_id,
+                "revision": snapshot["commit"],
+                "files": list(group["files"]),
+                "quantization": quant_match.group(1).upper() if quant_match else basename,
+                "size": int(group["size"]),
+                "mmproj": mmproj[0]["name"] if mmproj else "",
+            })
+    return artifacts
+
+
+def gguf_benchmark_model(artifact: dict[str, Any]) -> dict[str, Any]:
+    repo_id = str(artifact["repo_id"])
+    capabilities = hf_model_capabilities(repo_id, None, [])
+    vision = "vision" in capabilities["tasks"] and bool(artifact.get("mmproj"))
+    model = persistent_model_config("ollama", repo_id)
+    alias = f"benchmark-gguf-{artifact['key']}"
+    model.update({
+        "id": f"gguf-{artifact['key']}",
+        "name": f"{repo_id} · {artifact['quantization']}",
+        "engine": "llama.cpp",
+        "model_ref": alias,
+        "model_alias": alias,
+        "model_repo": repo_id,
+        "model_filename": artifact["files"][0],
+        "model_files": list(artifact["files"]),
+        "mmproj_repo": repo_id if vision else "",
+        "mmproj_filename": str(artifact.get("mmproj") or "") if vision else "",
+        "task": "vision" if vision else "chat",
+        "input_modalities": ["text", "image"] if vision else ["text"],
+        "output_modalities": ["text"],
+        "port": BENCHMARK_GGUF_PORT,
+        "source": "GGUF descargado sin perfil",
+        "runtime_requirement": "",
+        "estimated_memory_mb": math.ceil(int(artifact["size"]) / (1024 * 1024) * 1.12) + 1024,
+        "_benchmark_target": f"gguf:{artifact['key']}",
+        "_benchmark_context": 8192,
+    })
+    return model
+
+
+def gguf_memory_block_reason(size: int) -> str:
+    total = psutil.virtual_memory().total
+    required = int(size * 1.12) + 2 * 1024**3
+    usable = total - 4 * 1024**3
+    if required <= usable:
+        return ""
+    return (
+        f"No cabe en memoria: necesita ~{required / 1024**3:.0f} GB "
+        f"y el equipo tiene {total / 1024**3:.0f} GB"
+    )
+
+
+async def resolve_benchmark_target(target: str) -> dict[str, Any]:
+    if target.startswith("gguf:"):
+        key = target.removeprefix("gguf:")
+        artifact = next(
+            (
+                item for item in await asyncio.to_thread(local_gguf_benchmark_artifacts)
+                if item["key"] == key
+            ),
+            None,
+        )
+        if not artifact:
+            raise HTTPException(status_code=404, detail="El GGUF ya no está en la caché local")
+        return gguf_benchmark_model(artifact)
+    if target.startswith("tts:"):
+        repo = target.removeprefix("tts:")
+        local = (
+            await asyncio.to_thread(managed_tts_local_artifact, repo)
+            if repo in MANAGED_TTS_MODELS else None
+        )
+        if not local:
+            raise HTTPException(status_code=404, detail="El modelo TTS no está descargado")
+        return managed_tts_model(repo, local)
+    if target == "comfyui:flux1-schnell-fp8":
+        if not managed_comfyui_enabled():
+            raise HTTPException(status_code=409, detail="ComfyUI gestionado no está habilitado")
+        model = await asyncio.to_thread(managed_flux_benchmark_model)
+        if not model:
+            raise HTTPException(
+                status_code=404,
+                detail="El checkpoint FLUX gestionado no existe localmente",
+            )
+        return model
+    if target == "comfyui:wan2.1-t2v-1.3b":
+        if not managed_comfyui_enabled():
+            raise HTTPException(status_code=409, detail="ComfyUI gestionado no está habilitado")
+        model = await asyncio.to_thread(managed_wan_benchmark_model)
+        if not model:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Los artefactos gestionados de Wan no están completos "
+                    "(diffusion model, text encoder y VAE)"
+                ),
+            )
+        if not local_benchmark_endpoint(model_endpoint(model)):
+            raise HTTPException(
+                status_code=400,
+                detail="El benchmark Wan solo admite ComfyUI en loopback",
+            )
+        return model
+    if target.startswith("whisper:"):
+        model_id = target.removeprefix("whisper:")
+        models = await whisper_service_benchmark_models()
+        model = next(
+            (item for item in models if str(item.get("model_ref") or "") == model_id),
+            None,
+        )
+        if not model:
+            raise HTTPException(
+                status_code=404,
+                detail="El modelo Whisper no está instalado en el servicio local",
+            )
+        return model
+    if target.startswith("profile:"):
+        reference = target.removeprefix("profile:")
+        profile_id, separator, model_id = reference.partition(":")
+        model_id = model_id if separator else "primary"
+        profile = next(
+            (item for item in running_profiles() if item["id"] == profile_id),
+            None,
+        )
+        if not profile:
+            raise HTTPException(status_code=409, detail="El perfil debe estar cargado para medirlo")
+        runtime_models = running_profile_models(profile)
+        model = next((item for item in runtime_models if item["id"] == model_id), None)
+        if not model:
+            raise HTTPException(status_code=404, detail="Modelo cargado no encontrado en el perfil")
+        runtime_key = _runtime_profile_models.get(profile_id, {}).get(model_id, model_id)
+        model["_benchmark_target"] = f"profile:{profile_id}:{model_id}"
+        model["_benchmark_profile_id"] = profile_id
+        model["_benchmark_runtime_key"] = runtime_key
+        model["_benchmark_context"] = _runtime_effective_contexts.get(
+            runtime_key,
+            int(model.get("context_size") or 8192),
+        )
+        if str(model.get("task") or "") in {"vision", "tts", "embeddings", "reranking"}:
+            if not profile_model_is_downloaded(model):
+                raise HTTPException(
+                    status_code=404,
+                    detail="El modelo no está instalado o configurado localmente",
+                )
+            try:
+                endpoint = model_endpoint(model)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="No se puede resolver el endpoint local del modelo",
+                ) from exc
+            if not local_benchmark_endpoint(endpoint):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Los benchmarks solo admiten endpoints loopback",
+                )
+        return model
+    name = target.removeprefix("ollama:")
+    if not re.fullmatch(r"[A-Za-z0-9._:/-]+", name):
+        raise HTTPException(status_code=400, detail="Objetivo de benchmark inválido")
+    if not local_benchmark_endpoint(settings.ollama_url):
+        raise HTTPException(
+            status_code=400,
+            detail="Los benchmarks Ollama solo admiten endpoints loopback",
+        )
+    tags = await ollama_payload("/api/tags", timeout=20)
+    installed = next(
+        (
+            item for item in tags.get("models", [])
+            if normalized_ollama_name(str(item.get("name") or item.get("model") or ""))
+            == normalized_ollama_name(name)
+        ),
+        None,
+    )
+    if not installed:
+        raise HTTPException(status_code=404, detail="El modelo Ollama no está instalado")
+    name = str(installed.get("name") or installed.get("model") or name)
+    ollama_details = await benchmark_ollama_details(name)
+    capabilities = {
+        str(value).casefold()
+        for value in ollama_details.get("capabilities", [])
+        if isinstance(value, str)
+    }
+    is_vision = "vision" in capabilities
+    is_embeddings = bool({"embedding", "embeddings"} & capabilities)
+    return {
+        "id": "ollama",
+        "name": name,
+        "engine": "ollama",
+        "model_ref": name,
+        "model_alias": name,
+        "task": "vision" if is_vision else "embeddings" if is_embeddings else "chat",
+        "input_modalities": ["text", "image"] if is_vision else ["text"],
+        "output_modalities": ["embeddings"] if is_embeddings else ["text"],
+        "context_size": 8192,
+        "timeout_seconds": 600,
+        "_benchmark_target": f"ollama:{name}",
+        "_benchmark_context": 8192,
+        "_benchmark_ollama_info": installed,
+        "_benchmark_ollama_details": ollama_details,
+    }
+
+
+def benchmark_hf_local_artifact(model: dict[str, Any]) -> dict[str, Any]:
+    """Locate the cached snapshot file that the runtime actually loads."""
+    repo = str(model.get("model_repo") or "")
+    filenames = profile_model_download_files(model)
+    if not filenames and model.get("model_filename"):
+        filenames = [str(model["model_filename"])]
+    snapshot_paths: list[tuple[str, Path]] = []
+    configured = str(model.get("model_file") or "")
+    if repo and filenames:
+        for filename in filenames:
+            try:
+                snapshot_paths.append((
+                    filename,
+                    Path(cached_hf_file(repo, filename)),
+                ))
+            except Exception:
+                return {}
+    elif configured:
+        snapshot_paths.append((
+            str(model.get("model_filename") or Path(configured).name),
+            Path(configured).expanduser(),
+        ))
+    if not snapshot_paths:
+        return {}
+    commit = ""
+    parts = snapshot_paths[0][1].parts
+    if "snapshots" in parts:
+        index = parts.index("snapshots")
+        if index + 1 < len(parts):
+            commit = parts[index + 1]
+    blobs: list[dict[str, Any]] = []
+    for filename, snapshot_path in snapshot_paths:
+        try:
+            blob = snapshot_path.resolve()
+            size = blob.stat().st_size
+        except OSError:
+            return {
+                "revision": commit,
+                "filename": ", ".join(name for name, _ in snapshot_paths),
+            }
+        blobs.append({
+            "filename": filename,
+            "size": size,
+            "digest": (
+                blob.name.lower()
+                if re.fullmatch(r"[a-fA-F0-9]{64}", blob.name)
+                else ""
+            ),
+        })
+    digest = (
+        str(blobs[0]["digest"])
+        if len(blobs) == 1 and blobs[0]["digest"]
+        else content_hash(blobs)
+    )
+    return {
+        "revision": commit,
+        "filename": ", ".join(item["filename"] for item in blobs),
+        "size": sum(int(item["size"]) for item in blobs),
+        "digest": digest,
+        "files": blobs,
+    }
+
+
+def benchmark_artifact_fingerprint(
+    source: str,
+    source_id: str,
+    revision: str,
+    filename: str,
+    digest: str,
+    size: int | None,
+) -> str:
+    normalized = digest.removeprefix("sha256:").lower()
+    if re.fullmatch(r"[a-f0-9]{64}", normalized):
+        return normalized
+    return content_hash({
+        "source": source,
+        "source_id": source_id,
+        "revision": revision,
+        "filename": filename,
+        "digest": digest,
+        "size": size,
+    })
+
+
+def benchmark_artifact_was_measured(artifact_hash: str, protocol_id: str) -> bool:
+    rows = db.rows(
+        """
+        SELECT r.id
+        FROM benchmark_runs r
+        JOIN benchmark_models m ON m.id=r.model_id
+        WHERE m.artifact_hash=? AND r.protocol_id=? AND r.score_algorithm=?
+            AND r.status='completed' AND r.valid=1
+        LIMIT 1
+        """,
+        (
+            artifact_hash,
+            protocol_id,
+            BENCHMARK_SCORE_ALGORITHMS[protocol_id],
+        ),
+    )
+    return bool(rows)
+
+
+def benchmark_artifact_completed_in_suite(artifact_hash: str, protocol_id: str) -> bool:
+    rows = db.rows(
+        """
+        SELECT id
+        FROM benchmark_suite_items
+        WHERE artifact_hash=? AND protocol_id=? AND status='completed'
+        LIMIT 1
+        """,
+        (artifact_hash, protocol_id),
+    )
+    return bool(rows)
+
+
+def local_benchmark_endpoint(endpoint: str) -> bool:
+    try:
+        hostname = (urlparse(endpoint).hostname or "").casefold()
+    except ValueError:
+        return False
+    return hostname in {"127.0.0.1", "localhost", "::1"}
+
+
+def normalized_whisper_model_id(value: str) -> str:
+    model_id = value.strip().casefold()
+    aliases = {
+        "whisper": "turbo",
+        "whisper-turbo": "turbo",
+        "openai/whisper-large-v3-turbo": "turbo",
+        "whisper-large-v3-turbo": "turbo",
+    }
+    if model_id in aliases:
+        return aliases[model_id]
+    model_id = model_id.removeprefix("openai/").removeprefix("whisper-")
+    return model_id
+
+
+async def whisper_service_benchmark_models() -> list[dict[str, Any]]:
+    endpoint = settings.whisper_url.rstrip("/")
+    if not local_benchmark_endpoint(endpoint):
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            models_response, health_response = await asyncio.gather(
+                client.get(f"{endpoint}/v1/models"),
+                client.get(f"{endpoint}/health"),
+            )
+            models_response.raise_for_status()
+            health_response.raise_for_status()
+            listed = models_response.json()
+            health = health_response.json()
+    except (httpx.HTTPError, ValueError):
+        return []
+    loaded = {
+        str(value) for value in (
+            health.get("loaded_models", []) if isinstance(health, dict) else []
+        ) if isinstance(value, str)
+    }
+    result: list[dict[str, Any]] = []
+    for descriptor in listed.get("data", []) if isinstance(listed, dict) else []:
+        if not isinstance(descriptor, dict):
+            continue
+        model_id = str(descriptor.get("id") or "")
+        installed = descriptor.get("installed") is True or model_id in loaded
+        digest = str(descriptor.get("sha256") or "")
+        size = integer_value(descriptor.get("bytes"))
+        if not model_id or not installed or not re.fullmatch(r"[a-f0-9]{64}", digest):
+            continue
+        result.append({
+            "id": model_id,
+            "name": str(descriptor.get("name") or model_id),
+            "engine": "whisper",
+            "model_ref": model_id,
+            "model_alias": model_id,
+            "model_repo": str(descriptor.get("repo_id") or f"openai/whisper-{model_id}"),
+            "task": "asr",
+            "input_modalities": ["audio"],
+            "output_modalities": ["text"],
+            "endpoint_url": endpoint,
+            "timeout_seconds": 600,
+            "_benchmark_target": f"whisper:{model_id}",
+            "_benchmark_artifact_digest": digest,
+            "_benchmark_artifact_size": size,
+            "_benchmark_runtime_version": str(health.get("version") or ""),
+            "_benchmark_loaded": model_id in loaded,
+        })
+    return result
+
+
+MANAGED_TTS_MODELS: dict[str, dict[str, str]] = {
+    "Qwen/Qwen3-TTS-12Hz-1.7B-Base": {"engine": "qwen3", "name": "Qwen3-TTS 1.7B Base"},
+    "Qwen/Qwen3-TTS-12Hz-0.6B-Base": {"engine": "qwen3", "name": "Qwen3-TTS 0.6B Base"},
+    "ResembleAI/chatterbox": {"engine": "chatterbox", "name": "Chatterbox Multilingual"},
+    "k2-fsa/OmniVoice": {"engine": "omnivoice", "name": "OmniVoice"},
+    "SWivid/F5-TTS": {"engine": "f5", "name": "F5-TTS v1 Base", "requires": "charactr/vocos-mel-24khz"},
+    "FunAudioLLM/Fun-CosyVoice3-0.5B-2512": {"engine": "cosyvoice", "name": "CosyVoice3 0.5B"},
+    "fishaudio/s2-pro": {"engine": "fish", "name": "Fish Audio S2 Pro"},
+    "mistralai/Voxtral-4B-TTS-2603": {"engine": "voxtral", "name": "Voxtral 4B TTS"},
+}
+
+
+class ManagedTtsUnavailable(ExternalRuntimeUnavailable):
+    pass
+
+
+def managed_tts_local_artifact(repo: str) -> dict[str, Any] | None:
+    directory = huggingface_cache_dir() / f"models--{repo.replace('/', '--')}"
+    if not directory.is_dir():
+        return None
+    details = local_hf_repo_details(directory)
+    snapshots = details["snapshots"]
+    preferred = details["refs"].get("main")
+    snapshot = next((item for item in snapshots if item["commit"] == preferred), None)
+    snapshot = snapshot or (snapshots[-1] if snapshots else None)
+    if not snapshot or not snapshot["complete"] or not snapshot["files"]:
+        return None
+    files = sorted((str(item["name"]), int(item["size"])) for item in snapshot["files"])
+    return {
+        "revision": snapshot["commit"],
+        "size": sum(size for _, size in files),
+        "digest": content_hash({"repo": repo, "revision": snapshot["commit"], "files": files}),
+    }
+
+
+def managed_tts_model(repo: str, local: dict[str, Any]) -> dict[str, Any]:
+    spec = MANAGED_TTS_MODELS[repo]
+    return {
+        "id": repo,
+        "name": spec["name"],
+        "engine": "mydgx-tts",
+        "model_ref": repo,
+        "model_alias": repo,
+        "model_repo": repo,
+        "task": "tts",
+        "input_modalities": ["text"],
+        "output_modalities": ["audio"],
+        "api_protocol": "mydgx-tts",
+        "endpoint_url": settings.tts_url.rstrip("/"),
+        "timeout_seconds": 900,
+        "runtime_requirement": f"MyDGX TTS CUDA · {spec['engine']}",
+        "_benchmark_target": f"tts:{repo}",
+        "_benchmark_artifact_digest": local["digest"],
+        "_benchmark_artifact_size": local["size"],
+        "_benchmark_tts_engine": spec["engine"],
+    }
+
+
+async def managed_tts_health() -> dict[str, Any] | None:
+    endpoint = settings.tts_url.rstrip("/")
+    if not local_benchmark_endpoint(endpoint):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(f"{endpoint}/health")
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+async def managed_tts_benchmark_models() -> list[dict[str, Any]]:
+    health = await managed_tts_health()
+    engines = health.get("engines", {}) if health else {}
+    result: list[dict[str, Any]] = []
+    for repo, spec in MANAGED_TTS_MODELS.items():
+        local = await asyncio.to_thread(managed_tts_local_artifact, repo)
+        if not local:
+            continue
+        missing = [
+            dependency for dependency in spec.get("requires", "").split()
+            if not await asyncio.to_thread(managed_tts_local_artifact, dependency)
+        ]
+        if missing:
+            blocked = f"Falta descargar {', '.join(missing)}"
+        elif health is None:
+            blocked = "Runtime TTS CUDA de MyDGX no activo (mydgx-tts.service)"
+        elif not engines.get(spec["engine"]):
+            blocked = f"Motor CUDA {spec['engine']} pendiente de instalar en mydgx-tts"
+        else:
+            blocked = ""
+        result.append({**managed_tts_model(repo, local), "_benchmark_blocked_reason": blocked})
+    return result
+
+
+async def load_managed_tts_model(repo: str) -> None:
+    endpoint = settings.tts_url.rstrip("/")
+    if not local_benchmark_endpoint(endpoint):
+        raise RuntimeError("El runtime TTS gestionado no es loopback")
+    try:
+        async with httpx.AsyncClient(timeout=1500) as client:
+            response = await client.post(f"{endpoint}/v1/models/{repo}/load")
+    except httpx.ConnectError as exc:
+        raise ManagedTtsUnavailable("Runtime TTS CUDA de MyDGX no activo") from exc
+    if response.status_code == 409:
+        raise ManagedTtsUnavailable(redact_log_text(response.text, 300))
+    if response.status_code != 200:
+        raise RuntimeError(f"No se pudo cargar {repo}: {redact_log_text(response.text, 400)}")
+
+
+async def release_tts_models() -> None:
+    endpoint = settings.tts_url.rstrip("/")
+    if not local_benchmark_endpoint(endpoint):
+        return
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.delete(f"{endpoint}/v1/models")
+            response.raise_for_status()
+    except httpx.HTTPError:
+        pass
+
+
+def semantic_profile_artifact(
+    model: dict[str, Any],
+    ollama_models: dict[str, dict[str, Any]],
+) -> tuple[str, int | None] | None:
+    try:
+        endpoint = model_endpoint(model)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not local_benchmark_endpoint(endpoint) or not profile_model_is_downloaded(model):
+        return None
+    engine = str(model.get("engine") or "")
+    if engine == "ollama":
+        info = ollama_models.get(normalized_ollama_name(str(model.get("model_ref") or "")))
+        if not info:
+            return None
+        digest = str(info.get("digest") or "")
+        size = integer_value(info.get("size"))
+        return benchmark_artifact_fingerprint(
+            "ollama", str(model.get("model_ref") or ""), "", "", digest, size,
+        ), size
+    local = benchmark_hf_local_artifact(model)
+    size = integer_value(local.get("size"))
+    digest = str(local.get("digest") or "")
+    if digest:
+        return benchmark_artifact_fingerprint(
+            "huggingface",
+            str(model.get("model_repo") or model.get("model_ref") or ""),
+            str(local.get("revision") or ""),
+            str(local.get("filename") or model.get("model_filename") or ""),
+            digest,
+            size,
+        ), size
+    parsed = urlparse(endpoint)
+    configured_fingerprint = content_hash({
+        "kind": "local-semantic-api",
+        "task": model.get("task"),
+        "engine": engine,
+        "model_ref": model.get("model_ref"),
+        "endpoint": {
+            "scheme": parsed.scheme,
+            "host": "loopback",
+            "port": parsed.port,
+            "path": parsed.path.rstrip("/"),
+        },
+    })
+    return configured_fingerprint, size
+
+
+def configured_local_profile_artifact(
+    model: dict[str, Any],
+) -> tuple[str, int | None] | None:
+    """Identify a configured local API without probing or exposing local paths."""
+    try:
+        endpoint = model_endpoint(model)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not local_benchmark_endpoint(endpoint) or not profile_model_is_downloaded(model):
+        return None
+    local = benchmark_hf_local_artifact(model)
+    size = integer_value(local.get("size"))
+    digest = str(local.get("digest") or "")
+    if digest:
+        return benchmark_artifact_fingerprint(
+            "huggingface",
+            str(model.get("model_repo") or model.get("model_ref") or ""),
+            str(local.get("revision") or ""),
+            str(local.get("filename") or model.get("model_filename") or ""),
+            digest,
+            size,
+        ), size
+    parsed = urlparse(endpoint)
+    return content_hash({
+        "kind": "local-profile-api",
+        "task": model.get("task"),
+        "engine": model.get("engine"),
+        "model_ref": model.get("model_ref"),
+        "api_protocol": model.get("api_protocol"),
+        "endpoint": {
+            "scheme": parsed.scheme,
+            "host": "loopback",
+            "port": parsed.port,
+            "path": parsed.path.rstrip("/"),
+        },
+    }), size
+
+
+async def benchmark_suite_candidates(include_measured: bool = False) -> list[dict[str, Any]]:
+    """Return installed artifacts that have not completed a previous suite."""
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    try:
+        if not local_benchmark_endpoint(settings.ollama_url):
+            raise HTTPException(status_code=400, detail="Ollama no es loopback")
+        tags = await ollama_payload("/api/tags", timeout=20)
+    except HTTPException:
+        tags = {"models": []}
+    ollama_models = {
+        normalized_ollama_name(str(info.get("name") or info.get("model") or "")): info
+        for info in tags.get("models", [])
+        if info.get("name") or info.get("model")
+    }
+    hf_sizes = {
+        str(item.get("repo_id") or "").casefold(): integer_value(item.get("size"))
+        for item in await asyncio.to_thread(local_hf_models)
+        if item.get("repo_id")
+    }
+
+    def candidate_size(
+        model: dict[str, Any],
+        measured_size: int | None,
+    ) -> tuple[int | None, bool]:
+        if measured_size:
+            return measured_size, False
+        repo_size = hf_sizes.get(
+            str(model.get("model_repo") or model.get("model_ref") or "").casefold()
+        )
+        if repo_size:
+            return repo_size, False
+        local_weight = model_weight_mb(model)
+        if local_weight:
+            return local_weight * 1024 * 1024, False
+        return None, False
+
+    def installed_model_name(model: dict[str, Any], fallback: str) -> str:
+        return str(
+            model.get("model_repo")
+            or model.get("model_ref")
+            or model.get("model_filename")
+            or model.get("name")
+            or fallback
+        )
+
+    endpoint_probes: dict[str, bool] = {}
+
+    async def external_runtime_state(model: dict[str, Any]) -> tuple[bool, str]:
+        """External runtimes are not started by MyDGX; only list them as runnable when up."""
+        try:
+            endpoint = model_endpoint(model).rstrip("/")
+        except (KeyError, TypeError, ValueError):
+            return False, "Sin endpoint local configurado"
+        if endpoint not in endpoint_probes:
+            endpoint_probes[endpoint] = await external_endpoint_reachable(model)
+        if endpoint_probes[endpoint]:
+            return True, ""
+        requirement = str(model.get("runtime_requirement") or "").strip()
+        return False, (
+            f"Runtime externo no activo en {urlparse(endpoint).netloc}"
+            + (f" · requiere {requirement}" if requirement else "")
+        )
+
+    def profile_variant(model: dict[str, Any], name: str) -> str:
+        label = str(model.get("name") or "").strip()
+        return label if label and label.casefold() != name.casefold() else ""
+
+    for info in tags.get("models", []):
+        name = str(info.get("name") or info.get("model") or "")
+        if not name:
+            continue
+        ollama_details = await benchmark_ollama_details(name)
+        capabilities = {
+            str(value).casefold()
+            for value in ollama_details.get("capabilities", [])
+            if isinstance(value, str)
+        }
+        is_vision = "vision" in capabilities
+        is_embeddings = bool({"embedding", "embeddings"} & capabilities)
+        protocol_id = (
+            VISION_BENCHMARK_PROTOCOL_ID
+            if is_vision
+            else EMBEDDINGS_BENCHMARK_PROTOCOL_ID
+            if is_embeddings
+            else BENCHMARK_PROTOCOL_ID
+        )
+        size = int(info.get("size") or 0) or None
+        digest = str(info.get("digest") or "")
+        artifact_hash = benchmark_artifact_fingerprint(
+            "ollama", name, "", "", digest, size,
+        )
+        if artifact_hash in seen:
+            continue
+        measured = benchmark_artifact_was_measured(artifact_hash, protocol_id)
+        suite_completed = benchmark_artifact_completed_in_suite(
+            artifact_hash, protocol_id
+        )
+        if suite_completed and not include_measured:
+            continue
+        seen.add(artifact_hash)
+        candidates.append({
+            "candidate_key": f"ollama:{artifact_hash}",
+            "target": f"ollama:{name}",
+            "name": name,
+            "engine": "ollama",
+            "protocol_id": protocol_id,
+            "modality": BENCHMARK_PROTOCOLS[protocol_id]["modality"],
+            "source": "ollama",
+            "artifact_hash": artifact_hash,
+            "artifact_size": size,
+            "artifact_size_estimated": False,
+            "profile_id": "",
+            "model_id": "ollama",
+            "ollama_details": ollama_details,
+            "measured": measured,
+            "suite_completed": suite_completed,
+            "runnable": True,
+            "blocked_reason": "",
+            "variant": "",
+        })
+    for profile in db.rows("SELECT * FROM profiles ORDER BY name"):
+        for model in profile_models(profile):
+            if not model.get("enabled", True):
+                continue
+            if str(model.get("engine") or "") != "llama.cpp":
+                continue
+            if str(model.get("task") or "chat") not in {"chat", "vision"}:
+                continue
+            if not profile_model_is_downloaded(model):
+                continue
+            local = await asyncio.to_thread(benchmark_hf_local_artifact, model)
+            size = integer_value(local.get("size")) or model_weight_mb(model) * 1024 * 1024
+            size, size_estimated = candidate_size(model, size)
+            if not size:
+                continue
+            source_id = str(model.get("model_repo") or model.get("model_ref") or "")
+            artifact_hash = benchmark_artifact_fingerprint(
+                "huggingface",
+                source_id,
+                str(local.get("revision") or ""),
+                str(local.get("filename") or model.get("model_filename") or ""),
+                str(local.get("digest") or ""),
+                size,
+            )
+            if artifact_hash in seen:
+                continue
+            protocol_id = (
+                VISION_BENCHMARK_PROTOCOL_ID
+                if str(model.get("task") or "") == "vision"
+                else BENCHMARK_PROTOCOL_ID
+            )
+            measured = benchmark_artifact_was_measured(artifact_hash, protocol_id)
+            suite_completed = benchmark_artifact_completed_in_suite(
+                artifact_hash, protocol_id
+            )
+            if suite_completed and not include_measured:
+                continue
+            seen.add(artifact_hash)
+            model_id = str(model.get("id") or "primary")
+            name = installed_model_name(model, model_id)
+            candidates.append({
+                "candidate_key": f"profile:{profile['id']}:{model_id}:{artifact_hash}",
+                "target": f"profile:{profile['id']}:{model_id}",
+                "name": name,
+                "engine": "llama.cpp",
+                "protocol_id": protocol_id,
+                "modality": BENCHMARK_PROTOCOLS[protocol_id]["modality"],
+                "source": "huggingface",
+                "artifact_hash": artifact_hash,
+                "artifact_size": size,
+                "artifact_size_estimated": size_estimated,
+                "profile_id": profile["id"],
+                "model_id": model_id,
+                "measured": measured,
+                "suite_completed": suite_completed,
+                "runnable": True,
+                "blocked_reason": "",
+                "variant": profile_variant(model, name),
+            })
+    for artifact in await asyncio.to_thread(local_gguf_benchmark_artifacts):
+        model = gguf_benchmark_model(artifact)
+        local = await asyncio.to_thread(benchmark_hf_local_artifact, model)
+        size = integer_value(local.get("size"))
+        if not size:
+            continue
+        artifact_hash = benchmark_artifact_fingerprint(
+            "huggingface",
+            str(model["model_repo"]),
+            str(local.get("revision") or ""),
+            str(local.get("filename") or model["model_filename"]),
+            str(local.get("digest") or ""),
+            size,
+        )
+        if artifact_hash in seen:
+            continue
+        protocol_id = (
+            VISION_BENCHMARK_PROTOCOL_ID
+            if model["task"] == "vision"
+            else BENCHMARK_PROTOCOL_ID
+        )
+        measured = benchmark_artifact_was_measured(artifact_hash, protocol_id)
+        suite_completed = benchmark_artifact_completed_in_suite(artifact_hash, protocol_id)
+        if suite_completed and not include_measured:
+            continue
+        seen.add(artifact_hash)
+        blocked_reason = gguf_memory_block_reason(size)
+        shards = len(artifact["files"])
+        candidates.append({
+            "candidate_key": f"gguf:{artifact_hash}",
+            "target": str(model["_benchmark_target"]),
+            "name": str(model["model_repo"]),
+            "engine": "llama.cpp",
+            "protocol_id": protocol_id,
+            "modality": BENCHMARK_PROTOCOLS[protocol_id]["modality"],
+            "source": "huggingface",
+            "artifact_hash": artifact_hash,
+            "artifact_size": size,
+            "artifact_size_estimated": False,
+            "profile_id": "",
+            "model_id": str(model["id"]),
+            "measured": measured,
+            "suite_completed": suite_completed,
+            "runnable": not blocked_reason,
+            "blocked_reason": blocked_reason,
+            "variant": str(artifact["quantization"]) + (f" · {shards} shards" if shards > 1 else ""),
+        })
+    for profile in db.rows("SELECT * FROM profiles ORDER BY name"):
+        for model in profile_models(profile):
+            task = str(model.get("task") or "chat")
+            engine = str(model.get("engine") or "")
+            if (
+                not model.get("enabled", True)
+                or task not in {"chat", "vision"}
+                or engine in {"llama.cpp", "ollama"}
+            ):
+                continue
+            artifact = await asyncio.to_thread(
+                configured_local_profile_artifact, model,
+            )
+            if not artifact:
+                continue
+            artifact_hash, size = artifact
+            size, size_estimated = candidate_size(model, size)
+            if not size:
+                continue
+            if artifact_hash in seen:
+                continue
+            protocol_id = (
+                VISION_BENCHMARK_PROTOCOL_ID
+                if task == "vision"
+                else BENCHMARK_PROTOCOL_ID
+            )
+            measured = benchmark_artifact_was_measured(artifact_hash, protocol_id)
+            suite_completed = benchmark_artifact_completed_in_suite(
+                artifact_hash, protocol_id,
+            )
+            if suite_completed and not include_measured:
+                continue
+            seen.add(artifact_hash)
+            model_id = str(model.get("id") or "primary")
+            name = installed_model_name(model, model_id)
+            runnable, blocked_reason = await external_runtime_state(model)
+            candidates.append({
+                "candidate_key": f"profile:{profile['id']}:{model_id}:{artifact_hash}",
+                "target": f"profile:{profile['id']}:{model_id}",
+                "name": name,
+                "engine": engine,
+                "protocol_id": protocol_id,
+                "modality": BENCHMARK_PROTOCOLS[protocol_id]["modality"],
+                "source": "profile",
+                "artifact_hash": artifact_hash,
+                "artifact_size": size,
+                "artifact_size_estimated": size_estimated,
+                "profile_id": profile["id"],
+                "model_id": model_id,
+                "measured": measured,
+                "suite_completed": suite_completed,
+                "runnable": runnable,
+                "blocked_reason": blocked_reason,
+                "variant": profile_variant(model, name),
+            })
+    tts_seen: set[str] = set()
+    managed_tts_repos: set[str] = set()
+    for model in await managed_tts_benchmark_models():
+        repo = str(model["model_ref"])
+        managed_tts_repos.add(repo.casefold())
+        size = int(model["_benchmark_artifact_size"])
+        artifact_hash = benchmark_artifact_fingerprint(
+            "huggingface", repo, "", "", str(model["_benchmark_artifact_digest"]), size,
+        )
+        measured = benchmark_artifact_was_measured(artifact_hash, TTS_BENCHMARK_PROTOCOL_ID)
+        suite_completed = benchmark_artifact_completed_in_suite(
+            artifact_hash, TTS_BENCHMARK_PROTOCOL_ID,
+        )
+        if suite_completed and not include_measured:
+            continue
+        tts_seen.add(artifact_hash)
+        blocked_reason = str(model["_benchmark_blocked_reason"])
+        candidates.append({
+            "candidate_key": f"tts:{artifact_hash}",
+            "target": str(model["_benchmark_target"]),
+            "name": repo,
+            "engine": "mydgx-tts",
+            "protocol_id": TTS_BENCHMARK_PROTOCOL_ID,
+            "modality": "text-to-speech",
+            "source": "huggingface",
+            "artifact_hash": artifact_hash,
+            "artifact_size": size,
+            "artifact_size_estimated": False,
+            "profile_id": "",
+            "model_id": repo,
+            "measured": measured,
+            "suite_completed": suite_completed,
+            "runnable": not blocked_reason,
+            "blocked_reason": blocked_reason,
+            "variant": f"CUDA · {model['_benchmark_tts_engine']}",
+        })
+    for profile in db.rows("SELECT * FROM profiles ORDER BY name"):
+        for model in profile_models(profile):
+            if (
+                not model.get("enabled", True)
+                or str(model.get("task") or "") != "tts"
+                or str(model.get("model_ref") or "").casefold() in managed_tts_repos
+            ):
+                continue
+            artifact = await asyncio.to_thread(configured_local_profile_artifact, model)
+            if not artifact:
+                continue
+            artifact_hash, size = artifact
+            size, size_estimated = candidate_size(model, size)
+            if not size:
+                continue
+            if artifact_hash in tts_seen:
+                continue
+            measured = benchmark_artifact_was_measured(
+                artifact_hash, TTS_BENCHMARK_PROTOCOL_ID,
+            )
+            suite_completed = benchmark_artifact_completed_in_suite(
+                artifact_hash, TTS_BENCHMARK_PROTOCOL_ID,
+            )
+            if suite_completed and not include_measured:
+                continue
+            tts_seen.add(artifact_hash)
+            model_id = str(model.get("id") or "primary")
+            name = installed_model_name(model, model_id)
+            runnable, blocked_reason = await external_runtime_state(model)
+            candidates.append({
+                "candidate_key": f"tts:{artifact_hash}",
+                "target": f"profile:{profile['id']}:{model_id}",
+                "name": name,
+                "engine": str(model.get("engine") or ""),
+                "protocol_id": TTS_BENCHMARK_PROTOCOL_ID,
+                "modality": "text-to-speech",
+                "source": "profile",
+                "artifact_hash": artifact_hash,
+                "artifact_size": size,
+                "artifact_size_estimated": size_estimated,
+                "profile_id": profile["id"],
+                "model_id": model_id,
+                "measured": measured,
+                "suite_completed": suite_completed,
+                "runnable": runnable,
+                "blocked_reason": blocked_reason,
+                "variant": profile_variant(model, name),
+            })
+    semantic_seen: set[tuple[str, str]] = set()
+    for profile in db.rows("SELECT * FROM profiles ORDER BY name"):
+        for model in profile_models(profile):
+            task = str(model.get("task") or "")
+            if not model.get("enabled", True) or task not in {"embeddings", "reranking"}:
+                continue
+            artifact = await asyncio.to_thread(
+                semantic_profile_artifact, model, ollama_models,
+            )
+            if not artifact:
+                continue
+            artifact_hash, size = artifact
+            size, size_estimated = candidate_size(model, size)
+            if not size:
+                continue
+            protocol_id = (
+                EMBEDDINGS_BENCHMARK_PROTOCOL_ID
+                if task == "embeddings"
+                else RERANKING_BENCHMARK_PROTOCOL_ID
+            )
+            identity = (protocol_id, artifact_hash)
+            if identity in semantic_seen:
+                continue
+            measured = benchmark_artifact_was_measured(artifact_hash, protocol_id)
+            suite_completed = benchmark_artifact_completed_in_suite(
+                artifact_hash, protocol_id,
+            )
+            if suite_completed and not include_measured:
+                continue
+            semantic_seen.add(identity)
+            model_id = str(model.get("id") or "primary")
+            name = installed_model_name(model, model_id)
+            runnable, blocked_reason = (
+                (True, "")
+                if str(model.get("engine") or "") == "ollama"
+                else await external_runtime_state(model)
+            )
+            candidates.append({
+                "candidate_key": f"{task}:{artifact_hash}",
+                "target": f"profile:{profile['id']}:{model_id}",
+                "name": name,
+                "engine": str(model.get("engine") or ""),
+                "protocol_id": protocol_id,
+                "modality": task,
+                "source": "profile",
+                "artifact_hash": artifact_hash,
+                "artifact_size": size,
+                "artifact_size_estimated": size_estimated,
+                "profile_id": profile["id"],
+                "model_id": model_id,
+                "measured": measured,
+                "suite_completed": suite_completed,
+                "runnable": runnable,
+                "blocked_reason": blocked_reason,
+                "variant": profile_variant(model, name),
+            })
+    service_models = await whisper_service_benchmark_models()
+    service_by_id = {
+        normalized_whisper_model_id(str(model["model_ref"])): model
+        for model in service_models
+    }
+    service_by_id.update({str(model["model_ref"]).casefold(): model for model in service_models})
+    asr_models = list(service_models)
+    for profile in db.rows("SELECT * FROM profiles ORDER BY name"):
+        for model in profile_models(profile):
+            if (
+                not model.get("enabled", True)
+                or str(model.get("engine") or "") != "whisper"
+                or str(model.get("task") or "") != "asr"
+                or not local_benchmark_endpoint(str(model.get("endpoint_url") or ""))
+            ):
+                continue
+            reference = str(model.get("model_ref") or "")
+            service_model = service_by_id.get(reference.casefold()) or service_by_id.get(
+                normalized_whisper_model_id(reference)
+            )
+            if service_model:
+                candidate_model = {**model, **{
+                    key: service_model[key] for key in (
+                        "_benchmark_artifact_digest",
+                        "_benchmark_artifact_size",
+                        "_benchmark_runtime_version",
+                    )
+                }}
+            else:
+                if not profile_model_is_downloaded(model):
+                    continue
+                local = await asyncio.to_thread(benchmark_hf_local_artifact, model)
+                digest = str(local.get("digest") or "")
+                candidate_model = {
+                    **model,
+                    "_benchmark_artifact_digest": (
+                        digest if re.fullmatch(r"[a-f0-9]{64}", digest) else ""
+                    ),
+                    "_benchmark_artifact_size": integer_value(local.get("size")),
+                }
+            candidate_model["_benchmark_target"] = (
+                f"profile:{profile['id']}:{model.get('id') or 'primary'}"
+            )
+            candidate_model["_benchmark_profile_id"] = profile["id"]
+            asr_models.append(candidate_model)
+    for model in asr_models:
+        digest = str(model.get("_benchmark_artifact_digest") or "")
+        size = integer_value(model.get("_benchmark_artifact_size"))
+        size, size_estimated = candidate_size(model, size)
+        if not size:
+            continue
+        source_id = str(model.get("model_repo") or model.get("model_ref") or "")
+        artifact_hash = benchmark_artifact_fingerprint(
+            "huggingface", source_id, "", "", digest, size,
+        )
+        if artifact_hash in seen:
+            continue
+        measured = benchmark_artifact_was_measured(
+            artifact_hash, ASR_BENCHMARK_PROTOCOL_ID
+        )
+        suite_completed = benchmark_artifact_completed_in_suite(
+            artifact_hash, ASR_BENCHMARK_PROTOCOL_ID
+        )
+        if suite_completed and not include_measured:
+            continue
+        seen.add(artifact_hash)
+        target = str(model.get("_benchmark_target") or "")
+        profile_id = str(model.get("_benchmark_profile_id") or "")
+        model_id = str(model.get("id") or "primary")
+        runnable, blocked_reason = (
+            await external_runtime_state(model) if profile_id else (True, "")
+        )
+        candidates.append({
+            "candidate_key": f"asr:{artifact_hash}",
+            "target": target,
+            "name": installed_model_name(model, model_id),
+            "engine": "whisper",
+            "protocol_id": ASR_BENCHMARK_PROTOCOL_ID,
+            "modality": "automatic-speech-recognition",
+            "source": "huggingface",
+            "artifact_hash": artifact_hash,
+            "artifact_size": size,
+            "artifact_size_estimated": size_estimated,
+            "profile_id": profile_id,
+            "model_id": model_id,
+            "measured": measured,
+            "suite_completed": suite_completed,
+            "runnable": runnable,
+            "blocked_reason": blocked_reason,
+            "variant": profile_variant(model, installed_model_name(model, model_id)),
+        })
+    flux = await asyncio.to_thread(managed_flux_benchmark_model)
+    if managed_comfyui_enabled() and flux:
+        digest = str(flux["_benchmark_artifact_digest"])
+        size = int(flux["_benchmark_artifact_size"])
+        artifact_hash = benchmark_artifact_fingerprint(
+            "comfyui",
+            str(flux["model_ref"]),
+            "",
+            str(flux["model_filename"]),
+            digest,
+            size,
+        )
+        measured = benchmark_artifact_was_measured(
+            artifact_hash, IMAGE_BENCHMARK_PROTOCOL_ID
+        )
+        suite_completed = benchmark_artifact_completed_in_suite(
+            artifact_hash, IMAGE_BENCHMARK_PROTOCOL_ID
+        )
+        if artifact_hash not in seen and (include_measured or not suite_completed):
+            seen.add(artifact_hash)
+            candidates.append({
+                "candidate_key": f"comfyui:{artifact_hash}",
+                "target": str(flux["_benchmark_target"]),
+                "name": str(flux["name"]),
+                "engine": "comfyui",
+                "protocol_id": IMAGE_BENCHMARK_PROTOCOL_ID,
+                "modality": "image-generation",
+                "source": "comfyui",
+                "artifact_hash": artifact_hash,
+                "artifact_size": size,
+                "artifact_size_estimated": False,
+                "profile_id": "",
+                "model_id": str(flux["id"]),
+                "measured": measured,
+                "suite_completed": suite_completed,
+                "runnable": True,
+                "blocked_reason": "",
+                "variant": str(flux["model_filename"]),
+            })
+    wan = await asyncio.to_thread(managed_wan_benchmark_model)
+    if managed_comfyui_enabled() and wan:
+        digest = str(wan["_benchmark_artifact_digest"])
+        size = int(wan["_benchmark_artifact_size"])
+        artifact_hash = benchmark_artifact_fingerprint(
+            "comfyui",
+            str(wan["model_ref"]),
+            "",
+            str(wan["model_filename"]),
+            digest,
+            size,
+        )
+        measured = benchmark_artifact_was_measured(
+            artifact_hash, VIDEO_BENCHMARK_PROTOCOL_ID
+        )
+        suite_completed = benchmark_artifact_completed_in_suite(
+            artifact_hash, VIDEO_BENCHMARK_PROTOCOL_ID
+        )
+        identity = f"{VIDEO_BENCHMARK_PROTOCOL_ID}:{artifact_hash}"
+        if identity not in seen and (include_measured or not suite_completed):
+            seen.add(identity)
+            candidates.append({
+                "candidate_key": f"comfyui-wan:{artifact_hash}",
+                "target": str(wan["_benchmark_target"]),
+                "name": str(wan["name"]),
+                "engine": "comfyui",
+                "protocol_id": VIDEO_BENCHMARK_PROTOCOL_ID,
+                "modality": "video-generation",
+                "source": "comfyui",
+                "artifact_hash": artifact_hash,
+                "artifact_size": size,
+                "artifact_size_estimated": False,
+                "profile_id": "",
+                "model_id": str(wan["id"]),
+                "measured": measured,
+                "suite_completed": suite_completed,
+                "runnable": True,
+                "blocked_reason": "",
+                "variant": "",
+            })
+    return sorted(candidates, key=lambda item: (item["engine"], item["name"].casefold()))
+
+
+def benchmark_hf_card_text(repo_id: str, revision: str) -> str:
+    try:
+        path = hf_hub_download(
+            repo_id=repo_id,
+            filename="README.md",
+            revision=revision or None,
+            cache_dir=str(huggingface_card_cache_dir()),
+            token=huggingface_token(),
+        )
+        return Path(path).read_text(encoding="utf-8", errors="ignore")[:65_536]
+    except Exception:
+        return ""
+
+
+async def benchmark_ollama_details(name: str) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    try:
+        shown = await ollama_payload("/api/show", "POST", {"name": name}, timeout=20)
+        details = {
+            "details": shown.get("details") or {},
+            "parameters": str(shown.get("parameters") or "")[:4000],
+            "template_sha256": content_hash(str(shown.get("template") or "")),
+            "capabilities": shown.get("capabilities") or [],
+            "model_info": {
+                key: value
+                for key, value in (shown.get("model_info") or {}).items()
+                if isinstance(value, (int, float, str)) and len(str(value)) < 200
+            },
+        }
+    except HTTPException:
+        pass
+    try:
+        version = await ollama_payload("/api/version", timeout=10)
+        details["ollama_version"] = version.get("version")
+    except HTTPException:
+        pass
+    return sanitize_log_detail(details)
+
+
+async def benchmark_hf_snapshot(repo_id: str, revision: str = "") -> dict[str, Any]:
+    if not repo_id:
+        return {}
+
+    def fetch() -> dict[str, Any]:
+        info = HfApi(token=huggingface_token()).model_info(
+            repo_id,
+            revision=revision or None,
+            files_metadata=True,
+        )
+        try:
+            card_data = info.card_data
+            card = card_data.to_dict() if hasattr(card_data, "to_dict") else dict(card_data or {})
+        except (KeyError, TypeError, ValueError):
+            card = {}
+        siblings = list(info.siblings or [])
+        return {
+            "id": str(getattr(info, "id", repo_id) or repo_id),
+            "sha": str(getattr(info, "sha", "") or ""),
+            "downloads": int(getattr(info, "downloads", 0) or 0),
+            "likes": int(getattr(info, "likes", 0) or 0),
+            "pipeline_tag": getattr(info, "pipeline_tag", None),
+            "tags": list(getattr(info, "tags", None) or [])[:200],
+            "private": bool(getattr(info, "private", False)),
+            "gated": bool(getattr(info, "gated", False)),
+            "card_data": sanitize_log_detail(card),
+            "files": [
+                {
+                    "name": str(sibling.rfilename),
+                    "size": getattr(sibling, "size", None),
+                }
+                for sibling in siblings[:500]
+            ],
+            "files_truncated": len(siblings) > 500,
+        }
+
+    try:
+        return await asyncio.to_thread(fetch)
+    except Exception as exc:
+        return {"id": repo_id, "metadata_error": type(exc).__name__}
+
+
+async def register_benchmark_model(model: dict[str, Any]) -> str:
+    engine = str(model.get("engine") or "")
+    source = engine if engine in {"ollama", "comfyui"} else "huggingface"
+    source_id = (
+        str(model.get("model_ref") or "")
+        if source == "ollama"
+        else str(model.get("model_repo") or model.get("model_ref") or "")
+    )
+    filename = str(model.get("model_filename") or "")
+    revision = ""
+    artifact_size: int | None = None
+    artifact_digest = ""
+    metadata: dict[str, Any]
+    card_text = ""
+    if source == "ollama":
+        info = dict(model.get("_benchmark_ollama_info") or {})
+        if not info:
+            tags = await ollama_payload("/api/tags", timeout=20)
+            info = next(
+                (
+                    dict(item) for item in tags.get("models", [])
+                    if str(item.get("name") or item.get("model") or "").casefold()
+                    == source_id.casefold()
+                ),
+                {},
+            )
+        artifact_digest = str(info.get("digest") or "")
+        artifact_size = int(info.get("size") or 0) or None
+        ollama_details = model.get("_benchmark_ollama_details")
+        if not isinstance(ollama_details, dict):
+            ollama_details = await benchmark_ollama_details(source_id)
+        metadata = {
+            "ollama": sanitize_log_detail(info),
+            "show": ollama_details,
+        }
+        details = ollama_details.get("details") or info.get("details") or {}
+        if isinstance(details, dict):
+            quantization_hint = str(details.get("quantization_level") or "")
+            family_hint = str(details.get("family") or "")
+            parameter_hint = str(details.get("parameter_size") or "")
+            model.setdefault("_benchmark_quantization", quantization_hint)
+            model.setdefault(
+                "_benchmark_architecture",
+                " ".join(item for item in (family_hint, parameter_hint) if item),
+            )
+    elif source == "comfyui":
+        artifact_size = integer_value(model.get("_benchmark_artifact_size"))
+        artifact_digest = str(model.get("_benchmark_artifact_digest") or "")
+        filename = str(model.get("model_filename") or model.get("model_ref") or "")
+        metadata = {
+            "runtime": {
+                "name": model.get("name"),
+                "task": model.get("task"),
+                "api_protocol": model.get("api_protocol"),
+            },
+            "local_artifact": {
+                "filename": filename,
+                "size": artifact_size,
+                "sha256": artifact_digest,
+                "components": model.get("_benchmark_artifact_components") or [],
+                "workflow_sha256": model.get("_benchmark_workflow_sha256"),
+            },
+        }
+    else:
+        local = await asyncio.to_thread(benchmark_hf_local_artifact, model)
+        revision = str(local.get("revision") or "")
+        filename = str(local.get("filename") or filename)
+        artifact_size = (
+            integer_value(model.get("_benchmark_artifact_size"))
+            or local.get("size")
+        )
+        artifact_digest = str(
+            model.get("_benchmark_artifact_digest") or local.get("digest") or ""
+        )
+        task = str(model.get("task") or "")
+        if task in {"tts", "embeddings", "reranking"} and not artifact_digest:
+            endpoint = model_endpoint(model)
+            if not local_benchmark_endpoint(endpoint):
+                raise RuntimeError("El endpoint del modelo no es local")
+            parsed = urlparse(endpoint)
+            artifact_digest = content_hash({
+                "kind": "local-profile-api" if task == "tts" else "local-semantic-api",
+                "task": task,
+                "engine": engine,
+                "model_ref": model.get("model_ref"),
+                "api_protocol": model.get("api_protocol"),
+                "endpoint": {
+                    "scheme": parsed.scheme,
+                    "host": "loopback",
+                    "port": parsed.port,
+                    "path": parsed.path.rstrip("/"),
+                },
+            })
+        remote = (
+            {}
+            if task in {"asr", "vision", "tts", "embeddings", "reranking"}
+            else await benchmark_hf_snapshot(source_id, revision)
+        )
+        metadata = {
+            "huggingface": remote,
+            "local_artifact": sanitize_log_detail(local),
+            "runtime": sanitize_log_detail({
+                key: model.get(key)
+                for key in (
+                    "name", "task", "input_modalities", "output_modalities",
+                    "runtime_requirement", "model_files", "estimated_memory_mb",
+                )
+            }),
+        }
+        if (
+            task not in {"asr", "vision", "tts", "embeddings", "reranking"}
+            and source_id
+            and re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", source_id)
+        ):
+            card_text = redact_log_text(
+                await asyncio.to_thread(benchmark_hf_card_text, source_id, revision),
+                65_536,
+            )
+    artifact_hash = benchmark_artifact_fingerprint(
+        source,
+        source_id,
+        revision,
+        filename,
+        artifact_digest,
+        artifact_size,
+    )
+    model_id = f"bm-{content_hash({'source': source, 'artifact': artifact_hash})[:24]}"
+    quantization = str(model.get("_benchmark_quantization") or "")
+    if not quantization and (match := QUANTIZATION_PATTERN.search(filename or source_id)):
+        quantization = match.group(1).upper()
+    architecture = str(model.get("_benchmark_architecture") or "")
+    configuration = model.get("configuration")
+    if not architecture and isinstance(configuration, dict):
+        architectures = configuration.get("architectures")
+        architecture = (
+            ", ".join(str(item) for item in architectures)
+            if isinstance(architectures, list)
+            else str(architectures or "")
+        )
+    db.execute(
+        """
+        INSERT OR IGNORE INTO benchmark_models(
+            id,source,source_id,revision,filename,artifact_hash,artifact_size,
+            quantization,architecture,metadata_json,card_text,created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            model_id, source, source_id, revision, filename, artifact_hash,
+            artifact_size, quantization, architecture,
+            canonical_json(metadata), card_text, utc_now(),
+        ),
+    )
+    return model_id
+
+
+def register_benchmark_environment() -> str:
+    identity = device_identity()
+    os_info = os_information()
+    hardware = {
+        **identity,
+        "architecture": os.uname().machine,
+        "cpu_count": safe_cpu_count(),
+        "memory_total_bytes": int(psutil.virtual_memory().total),
+        "spark_cluster_size": settings.spark_cluster_size,
+    }
+    versions = software_versions()
+    software = {
+        "os": {
+            "name": os_info.get("os_name"),
+            "version": os_info.get("os_version"),
+            "kernel": os_info.get("kernel"),
+            "dgx_release": os_info.get("dgx_release"),
+        },
+        "components": [
+            {
+                "name": item.get("name"),
+                "version": item.get("version"),
+                "available": item.get("available"),
+                "category": item.get("category"),
+            }
+            for item in versions.get("components", [])
+        ],
+    }
+    relevant = re.compile(r"cuda|driver|nvidia|llama|ollama|vllm|torch|kernel|dgx", re.I)
+    comparable_software = {
+        "os": software["os"],
+        "components": sorted(
+            (
+                {"name": item["name"], "version": item["version"]}
+                for item in software["components"]
+                if item.get("available") and relevant.search(
+                    f"{item.get('name') or ''} {item.get('category') or ''}"
+                )
+            ),
+            key=lambda item: str(item["name"]),
+        ),
+    }
+    software["hash_basis"] = "hardware + os + inference stack"
+    environment_hash = content_hash({"hardware": hardware, "software": comparable_software})
+    environment_id = f"env-{environment_hash[:24]}"
+    db.execute(
+        """
+        INSERT OR IGNORE INTO benchmark_environments(
+            id,environment_hash,hardware_json,software_json,created_at
+        ) VALUES(?,?,?,?,?)
+        """,
+        (
+            environment_id,
+            environment_hash,
+            canonical_json(hardware),
+            canonical_json(software),
+            utc_now(),
+        ),
+    )
+    return environment_id
+
+
+def benchmark_runtime_config(model: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    context = int(model.get("_benchmark_context") or model.get("context_size") or 8192)
+    try:
+        runtime = json.loads(model_runtime_signature(model, context))
+    except (RuntimeError, json.JSONDecodeError):
+        runtime = {"engine": model.get("engine"), "model_ref": model.get("model_ref")}
+    if isinstance(runtime.get("args"), list):
+        runtime["args"] = [
+            Path(argument).name if isinstance(argument, str) and argument.startswith("/") else argument
+            for argument in runtime["args"]
+        ]
+    if str(model.get("task") or "") == "asr":
+        runtime["effective"] = {
+            "concurrent_requests": 1,
+            "language": "en",
+            "temperature": 0,
+            "response_format": "verbose_json",
+        }
+        runtime["whisper"] = {
+            "version": model.get("_benchmark_runtime_version"),
+            "artifact_sha256": model.get("_benchmark_artifact_digest"),
+        }
+    elif str(model.get("task") or "") == "image-generation":
+        defaults = IMAGE_BENCHMARK_PROTOCOL["defaults"]
+        runtime["effective"] = {
+            "concurrent_requests": 1,
+            "seed": defaults["seed"],
+            "width": defaults["width"],
+            "height": defaults["height"],
+            "steps": defaults["steps"],
+            "sampler": defaults["sampler"],
+            "scheduler": defaults["scheduler"],
+        }
+        runtime["comfyui"] = {
+            "endpoint": model_endpoint(model),
+            "checkpoint_sha256": model.get("_benchmark_artifact_digest"),
+        }
+    elif str(model.get("task") or "") == "video-generation":
+        defaults = VIDEO_BENCHMARK_PROTOCOL["defaults"]
+        runtime["effective"] = {
+            "concurrent_requests": 1,
+            "seed": defaults["seed"],
+            "width": defaults["width"],
+            "height": defaults["height"],
+            "frames": defaults["frames"],
+            "steps": defaults["steps"],
+            "fps": defaults["fps"],
+            "sampler": defaults["sampler"],
+            "scheduler": defaults["scheduler"],
+        }
+        runtime["comfyui"] = {
+            "endpoint": model_endpoint(model),
+            "artifacts_sha256": model.get("_benchmark_artifact_digest"),
+            "workflow_sha256": model.get("_benchmark_workflow_sha256"),
+        }
+    elif str(model.get("task") or "") in {"vision", "tts", "embeddings", "reranking"}:
+        task = str(model["task"])
+        endpoint = urlparse(model_endpoint(model))
+        runtime["effective"] = {
+            "concurrent_requests": 1,
+            "task": task,
+            "api_path": MULTIMODAL_ENDPOINTS[task],
+            "endpoint": {
+                "scheme": endpoint.scheme,
+                "host": "loopback",
+                "port": endpoint.port,
+                "path": endpoint.path.rstrip("/"),
+            },
+        }
+        if task == "vision":
+            runtime["effective"].update({
+                "temperature": 0,
+                "fixture_sha256": VISION_FIXTURE_SHA256,
+            })
+        elif task == "tts":
+            runtime["effective"].update({
+                "response_format": "wav",
+                "roundtrip_asr": "local-whisper-if-available",
+            })
+    else:
+        runtime["effective"] = {
+            "context_size": context,
+            "concurrent_requests": 1,
+            "temperature": 0,
+            "top_p": 1,
+            "seed": 42,
+        }
+    if model.get("engine") == "ollama":
+        details = model.get("_benchmark_ollama_details") or {}
+        runtime["ollama"] = {
+            "version": details.get("ollama_version"),
+            "digest": (model.get("_benchmark_ollama_info") or {}).get("digest"),
+            "parameters": details.get("parameters"),
+            "template_sha256": details.get("template_sha256"),
+            "num_ctx": context,
+        }
+    return runtime, benchmark_runtime_hash(runtime)
+
+
+def benchmark_runtime_hash(runtime: dict[str, Any]) -> str:
+    return content_hash({key: value for key, value in runtime.items() if key != "isolation"})
+
+
+class BenchmarkIsolationError(RuntimeError):
+    pass
+
+
+async def assert_benchmark_isolation(
+    job_id: str,
+    model: dict[str, Any],
+    strict: bool,
+    parent_job_id: str | None = None,
+) -> None:
+    if not strict:
+        return
+    competing_jobs = db.rows(
+        """
+        SELECT kind,target FROM jobs
+        WHERE id<>? AND id<>? AND status IN ('queued','running','cancelling')
+        LIMIT 1
+        """,
+        (job_id, parent_job_id or ""),
+    )
+    if competing_jobs:
+        raise BenchmarkIsolationError(
+            f"Actividad concurrente detectada: {competing_jobs[0]['kind']}"
+        )
+    busy = await benchmark_runtime_busy()
+    if busy:
+        raise BenchmarkIsolationError(busy)
+    target_model = str(model.get("model_ref") or "")
+    residents = await benchmark_ollama_residents()
+    if residents is None:
+        if model.get("engine") == "ollama":
+            raise BenchmarkIsolationError("Ollama no responde")
+        return
+    allowed = benchmark_allowed_ollama_models(target_model)
+    if any(normalized_ollama_name(name) not in allowed for name in residents):
+        raise BenchmarkIsolationError("Ollama mantiene otro modelo en memoria")
+
+
+async def benchmark_ollama_residents() -> set[str] | None:
+    try:
+        running = await ollama_payload("/api/ps", timeout=10)
+    except HTTPException:
+        return None
+    return {
+        str(item.get("name") or item.get("model") or "")
+        for item in running.get("models", [])
+        if item.get("name") or item.get("model")
+    }
+
+
+def normalized_ollama_name(name: str) -> str:
+    value = name.strip().casefold()
+    return value if ":" in value.rsplit("/", 1)[-1] else f"{value}:latest"
+
+
+def benchmark_allowed_ollama_models(target_model: str) -> set[str]:
+    allowed = {normalized_ollama_name(target_model)}
+    for profile in running_profiles():
+        for item in running_profile_models(profile):
+            if item.get("engine") == "ollama":
+                allowed.add(normalized_ollama_name(str(item.get("model_ref") or "")))
+    return allowed
+
+
+async def release_idle_ollama_residents(target_model: str) -> list[str]:
+    residents = await benchmark_ollama_residents() or set()
+    allowed = benchmark_allowed_ollama_models(target_model)
+    released: list[str] = []
+    for name in sorted(residents):
+        if normalized_ollama_name(name) in allowed:
+            continue
+        try:
+            await ollama_payload(
+                "/api/generate",
+                "POST",
+                {"model": name, "keep_alive": 0},
+                timeout=30,
+            )
+            released.append(name)
+        except HTTPException:
+            continue
+    return released
+
+
+def benchmark_co_resident_models(model: dict[str, Any]) -> list[str]:
+    target_profile = str(model.get("_benchmark_profile_id") or "")
+    target_id = str(model.get("id") or "")
+    values: list[str] = []
+    for profile in running_profiles():
+        for item in running_profile_models(profile):
+            if profile["id"] == target_profile and str(item.get("id")) == target_id:
+                continue
+            values.append(str(item.get("model_alias") or item.get("model_ref") or item.get("id")))
+    return sorted(values)
+
+
+async def collect_benchmark_telemetry(run_id: str, stop: asyncio.Event) -> None:
+    interval = max(0.5, float(settings.benchmark_telemetry_interval_seconds))
+    while not stop.is_set():
+        try:
+            sample = await asyncio.to_thread(collect_metrics)
+            db.execute(
+                """
+                INSERT INTO benchmark_telemetry(
+                    run_id,created_at,cpu_percent,memory_used,gpu_utilization,
+                    gpu_memory_used,gpu_temperature,gpu_power_watts
+                ) VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (
+                    run_id,
+                    sample["created_at"],
+                    sample["cpu_percent"],
+                    sample["memory_used"],
+                    sample["gpu_utilization"],
+                    sample["gpu_memory_used"],
+                    sample["gpu_temperature"],
+                    sample["gpu_power_watts"],
+                ),
+            )
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            continue
+
+
+def asr_fixture_definition(fixture_id: str) -> dict[str, Any]:
+    try:
+        manifest = json.loads(ASR_FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("El manifiesto ASR versionado no está disponible") from exc
+    fixture = next(
+        (
+            dict(item) for item in manifest.get("fixtures", [])
+            if isinstance(item, dict) and item.get("id") == fixture_id
+        ),
+        None,
+    )
+    if not fixture:
+        raise RuntimeError(f"Fixture ASR desconocido: {fixture_id}")
+    return fixture
+
+
+async def resolve_asr_fixture(fixture_id: str) -> tuple[dict[str, Any], bytes]:
+    fixture = asr_fixture_definition(fixture_id)
+    expected_hash = str(fixture.get("sha256") or "")
+    expected_size = int(fixture.get("bytes") or 0)
+    if not re.fullmatch(r"[a-f0-9]{64}", expected_hash) or not 1 <= expected_size <= 10_000_000:
+        raise RuntimeError("El manifiesto ASR tiene una identidad de fixture inválida")
+    bundled = ASR_FIXTURE_MANIFEST.parent / str(fixture["filename"])
+    cache = ROOT / "data" / "benchmark-fixtures" / str(fixture["filename"])
+    try:
+        content = await asyncio.to_thread(
+            (bundled if bundled.is_file() else cache).read_bytes
+        )
+    except OSError:
+        url = str(fixture.get("url") or "")
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or parsed.hostname != "raw.githubusercontent.com":
+            raise RuntimeError("El origen del fixture ASR no está permitido")
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+            chunks: list[bytes] = []
+            downloaded = 0
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    downloaded += len(chunk)
+                    if downloaded > 10_000_000:
+                        raise RuntimeError("El fixture ASR supera el límite permitido")
+                    chunks.append(chunk)
+            content = b"".join(chunks)
+    if len(content) != expected_size or hashlib.sha256(content).hexdigest() != expected_hash:
+        raise RuntimeError("El fixture ASR no coincide con el checksum versionado")
+    if not cache.is_file():
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        temporary = cache.with_suffix(f"{cache.suffix}.{uuid.uuid4().hex}.tmp")
+        await asyncio.to_thread(temporary.write_bytes, content)
+        os.replace(temporary, cache)
+    return fixture, content
+
+
+def inspect_png(content: bytes, expected_width: int, expected_height: int) -> dict[str, Any]:
+    if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("La salida no es PNG")
+    position = 8
+    width = height = bit_depth = color_type = interlace = 0
+    compressed: list[bytes] = []
+    saw_end = False
+    while position + 12 <= len(content):
+        length = struct.unpack(">I", content[position:position + 4])[0]
+        chunk_type = content[position + 4:position + 8]
+        end = position + 12 + length
+        if length > 64 * 1024 * 1024 or end > len(content):
+            raise ValueError("Chunk PNG inválido")
+        data = content[position + 8:position + 8 + length]
+        checksum = struct.unpack(">I", content[position + 8 + length:end])[0]
+        if zlib.crc32(chunk_type + data) & 0xFFFFFFFF != checksum:
+            raise ValueError("CRC PNG inválido")
+        if chunk_type == b"IHDR":
+            if length != 13:
+                raise ValueError("IHDR PNG inválido")
+            width, height, bit_depth, color_type, _, _, interlace = struct.unpack(
+                ">IIBBBBB", data
+            )
+        elif chunk_type == b"IDAT":
+            compressed.append(data)
+        elif chunk_type == b"IEND":
+            saw_end = True
+            break
+        position = end
+    channels = {0: 1, 2: 3, 4: 2, 6: 4}.get(color_type)
+    if (
+        not saw_end
+        or not compressed
+        or not channels
+        or bit_depth not in {8, 16}
+        or interlace != 0
+        or not 1 <= width <= 4096
+        or not 1 <= height <= 4096
+    ):
+        raise ValueError("PNG no compatible o incompleto")
+    bytes_per_pixel = channels * (bit_depth // 8)
+    row_bytes = width * bytes_per_pixel
+    expected_bytes = (row_bytes + 1) * height
+    inflater = zlib.decompressobj()
+    encoded = inflater.decompress(b"".join(compressed), expected_bytes + 1)
+    if len(encoded) != expected_bytes or not inflater.eof:
+        raise ValueError("Datos PNG truncados o sobredimensionados")
+    previous = bytearray(row_bytes)
+    pixels = bytearray()
+    offset = 0
+    for _ in range(height):
+        filter_type = encoded[offset]
+        row = bytearray(encoded[offset + 1:offset + 1 + row_bytes])
+        offset += row_bytes + 1
+        for index in range(row_bytes):
+            left = row[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+            above = previous[index]
+            upper_left = previous[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+            if filter_type == 1:
+                row[index] = (row[index] + left) & 0xFF
+            elif filter_type == 2:
+                row[index] = (row[index] + above) & 0xFF
+            elif filter_type == 3:
+                row[index] = (row[index] + ((left + above) // 2)) & 0xFF
+            elif filter_type == 4:
+                estimate = left + above - upper_left
+                distances = (
+                    abs(estimate - left),
+                    abs(estimate - above),
+                    abs(estimate - upper_left),
+                )
+                predictor = (left, above, upper_left)[distances.index(min(distances))]
+                row[index] = (row[index] + predictor) & 0xFF
+            elif filter_type != 0:
+                raise ValueError("Filtro PNG inválido")
+        pixels.extend(row)
+        previous = row
+    return {
+        "png_integrity": True,
+        "width": width,
+        "height": height,
+        "resolution_matches": width == expected_width and height == expected_height,
+        "pixel_sha256": hashlib.sha256(pixels).hexdigest(),
+        "png_sha256": hashlib.sha256(content).hexdigest(),
+        "size_bytes": len(content),
+    }
+
+
+async def execute_image_benchmark_sample(
+    model: dict[str, Any],
+    case: dict[str, Any],
+) -> dict[str, Any]:
+    width = int(case["width"])
+    height = int(case["height"])
+    start = time.monotonic()
+    result = await execute_managed_comfyui(
+        "image-generation",
+        str(case["prompt"]),
+        float(model.get("timeout_seconds") or 600),
+        model_endpoint(model) or settings.comfyui_url,
+        seed=int(case["seed"]),
+        width=width,
+        height=height,
+        steps=int(case["steps"]),
+        persist_output=False,
+    )
+    encoded = result.get("data_base64")
+    if not isinstance(encoded, str):
+        raise ValueError("ComfyUI no devolvió bytes de imagen")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("ComfyUI devolvió una imagen inválida") from exc
+    total_ms = (time.monotonic() - start) * 1000
+    native = inspect_png(content, width, height)
+    valid = native["png_integrity"] and native["resolution_matches"]
+    return {
+        "ttft_ms": None,
+        "total_ms": total_ms,
+        "prompt_tokens": None,
+        "output_tokens": None,
+        "output_tps": None,
+        "chars_per_second": None,
+        "output_chars": 0,
+        "output_hash": native["png_sha256"],
+        "native": {
+            **native,
+            "seed": int(case["seed"]),
+            "steps": int(case["steps"]),
+        },
+        "valid": valid,
+        "error": "" if valid else "El PNG no coincide con la resolución versionada",
+    }
+
+
+def inspect_video_output(
+    content: bytes,
+    content_type: str,
+    expected_width: int,
+    expected_height: int,
+    expected_frames: int,
+    expected_fps: int,
+) -> dict[str, Any]:
+    is_webm = content.startswith(b"\x1aE\xdf\xa3")
+    is_mp4 = len(content) >= 12 and content[4:8] == b"ftyp"
+    container = "webm" if is_webm else "mp4" if is_mp4 else ""
+    expected_type = {
+        "webm": "video/webm",
+        "mp4": "video/mp4",
+    }.get(container)
+    signature_valid = bool(container) and (
+        not content_type.startswith("video/") or content_type == expected_type
+    )
+    result: dict[str, Any] = {
+        "container": container or "unknown",
+        "content_type": content_type,
+        "container_integrity": signature_valid,
+        "validation_level": "container-signature",
+        "probe_status": "ffprobe-unavailable",
+        "width": None,
+        "height": None,
+        "duration_seconds": None,
+        "frame_count": None,
+        "dimensions_match": None,
+        "temporal_match": None,
+        "video_sha256": hashlib.sha256(content).hexdigest(),
+        "perceptual_sha256": None,
+        "perceptual_status": "ffmpeg-unavailable",
+        "size_bytes": len(content),
+    }
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        try:
+            completed = subprocess.run(
+                [
+                    ffprobe, "-v", "error", "-select_streams", "v:0",
+                    "-show_entries",
+                    "stream=codec_type,width,height,nb_frames,duration,avg_frame_rate:"
+                    "format=duration",
+                    "-of", "json", "pipe:0",
+                ],
+                input=content,
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )
+            payload = json.loads(completed.stdout)
+            streams = payload.get("streams") if isinstance(payload, dict) else None
+            stream = streams[0] if isinstance(streams, list) and streams else {}
+            width = integer_value(stream.get("width"))
+            height = integer_value(stream.get("height"))
+            duration_value = stream.get("duration") or (payload.get("format") or {}).get("duration")
+            duration = float(duration_value) if duration_value not in {None, "N/A"} else None
+            frame_count = integer_value(stream.get("nb_frames"))
+            rate_text = str(stream.get("avg_frame_rate") or "")
+            if frame_count is None and duration is not None and "/" in rate_text:
+                numerator, denominator = rate_text.split("/", 1)
+                if float(denominator):
+                    frame_count = round(duration * float(numerator) / float(denominator))
+            result.update({
+                "container_integrity": bool(
+                    signature_valid and stream.get("codec_type") == "video"
+                ),
+                "validation_level": "ffprobe",
+                "probe_status": "ok",
+                "width": width,
+                "height": height,
+                "duration_seconds": duration,
+                "frame_count": frame_count,
+                "dimensions_match": (
+                    width == expected_width and height == expected_height
+                    if width is not None and height is not None else None
+                ),
+                "temporal_match": (
+                    frame_count == expected_frames
+                    if frame_count is not None
+                    else (
+                        abs(duration - expected_frames / expected_fps)
+                        <= max(1 / expected_fps, 0.05)
+                        if duration is not None else None
+                    )
+                ),
+            })
+        except (subprocess.SubprocessError, json.JSONDecodeError, TypeError, ValueError, OSError):
+            result.update({
+                "container_integrity": False,
+                "validation_level": "ffprobe",
+                "probe_status": "ffprobe-failed",
+            })
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg and signature_valid:
+        try:
+            decoded = subprocess.run(
+                [
+                    ffmpeg, "-v", "error", "-i", "pipe:0", "-map", "0:v:0",
+                    "-vf", "scale=16:16,format=gray", "-f", "rawvideo", "pipe:1",
+                ],
+                input=content,
+                capture_output=True,
+                check=True,
+                timeout=60,
+            ).stdout
+            frame_size = 16 * 16
+            if not decoded or len(decoded) % frame_size:
+                raise ValueError("Salida perceptual incompleta")
+            hashes = bytearray()
+            for offset in range(0, len(decoded), frame_size):
+                frame = decoded[offset:offset + frame_size]
+                average = sum(frame) / frame_size
+                hashes.extend(
+                    int("".join("1" if value >= average else "0" for value in frame[index:index + 8]), 2)
+                    for index in range(0, frame_size, 8)
+                )
+            result.update({
+                "perceptual_sha256": hashlib.sha256(hashes).hexdigest(),
+                "perceptual_frames": len(decoded) // frame_size,
+                "perceptual_status": "ok",
+                "perceptual_method": "aHash 16x16 gris por frame decodificado con ffmpeg local",
+            })
+        except (subprocess.SubprocessError, ValueError, OSError):
+            result["perceptual_status"] = "ffmpeg-failed"
+    return result
+
+
+async def execute_video_benchmark_sample(
+    model: dict[str, Any],
+    case: dict[str, Any],
+) -> dict[str, Any]:
+    endpoint = model_endpoint(model)
+    if not local_benchmark_endpoint(endpoint):
+        raise ValueError("El benchmark Wan exige un endpoint ComfyUI loopback")
+    start = time.monotonic()
+    result = await execute_managed_comfyui(
+        "video-generation",
+        str(case["prompt"]),
+        float(model.get("timeout_seconds") or 1800),
+        endpoint,
+        seed=int(case["seed"]),
+        width=int(case["width"]),
+        height=int(case["height"]),
+        steps=int(case["steps"]),
+        frames=int(case["frames"]),
+        persist_output=False,
+    )
+    encoded = result.get("data_base64")
+    if not isinstance(encoded, str):
+        raise ValueError("ComfyUI no devolvió bytes de vídeo")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("ComfyUI devolvió un vídeo inválido") from exc
+    total_ms = (time.monotonic() - start) * 1000
+    native = await asyncio.to_thread(
+        inspect_video_output,
+        content,
+        str(result.get("content_type") or "application/octet-stream"),
+        int(case["width"]),
+        int(case["height"]),
+        int(case["frames"]),
+        int(case["fps"]),
+    )
+    valid = native["container_integrity"] and native["dimensions_match"] is not False
+    return {
+        "ttft_ms": None,
+        "total_ms": total_ms,
+        "prompt_tokens": None,
+        "output_tokens": None,
+        "output_tps": None,
+        "chars_per_second": None,
+        "output_chars": 0,
+        "output_hash": native["video_sha256"],
+        "native": {
+            **native,
+            "seed": int(case["seed"]),
+            "steps": int(case["steps"]),
+            "expected_width": int(case["width"]),
+            "expected_height": int(case["height"]),
+            "expected_frames": int(case["frames"]),
+            "expected_fps": int(case["fps"]),
+        },
+        "valid": valid,
+        "error": "" if valid else "El contenedor de vídeo no supera la validación disponible",
+    }
+
+
+async def execute_asr_benchmark_sample(
+    model: dict[str, Any],
+    case: dict[str, Any],
+) -> dict[str, Any]:
+    fixture, audio = await resolve_asr_fixture(str(case["fixture"]))
+    model_name = str(
+        model.get("_runtime_model_alias")
+        or model.get("model_alias")
+        or model.get("model_ref")
+        or ""
+    )
+    start = time.monotonic()
+    async with httpx.AsyncClient(timeout=float(model.get("timeout_seconds") or 600)) as client:
+        response = await client.post(
+            f"{model_endpoint(model)}/v1/audio/transcriptions",
+            files={"file": (str(fixture["filename"]), audio, "audio/wav")},
+            data={
+                "model": model_name,
+                "language": str(fixture["language"]),
+                "response_format": "verbose_json",
+                "temperature": "0",
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+    total_ms = (time.monotonic() - start) * 1000
+    transcript = str(payload.get("text") or "").strip()
+    duration = float(payload.get("duration") or fixture["duration_seconds"])
+    wer = asr_edit_rate(str(fixture["reference"]), transcript)
+    cer = asr_edit_rate(str(fixture["reference"]), transcript, characters=True)
+    produced = bool(asr_normalize_text(transcript)) and duration > 0
+    return {
+        "ttft_ms": None,
+        "total_ms": total_ms,
+        "prompt_tokens": None,
+        "output_tokens": None,
+        "output_tps": None,
+        "chars_per_second": len(transcript) / max(total_ms / 1000, 0.001),
+        "output_chars": len(transcript),
+        "output_hash": hashlib.sha256(transcript.encode("utf-8")).hexdigest() if transcript else "",
+        "native": {
+            "duration_seconds": duration,
+            "rtf": total_ms / 1000 / duration if duration > 0 else None,
+            "wer": wer,
+            "cer": cer,
+            "fixture_id": fixture["id"],
+            "fixture_sha256": fixture["sha256"],
+            "language": fixture["language"],
+        },
+        "valid": produced,
+        "error": "" if produced else "El runtime no produjo una transcripción válida",
+    }
+
+
+def normalized_concept_recall(
+    response: str,
+    expected_concepts: list[list[str]],
+) -> tuple[int, int, float]:
+    normalized = asr_normalize_text(response)
+    matched = sum(
+        any(asr_normalize_text(alias) in normalized for alias in aliases)
+        for aliases in expected_concepts
+    )
+    total = len(expected_concepts)
+    return matched, total, matched / max(1, total)
+
+
+async def execute_vision_benchmark_sample(
+    model: dict[str, Any],
+    case: dict[str, Any],
+) -> dict[str, Any]:
+    image = generated_vision_fixture()
+    if hashlib.sha256(image).hexdigest() != VISION_FIXTURE_SHA256:
+        raise RuntimeError("El fixture visual no coincide con el protocolo")
+    endpoint = model_endpoint(model)
+    if not local_benchmark_endpoint(endpoint):
+        raise ValueError("El benchmark de visión exige un endpoint loopback")
+    model_name = str(
+        model.get("_runtime_model_alias")
+        or model.get("model_alias")
+        or model.get("model_ref")
+        or ""
+    )
+    encoded = base64.b64encode(image).decode("ascii")
+    start = time.monotonic()
+    async with httpx.AsyncClient(timeout=float(model.get("timeout_seconds") or 600)) as client:
+        if model.get("engine") == "ollama":
+            response = await client.post(
+                f"{endpoint}/api/chat",
+                json={
+                    "model": model_name,
+                    "messages": [{
+                        "role": "user",
+                        "content": str(case["prompt"]),
+                        "images": [encoded],
+                    }],
+                    "stream": False,
+                    "options": {"temperature": 0, "top_p": 1, "seed": 42},
+                    "keep_alive": "10m",
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            answer = str((payload.get("message") or {}).get("content") or "")
+            prompt_tokens = integer_value(payload.get("prompt_eval_count"))
+            output_tokens = integer_value(payload.get("eval_count"))
+        else:
+            response = await client.post(
+                f"{endpoint}/v1/chat/completions",
+                json={
+                    "model": model_name,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": str(case["prompt"])},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                            },
+                        ],
+                    }],
+                    "temperature": 0,
+                    "top_p": 1,
+                    "seed": 42,
+                    "stream": False,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            choices = payload.get("choices") if isinstance(payload, dict) else None
+            answer = str(
+                ((choices[0].get("message") or {}).get("content") or "")
+                if isinstance(choices, list) and choices else ""
+            )
+            usage = payload.get("usage") or {}
+            prompt_tokens = integer_value(usage.get("prompt_tokens"))
+            output_tokens = integer_value(usage.get("completion_tokens"))
+    total_ms = (time.monotonic() - start) * 1000
+    matched, expected, recall = normalized_concept_recall(
+        answer,
+        [list(item) for item in case["expected_concepts"]],
+    )
+    produced = bool(asr_normalize_text(answer))
+    return {
+        "ttft_ms": None,
+        "total_ms": total_ms,
+        "prompt_tokens": prompt_tokens,
+        "output_tokens": output_tokens,
+        "output_tps": (
+            output_tokens / max(total_ms / 1000, 0.001) if output_tokens else None
+        ),
+        "chars_per_second": len(answer) / max(total_ms / 1000, 0.001),
+        "output_chars": len(answer),
+        "output_hash": hashlib.sha256(answer.encode("utf-8")).hexdigest() if answer else "",
+        "native": {
+            "fixture_id": "shapes-v1",
+            "fixture_sha256": VISION_FIXTURE_SHA256,
+            "matched_concepts": matched,
+            "expected_concepts": expected,
+            "normalized_concept_recall": recall,
+        },
+        "valid": produced,
+        "error": "" if produced else "El runtime visual no produjo una respuesta",
+    }
+
+
+def inspect_wav_audio(content: bytes) -> dict[str, Any]:
+    if len(content) < 44 or content[:4] != b"RIFF" or content[8:12] != b"WAVE":
+        raise ValueError("La salida TTS no es WAV")
+    position = 12
+    fmt: bytes | None = None
+    audio = b""
+    while position + 8 <= len(content):
+        kind = content[position:position + 4]
+        length = struct.unpack("<I", content[position + 4:position + 8])[0]
+        start = position + 8
+        end = start + length
+        if end > len(content):
+            raise ValueError("Chunk WAV truncado")
+        if kind == b"fmt ":
+            fmt = content[start:end]
+        elif kind == b"data":
+            audio = content[start:end]
+        position = end + (length % 2)
+    if fmt is None or len(fmt) < 16 or not audio:
+        raise ValueError("WAV sin formato o audio")
+    codec, channels, sample_rate, byte_rate, block_align, bits = struct.unpack(
+        "<HHIIHH", fmt[:16],
+    )
+    if (
+        codec != 1
+        or channels not in {1, 2}
+        or not 8_000 <= sample_rate <= 192_000
+        or bits not in {8, 16, 24, 32}
+        or block_align != channels * bits // 8
+        or byte_rate != sample_rate * block_align
+        or len(audio) % block_align
+    ):
+        raise ValueError("Propiedades PCM WAV inválidas")
+    sample_width = bits // 8
+    peak = 0
+    energy = 0.0
+    sample_count = len(audio) // sample_width
+    for offset in range(0, len(audio), sample_width):
+        raw = audio[offset:offset + sample_width]
+        if bits == 8:
+            value = raw[0] - 128
+            maximum = 128
+        else:
+            value = int.from_bytes(raw, "little", signed=True)
+            maximum = 1 << (bits - 1)
+        normalized = value / maximum
+        peak = max(peak, abs(value))
+        energy += normalized * normalized
+    duration = len(audio) / byte_rate
+    rms = math.sqrt(energy / max(1, sample_count))
+    return {
+        "audio_integrity": duration > 0 and peak > 0,
+        "container": "wav",
+        "codec": "pcm",
+        "duration_seconds": duration,
+        "sample_rate_hz": sample_rate,
+        "channels": channels,
+        "bits_per_sample": bits,
+        "audio_bytes": len(audio),
+        "size_bytes": len(content),
+        "peak_amplitude": peak / (1 << (bits - 1) if bits > 8 else 128),
+        "rms_amplitude": rms,
+        "non_silent": rms >= 0.0001,
+        "audio_sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+async def tts_roundtrip_asr(
+    audio: bytes,
+    reference: str,
+    language: str,
+) -> dict[str, Any]:
+    models = await whisper_service_benchmark_models()
+    if not models:
+        return {
+            "intelligibility_available": False,
+            "intelligibility_status": "local-whisper-unavailable",
+            "wer": None,
+            "cer": None,
+        }
+    whisper = next(
+        (model for model in models if normalized_whisper_model_id(str(model["model_ref"])) == "turbo"),
+        models[0],
+    )
+    endpoint = model_endpoint(whisper)
+    if not local_benchmark_endpoint(endpoint):
+        return {
+            "intelligibility_available": False,
+            "intelligibility_status": "local-whisper-unavailable",
+            "wer": None,
+            "cer": None,
+        }
+    async with httpx.AsyncClient(timeout=float(whisper.get("timeout_seconds") or 600)) as client:
+        response = await client.post(
+            f"{endpoint}/v1/audio/transcriptions",
+            files={"file": ("roundtrip.wav", audio, "audio/wav")},
+            data={
+                "model": str(whisper.get("model_ref") or ""),
+                "language": language,
+                "response_format": "json",
+                "temperature": "0",
+            },
+        )
+        response.raise_for_status()
+        transcript = str(response.json().get("text") or "")
+    return {
+        "intelligibility_available": True,
+        "intelligibility_status": "measured-local-whisper",
+        "wer": asr_edit_rate(reference, transcript),
+        "cer": asr_edit_rate(reference, transcript, characters=True),
+        "transcript_sha256": (
+            hashlib.sha256(transcript.encode("utf-8")).hexdigest() if transcript else ""
+        ),
+    }
+
+
+async def execute_tts_benchmark_sample(
+    model: dict[str, Any],
+    case: dict[str, Any],
+) -> dict[str, Any]:
+    endpoint = model_endpoint(model)
+    if not local_benchmark_endpoint(endpoint):
+        raise ValueError("El benchmark TTS exige un endpoint loopback")
+    alias = str(model.get("model_alias") or model.get("model_ref") or "")
+    start = time.monotonic()
+    if model.get("api_protocol") == "mydgx-tts":
+        async with httpx.AsyncClient(timeout=float(model.get("timeout_seconds") or 900)) as client:
+            response = await client.post(
+                f"{endpoint}/v1/audio/speech",
+                json={
+                    "model": alias,
+                    "input": str(case["text"]),
+                    "language": str(case["language"]),
+                    "response_format": "wav",
+                },
+            )
+        if response.status_code != 200:
+            raise ValueError(f"El runtime TTS falló: {redact_log_text(response.text, 300)}")
+        audio = response.content
+        total_ms = (time.monotonic() - start) * 1000
+    else:
+        result = await execute_multimodal_request(MultimodalRunRequest(
+            model=alias,
+            task="tts",
+            prompt=str(case["text"]),
+            response_format="wav",
+        ))
+        total_ms = (time.monotonic() - start) * 1000
+        encoded = result.get("data_base64")
+        if not isinstance(encoded, str):
+            raise ValueError("El runtime TTS no devolvió audio binario")
+        try:
+            audio = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("El runtime TTS devolvió audio inválido") from exc
+    native = inspect_wav_audio(audio)
+    try:
+        intelligibility = await tts_roundtrip_asr(
+            audio, str(case["text"]), str(case["language"]),
+        )
+    except (httpx.HTTPError, ValueError):
+        intelligibility = {
+            "intelligibility_available": False,
+            "intelligibility_status": "local-whisper-failed",
+            "wer": None,
+            "cer": None,
+        }
+    duration = float(native["duration_seconds"])
+    native.update({
+        **intelligibility,
+        "rtf": total_ms / 1000 / duration if duration > 0 else None,
+        "language": case["language"],
+    })
+    valid = bool(native["audio_integrity"] and native["non_silent"])
+    return {
+        "ttft_ms": None,
+        "total_ms": total_ms,
+        "prompt_tokens": None,
+        "output_tokens": None,
+        "output_tps": None,
+        "chars_per_second": len(str(case["text"])) / max(total_ms / 1000, 0.001),
+        "output_chars": 0,
+        "output_hash": native["audio_sha256"],
+        "native": native,
+        "valid": valid,
+        "error": "" if valid else "El audio TTS no es íntegro o es silencio",
+    }
+
+
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    if not left or len(left) != len(right):
+        raise ValueError("Los embeddings tienen dimensiones incompatibles")
+    if not all(math.isfinite(value) for value in (*left, *right)):
+        raise ValueError("El runtime devolvió embeddings no finitos")
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0 or right_norm == 0:
+        raise ValueError("El runtime devolvió un embedding nulo")
+    return sum(a * b for a, b in zip(left, right)) / (left_norm * right_norm)
+
+
+async def execute_embeddings_benchmark_sample(
+    model: dict[str, Any],
+    case: dict[str, Any],
+) -> dict[str, Any]:
+    endpoint = model_endpoint(model)
+    if not local_benchmark_endpoint(endpoint):
+        raise ValueError("El benchmark de embeddings exige un endpoint loopback")
+    texts = list(case["texts"])
+    model_name = str(
+        model.get("_runtime_model_alias")
+        or model.get("model_alias")
+        or model.get("model_ref")
+        or ""
+    )
+    start = time.monotonic()
+    async with httpx.AsyncClient(timeout=float(model.get("timeout_seconds") or 600)) as client:
+        response = await client.post(
+            f"{endpoint}/v1/embeddings",
+            json={"model": model_name, "input": texts, "encoding_format": "float"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    total_ms = (time.monotonic() - start) * 1000
+    entries = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(entries, list) or len(entries) != len(texts):
+        raise ValueError("El runtime devolvió una cantidad inesperada de embeddings")
+    ordered = sorted(entries, key=lambda item: int(item.get("index", 0)))
+    vectors = [
+        [float(value) for value in item.get("embedding", [])]
+        for item in ordered if isinstance(item, dict)
+    ]
+    if len(vectors) != len(texts) or not vectors:
+        raise ValueError("La respuesta de embeddings no es válida")
+    positive = [
+        cosine_similarity(vectors[left], vectors[right])
+        for left, right in case["positive_pairs"]
+    ]
+    negative = [
+        cosine_similarity(vectors[left], vectors[right])
+        for left, right in case["negative_pairs"]
+    ]
+    comparisons = [
+        positive_value > negative_value
+        for positive_value in positive
+        for negative_value in negative
+    ]
+    positive_mean = benchmark_mean(positive) or 0
+    negative_mean = benchmark_mean(negative) or 0
+    semantic_margin = positive_mean - negative_mean
+    pair_accuracy = sum(comparisons) / max(1, len(comparisons))
+    required_margin = float(case["required_margin"])
+    vector_hashes = [
+        content_hash([round(value, 8) for value in vector]) for vector in vectors
+    ]
+    valid = pair_accuracy == 1.0 and semantic_margin >= required_margin
+    throughput = len(texts) / max(total_ms / 1000, 0.001)
+    return {
+        "ttft_ms": None,
+        "total_ms": total_ms,
+        "prompt_tokens": None,
+        "output_tokens": len(texts),
+        "output_tps": throughput,
+        "chars_per_second": None,
+        "output_chars": 0,
+        "output_hash": content_hash(vector_hashes),
+        "native": {
+            "input_count": len(texts),
+            "dimension": len(vectors[0]),
+            "vectors_sha256": content_hash(vector_hashes),
+            "positive_similarity_mean": positive_mean,
+            "negative_similarity_mean": negative_mean,
+            "semantic_margin": semantic_margin,
+            "required_margin": required_margin,
+            "pair_accuracy": pair_accuracy,
+            "items_per_second": throughput,
+        },
+        "valid": valid,
+        "error": "" if valid else "La separación semántica no alcanzó el margen versionado",
+    }
+
+
+def ranking_metrics(actual: list[int], expected: list[int]) -> tuple[float, float]:
+    if set(actual) != set(expected) or len(actual) != len(expected):
+        raise ValueError("El reranker no devolvió exactamente los documentos solicitados")
+    relevance = {
+        document: len(expected) - position
+        for position, document in enumerate(expected)
+    }
+    gains = [relevance[document] for document in actual]
+    ideal = [relevance[document] for document in expected]
+
+    def dcg(values: list[int]) -> float:
+        return sum(
+            (2 ** value - 1) / math.log2(position + 2)
+            for position, value in enumerate(values)
+        )
+
+    ndcg = dcg(gains) / max(dcg(ideal), 0.0001)
+    best_rank = actual.index(expected[0]) + 1
+    return ndcg, 1 / best_rank
+
+
+async def execute_reranking_benchmark_sample(
+    model: dict[str, Any],
+    case: dict[str, Any],
+) -> dict[str, Any]:
+    endpoint = model_endpoint(model)
+    if not local_benchmark_endpoint(endpoint):
+        raise ValueError("El benchmark de reranking exige un endpoint loopback")
+    model_name = str(
+        model.get("_runtime_model_alias")
+        or model.get("model_alias")
+        or model.get("model_ref")
+        or ""
+    )
+    documents = list(case["documents"])
+    start = time.monotonic()
+    async with httpx.AsyncClient(timeout=float(model.get("timeout_seconds") or 600)) as client:
+        response = await client.post(
+            f"{endpoint}{MULTIMODAL_ENDPOINTS['reranking']}",
+            json={"model": model_name, "query": case["query"], "documents": documents},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    total_ms = (time.monotonic() - start) * 1000
+    entries = (
+        payload.get("results", payload.get("data"))
+        if isinstance(payload, dict)
+        else None
+    )
+    if not isinstance(entries, list):
+        raise ValueError("El runtime devolvió una respuesta de reranking inválida")
+    parsed: list[tuple[int, float]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("El runtime devolvió un resultado de reranking inválido")
+        index = int(entry.get("index", -1))
+        score = float(entry.get("relevance_score", entry.get("score", 0)))
+        if not math.isfinite(score):
+            raise ValueError("El runtime devolvió un score no finito")
+        parsed.append((index, score))
+    parsed.sort(key=lambda item: item[1], reverse=True)
+    actual = [index for index, _ in parsed]
+    expected = [int(index) for index in case["expected_order"]]
+    ndcg, mrr = ranking_metrics(actual, expected)
+    score_hashes = [
+        content_hash({"index": index, "score": round(score, 8)})
+        for index, score in parsed
+    ]
+    valid = len(actual) == len(documents)
+    return {
+        "ttft_ms": None,
+        "total_ms": total_ms,
+        "prompt_tokens": None,
+        "output_tokens": len(documents),
+        "output_tps": len(documents) / max(total_ms / 1000, 0.001),
+        "chars_per_second": None,
+        "output_chars": 0,
+        "output_hash": content_hash(score_hashes),
+        "native": {
+            "document_count": len(documents),
+            "ndcg": ndcg,
+            "mrr": mrr,
+            "exact_order": actual == expected,
+            "expected_order_sha256": content_hash(expected),
+            "returned_order_sha256": content_hash(actual),
+            "scores_sha256": content_hash(score_hashes),
+        },
+        "valid": valid,
+        "error": "" if valid else "El reranker omitió documentos",
+    }
+
+
+async def execute_benchmark_sample(
+    model: dict[str, Any],
+    case: dict[str, Any],
+) -> dict[str, Any]:
+    if str(model.get("task") or "") == "asr":
+        return await execute_asr_benchmark_sample(model, case)
+    if str(model.get("task") or "") == "vision":
+        return await execute_vision_benchmark_sample(model, case)
+    if str(model.get("task") or "") == "tts":
+        return await execute_tts_benchmark_sample(model, case)
+    if str(model.get("task") or "") == "image-generation":
+        return await execute_image_benchmark_sample(model, case)
+    if str(model.get("task") or "") == "video-generation":
+        return await execute_video_benchmark_sample(model, case)
+    if str(model.get("task") or "") == "embeddings":
+        return await execute_embeddings_benchmark_sample(model, case)
+    if str(model.get("task") or "") == "reranking":
+        return await execute_reranking_benchmark_sample(model, case)
+    start = time.monotonic()
+    first_token_at: float | None = None
+    first_visible_at: float | None = None
+    content_parts: list[str] = []
+    reasoning_chars = 0
+    finish_reason = ""
+    native: dict[str, Any] = {}
+    engine = str(model.get("engine") or "")
+    model_name = str(model.get("_runtime_model_alias") or model.get("model_alias") or model.get("model_ref") or "")
+    timeout = float(model.get("timeout_seconds") or 600)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        if engine == "ollama":
+            async with client.stream(
+                "POST",
+                f"{settings.ollama_url.rstrip('/')}/api/chat",
+                json={
+                    "model": str(model.get("model_ref") or ""),
+                    "messages": [{"role": "user", "content": case["prompt"]}],
+                    "stream": True,
+                    "options": {
+                        "temperature": 0,
+                        "top_p": 1,
+                        "seed": 42,
+                        "num_predict": int(case["max_tokens"]),
+                        "num_ctx": int(model.get("_benchmark_context") or 8192),
+                    },
+                    "keep_alive": "10m",
+                },
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    event = json.loads(line)
+                    message = event.get("message") or {}
+                    thinking = str(message.get("thinking") or "")
+                    text = str(message.get("content") or "")
+                    if (thinking or text) and first_token_at is None:
+                        first_token_at = time.monotonic()
+                    reasoning_chars += len(thinking)
+                    if text:
+                        if first_visible_at is None:
+                            first_visible_at = time.monotonic()
+                        content_parts.append(text)
+                    if event.get("done"):
+                        finish_reason = str(event.get("done_reason") or "")
+                        native = {
+                            key: event.get(key)
+                            for key in (
+                                "total_duration", "load_duration", "prompt_eval_count",
+                                "prompt_eval_duration", "eval_count", "eval_duration",
+                                "done_reason",
+                            )
+                        }
+        else:
+            async with client.stream(
+                "POST",
+                f"{model_endpoint(model)}/v1/chat/completions",
+                json={
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": case["prompt"]}],
+                    "temperature": 0,
+                    "top_p": 1,
+                    "seed": 42,
+                    "max_tokens": int(case["max_tokens"]),
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                },
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    event = json.loads(data)
+                    choices = event.get("choices") or []
+                    if choices:
+                        delta = choices[0].get("delta") or {}
+                        reasoning = str(delta.get("reasoning_content") or "")
+                        text = str(delta.get("content") or "")
+                        if (reasoning or text) and first_token_at is None:
+                            first_token_at = time.monotonic()
+                        reasoning_chars += len(reasoning)
+                        if text:
+                            if first_visible_at is None:
+                                first_visible_at = time.monotonic()
+                            content_parts.append(text)
+                        if choices[0].get("finish_reason"):
+                            finish_reason = str(choices[0]["finish_reason"])
+                    usage = event.get("usage")
+                    if isinstance(usage, dict):
+                        native["usage"] = usage
+                    timings = event.get("timings")
+                    if isinstance(timings, dict):
+                        native["timings"] = timings
+    finished = time.monotonic()
+    content = "".join(content_parts)
+    total_ms = (finished - start) * 1000
+    ttft_ms = (first_token_at - start) * 1000 if first_token_at is not None else None
+    prompt_tokens: int | None = None
+    output_tokens: int | None = None
+    output_tps: float | None = None
+    if engine == "ollama":
+        prompt_tokens = int(native.get("prompt_eval_count") or 0) or None
+        output_tokens = int(native.get("eval_count") or 0) or None
+        eval_duration = int(native.get("eval_duration") or 0)
+        if output_tokens and eval_duration:
+            output_tps = output_tokens / (eval_duration / 1_000_000_000)
+    else:
+        usage = native.get("usage") or {}
+        timings = native.get("timings") or {}
+        prompt_tokens = int(usage.get("prompt_tokens") or timings.get("prompt_n") or 0) or None
+        output_tokens = int(
+            usage.get("completion_tokens") or timings.get("predicted_n") or 0
+        ) or None
+        native_tps = timings.get("predicted_per_second")
+        if isinstance(native_tps, (int, float)) and native_tps > 0:
+            output_tps = float(native_tps)
+    generation_seconds = max(0.001, finished - (first_token_at or start))
+    if output_tps is None and output_tokens:
+        output_tps = output_tokens / generation_seconds
+    generated_chars = len(content) + reasoning_chars
+    max_tokens = int(case["max_tokens"])
+    native["finish_reason"] = finish_reason
+    native["reasoning_chars"] = reasoning_chars
+    native["visible_ttft_ms"] = (
+        round((first_visible_at - start) * 1000, 2) if first_visible_at is not None else None
+    )
+    native["early_stop"] = bool(
+        finish_reason == "stop" and output_tokens is not None and output_tokens < max_tokens
+    )
+    native["hit_token_limit"] = finish_reason == "length" or (
+        output_tokens is not None and output_tokens >= max_tokens
+    )
+    produced = first_token_at is not None and generated_chars > 0
+    return {
+        "ttft_ms": ttft_ms,
+        "total_ms": total_ms,
+        "prompt_tokens": prompt_tokens,
+        "output_tokens": output_tokens,
+        "output_tps": output_tps,
+        "chars_per_second": generated_chars / generation_seconds if generated_chars else None,
+        "output_chars": len(content),
+        "output_hash": hashlib.sha256(content.encode("utf-8")).hexdigest() if content else "",
+        "native": native,
+        "valid": produced,
+        "error": "" if produced else "El runtime no produjo tokens",
+    }
+
+
+def persist_benchmark_sample(
+    run_id: str,
+    case_id: str,
+    phase: str,
+    repetition: int,
+    started_at: str,
+    result: dict[str, Any],
+) -> None:
+    db.execute(
+        """
+        INSERT INTO benchmark_samples(
+            run_id,case_id,phase,repetition,started_at,ttft_ms,total_ms,
+            prompt_tokens,output_tokens,output_tps,chars_per_second,output_chars,
+            output_hash,native_metrics_json,valid,error
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            run_id, case_id, phase, repetition, started_at,
+            result.get("ttft_ms"), result.get("total_ms", 0),
+            result.get("prompt_tokens"), result.get("output_tokens"),
+            result.get("output_tps"), result.get("chars_per_second"),
+            result.get("output_chars", 0), result.get("output_hash", ""),
+            canonical_json(result.get("native") or {}),
+            int(bool(result.get("valid"))),
+            redact_log_text(result.get("error", ""), 500),
+        ),
+    )
+
+
+class BenchmarkCancelled(Exception):
+    pass
+
+
+async def wait_for_benchmark_isolation(
+    job_id: str,
+    model: dict[str, Any],
+    strict: bool,
+    cancel_event: asyncio.Event,
+    parent_job_id: str | None = None,
+    attempts: int = 4,
+    delay_seconds: float = 10,
+) -> None:
+    for attempt in range(attempts):
+        try:
+            await assert_benchmark_isolation(
+                job_id, model, strict, parent_job_id=parent_job_id,
+            )
+            return
+        except BenchmarkIsolationError:
+            if attempt == attempts - 1:
+                raise
+        if cancel_event.is_set() or db.job_cancel_requested(job_id):
+            raise BenchmarkCancelled()
+        await asyncio.sleep(delay_seconds)
+
+
+def equivalent_benchmark_run(
+    model_id: str,
+    environment_id: str,
+    runtime_hash: str,
+    protocol_id: str,
+) -> str | None:
+    rows = db.rows(
+        """
+        SELECT id FROM benchmark_runs
+        WHERE model_id=? AND environment_id=? AND runtime_hash=? AND protocol_id=?
+            AND score_algorithm=? AND status='completed' AND valid=1
+        ORDER BY completed_at DESC LIMIT 1
+        """,
+        (
+            model_id,
+            environment_id,
+            runtime_hash,
+            protocol_id,
+            BENCHMARK_SCORE_ALGORITHMS[protocol_id],
+        ),
+    )
+    return rows[0]["id"] if rows else None
+
+
+async def run_benchmark_job(
+    job_id: str,
+    run_id: str,
+    request: BenchmarkRunRequest,
+    automatic: bool = False,
+    parent_job_id: str | None = None,
+    suite_progress: tuple[int, int] | None = None,
+) -> str:
+    global _benchmark_active_job_id
+    cancel_event = _job_cancel_events.setdefault(job_id, asyncio.Event())
+    telemetry_stop = asyncio.Event()
+    telemetry_task: asyncio.Task[None] | None = None
+    run_created = False
+    outcome = "failed"
+    async with _benchmark_lock:
+        _benchmark_active_job_id = job_id
+        try:
+            set_benchmark_gate(job_id, 120)
+            db.update_job(job_id, "running", 2, "Resolviendo artefacto y entorno")
+            model = await resolve_benchmark_target(request.target)
+            expected_task = {
+                ASR_BENCHMARK_PROTOCOL_ID: "asr",
+                VISION_BENCHMARK_PROTOCOL_ID: "vision",
+                TTS_BENCHMARK_PROTOCOL_ID: "tts",
+                IMAGE_BENCHMARK_PROTOCOL_ID: "image-generation",
+                VIDEO_BENCHMARK_PROTOCOL_ID: "video-generation",
+                EMBEDDINGS_BENCHMARK_PROTOCOL_ID: "embeddings",
+                RERANKING_BENCHMARK_PROTOCOL_ID: "reranking",
+            }.get(request.protocol_id, "text")
+            task = str(model.get("task") or "chat")
+            if expected_task == "asr" and task != "asr":
+                raise RuntimeError("El protocolo ASR solo admite modelos Whisper ASR")
+            if expected_task == "vision" and task != "vision":
+                raise RuntimeError("El protocolo de visión solo admite modelos visuales")
+            if expected_task == "tts" and task != "tts":
+                raise RuntimeError("El protocolo TTS solo admite sintetizadores locales")
+            if expected_task == "image-generation" and task != "image-generation":
+                raise RuntimeError("El protocolo de imagen solo admite FLUX gestionado")
+            if expected_task == "video-generation" and task != "video-generation":
+                raise RuntimeError("El protocolo de vídeo solo admite Wan gestionado")
+            if expected_task == "embeddings" and task != "embeddings":
+                raise RuntimeError("El protocolo de embeddings solo admite modelos de embeddings")
+            if expected_task == "reranking" and task != "reranking":
+                raise RuntimeError("El protocolo de reranking solo admite rerankers")
+            if expected_task == "text" and task != "chat":
+                raise RuntimeError("El protocolo de texto solo admite modelos de texto")
+            sample_ttl = float(model.get("timeout_seconds") or 600) + 60
+            released: list[str] = []
+            if request.strict_isolation and settings.benchmark_release_idle_ollama:
+                released = await release_idle_ollama_residents(str(model.get("model_ref") or ""))
+            await wait_for_benchmark_isolation(
+                job_id, model, request.strict_isolation, cancel_event, parent_job_id,
+            )
+            model_id = await register_benchmark_model(model)
+            environment_id = await asyncio.to_thread(register_benchmark_environment)
+            runtime, runtime_hash = benchmark_runtime_config(model)
+            if automatic:
+                existing = equivalent_benchmark_run(
+                    model_id, environment_id, runtime_hash, request.protocol_id,
+                )
+                if existing:
+                    db.update_job(
+                        job_id,
+                        "completed",
+                        100,
+                        "Ya existe un benchmark válido para este artefacto, runtime y entorno",
+                    )
+                    db.execute(
+                        """
+                        INSERT OR REPLACE INTO job_results(job_id,result_json,created_at)
+                        VALUES(?,?,?)
+                        """,
+                        (job_id, canonical_json({"duplicate_of": existing}), utc_now()),
+                    )
+                    outcome = "duplicate"
+                    return outcome
+            runtime["isolation"] = {
+                "strict": request.strict_isolation,
+                "automatic": automatic,
+                "co_resident_models": benchmark_co_resident_models(model),
+                "released_ollama_models": released,
+            }
+            now = utc_now()
+            db.execute(
+                """
+                INSERT INTO benchmark_runs(
+                    id,job_id,protocol_id,model_id,environment_id,target,runtime_hash,
+                    runtime_json,score_algorithm,status,valid,created_at,started_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,'running',0,?,?)
+                """,
+                (
+                    run_id, job_id, request.protocol_id, model_id, environment_id,
+                    str(model.get("_benchmark_target") or request.target),
+                    runtime_hash, canonical_json(runtime),
+                    BENCHMARK_SCORE_ALGORITHMS[request.protocol_id], now, now,
+                ),
+            )
+            run_created = True
+            telemetry_task = asyncio.create_task(
+                collect_benchmark_telemetry(run_id, telemetry_stop)
+            )
+            protocol = BENCHMARK_PROTOCOLS[request.protocol_id]
+            cases = list(protocol["cases"])
+            total_steps = len(cases) * (1 + request.repetitions)
+            completed_steps = 0
+            for case in cases:
+                for repetition in range(1 + request.repetitions):
+                    if cancel_event.is_set() or db.job_cancel_requested(job_id):
+                        raise BenchmarkCancelled()
+                    set_benchmark_gate(job_id, sample_ttl)
+                    await wait_for_benchmark_isolation(
+                        job_id, model, request.strict_isolation, cancel_event, parent_job_id,
+                    )
+                    phase = "warmup" if repetition == 0 else "measured"
+                    progress = 5 + completed_steps / max(1, total_steps) * 88
+                    db.update_job(
+                        job_id,
+                        "running",
+                        progress,
+                        f"{case['name']} · {phase} {repetition or 1}",
+                    )
+                    if parent_job_id and suite_progress:
+                        suite_position, suite_total = suite_progress
+                        suite_percent = (
+                            (suite_position - 1)
+                            + completed_steps / max(1, total_steps)
+                        ) / max(1, suite_total) * 94
+                        db.update_job(
+                            parent_job_id,
+                            "running",
+                            suite_percent,
+                            (
+                                f"{model.get('name') or model.get('model_ref')} · "
+                                f"{case['name']} · {phase} {repetition or 1}"
+                            ),
+                        )
+                    started_at = utc_now()
+                    try:
+                        result = await execute_benchmark_sample(model, case)
+                    except Exception as exc:
+                        result = {
+                            "total_ms": 0,
+                            "valid": False,
+                            "error": redact_log_text(
+                                f"{type(exc).__name__}: {exc.detail if isinstance(exc, HTTPException) else exc}",
+                                300,
+                            ) or f"{type(exc).__name__}: muestra no completada",
+                        }
+                    if request.strict_isolation and result.get("valid"):
+                        busy = await benchmark_runtime_busy()
+                        if busy:
+                            result["valid"] = False
+                            result["error"] = f"Contaminación: {busy}"
+                    persist_benchmark_sample(
+                        run_id,
+                        str(case["id"]),
+                        phase,
+                        repetition,
+                        started_at,
+                        result,
+                    )
+                    completed_steps += 1
+            telemetry_stop.set()
+            if telemetry_task:
+                await telemetry_task
+                telemetry_task = None
+            summary = benchmark_summary(run_id)
+            valid = (
+                summary["valid_sample_count"] == summary["sample_count"]
+                and summary["sample_count"] > 0
+            )
+            invalid_reason = "" if valid else "Una o más muestras no fueron válidas"
+            if not valid:
+                errors = db.rows(
+                    "SELECT error FROM benchmark_samples WHERE run_id=? AND valid=0 AND error<>'' LIMIT 1",
+                    (run_id,),
+                )
+                if errors:
+                    invalid_reason = f"{invalid_reason}: {redact_log_text(str(errors[0]['error']), 300)}"
+                for table in ("benchmark_samples", "benchmark_telemetry"):
+                    db.execute(f"DELETE FROM {table} WHERE run_id=?", (run_id,))
+                db.execute("DELETE FROM benchmark_runs WHERE id=?", (run_id,))
+                db.update_job(job_id, "failed", 0, invalid_reason)
+                db.audit("benchmark.run", request.target, False, "invalid-discarded")
+                return invalid_reason
+            db.execute(
+                """
+                UPDATE benchmark_runs
+                SET status='completed',valid=?,invalid_reason=?,score=?,
+                    summary_json=?,completed_at=?
+                WHERE id=?
+                """,
+                (
+                    int(valid), invalid_reason, summary["score"],
+                    canonical_json(summary), utc_now(), run_id,
+                ),
+            )
+            db.execute(
+                """
+                INSERT OR REPLACE INTO job_results(job_id,result_json,created_at)
+                VALUES(?,?,?)
+                """,
+                (
+                    job_id,
+                    canonical_json({"run_id": run_id, "valid": valid, "summary": summary}),
+                    utc_now(),
+                ),
+            )
+            db.update_job(
+                job_id,
+                "completed",
+                100,
+                "Benchmark válido" if valid else "Benchmark completado con muestras no válidas",
+            )
+            db.audit("benchmark.run", request.target, valid, run_id)
+            outcome = "completed"
+        except BenchmarkCancelled:
+            if run_created:
+                db.execute(
+                    """
+                    UPDATE benchmark_runs
+                    SET status='cancelled',valid=0,invalid_reason='Cancelado por el usuario',
+                        completed_at=?
+                    WHERE id=?
+                    """,
+                    (utc_now(), run_id),
+                )
+            db.update_job(job_id, "cancelled", 0, "Benchmark cancelado")
+            db.audit("benchmark.run", request.target, False, "cancelled")
+            outcome = "cancelled"
+        except asyncio.CancelledError:
+            if run_created:
+                db.execute(
+                    """
+                    UPDATE benchmark_runs
+                    SET status='cancelled',valid=0,invalid_reason='Servicio detenido',
+                        completed_at=?
+                    WHERE id=?
+                    """,
+                    (utc_now(), run_id),
+                )
+            db.update_job(job_id, "cancelled", 0, "Benchmark interrumpido al detener MyDGX")
+            raise
+        except Exception as exc:
+            message = redact_log_text(f"{type(exc).__name__}: {exc}", 500)
+            retry = automatic and isinstance(exc, BenchmarkIsolationError)
+            if run_created:
+                db.execute(
+                    """
+                    UPDATE benchmark_runs
+                    SET status='failed',valid=0,invalid_reason=?,completed_at=?
+                    WHERE id=?
+                    """,
+                    (message, utc_now(), run_id),
+                )
+            db.update_job(
+                job_id,
+                "failed",
+                0,
+                f"Aplazado; se reintentará: {message}" if retry else message,
+            )
+            db.audit("benchmark.run", request.target, False, type(exc).__name__)
+            outcome = "retry" if retry else "failed"
+        finally:
+            telemetry_stop.set()
+            if telemetry_task:
+                await telemetry_task
+            set_benchmark_gate(None)
+            _benchmark_active_job_id = None
+            _job_cancel_events.pop(job_id, None)
+    return outcome
+
+
+async def release_all_ollama_models() -> list[str]:
+    residents = await benchmark_ollama_residents() or set()
+    released: list[str] = []
+    for name in sorted(residents):
+        try:
+            await ollama_payload(
+                "/api/generate",
+                "POST",
+                {"model": name, "keep_alive": 0},
+                timeout=30,
+            )
+            released.append(name)
+        except HTTPException:
+            continue
+    return released
+
+
+async def restore_ollama_residents(names: list[str]) -> list[str]:
+    restored: list[str] = []
+    for name in names:
+        try:
+            await ollama_payload(
+                "/api/generate",
+                "POST",
+                {"model": name, "prompt": "", "stream": False, "keep_alive": "10m"},
+                timeout=120,
+            )
+            restored.append(name)
+        except HTTPException:
+            continue
+    return restored
+
+
+async def whisper_runtime_snapshot() -> dict[str, Any]:
+    endpoint = settings.whisper_url.rstrip("/")
+    if not local_benchmark_endpoint(endpoint):
+        return {"reachable": False, "loaded_models": []}
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(f"{endpoint}/health")
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return {"reachable": False, "loaded_models": []}
+    return {
+        "reachable": True,
+        "loaded_models": [
+            str(item) for item in payload.get("loaded_models", [])
+            if isinstance(item, str)
+        ],
+    }
+
+
+async def release_whisper_models() -> None:
+    endpoint = settings.whisper_url.rstrip("/")
+    if not local_benchmark_endpoint(endpoint):
+        return
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.delete(f"{endpoint}/v1/models")
+            response.raise_for_status()
+    except httpx.HTTPError:
+        pass
+
+
+async def release_comfyui_models() -> None:
+    global _comfyui_freed_at
+    endpoint = settings.comfyui_url.rstrip("/")
+    if not local_benchmark_endpoint(endpoint):
+        return
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{endpoint}/free",
+                json={"unload_models": True, "free_memory": True},
+            )
+            response.raise_for_status()
+    except httpx.HTTPError:
+        return
+    _comfyui_freed_at = time.time()
+
+
+async def drop_page_cache() -> bool:
+    """Spark CUDA allocations do not reclaim page cache fast enough; large models need it dropped."""
+    if sys.platform != "linux" or not SYSTEM_REPAIR_SCRIPT.is_file():
+        return False
+    result = await asyncio.to_thread(
+        run_command, ["sudo", "-n", str(SYSTEM_REPAIR_SCRIPT), "--drop-caches"], 120,
+    )
+    return result.returncode == 0
+
+
+MODEL_LOAD_HEADROOM_BYTES = 2 * 1024**3
+
+
+async def prepare_memory_for_model(name: str, required_bytes: int) -> bool:
+    """Drop page cache only when the model does not fit in truly free memory."""
+    meminfo = await asyncio.to_thread(meminfo_bytes)
+    free = meminfo.get("MemFree", 0)
+    if not meminfo or free >= required_bytes + MODEL_LOAD_HEADROOM_BYTES:
+        return False
+    dropped = await drop_page_cache()
+    after = (await asyncio.to_thread(meminfo_bytes)).get("MemFree", 0)
+    db.log(
+        "info" if dropped else "warning",
+        "runtime",
+        "memory.page_cache.dropped" if dropped else "memory.page_cache.drop_failed",
+        f"{name}: necesita ~{required_bytes / 1024**3:.1f} GiB; libres {free / 1024**3:.1f} → {after / 1024**3:.1f} GiB",
+        detail={"required_bytes": required_bytes, "free_before": free, "free_after": after},
+    )
+    return dropped
+
+
+async def release_all_benchmark_memory() -> str:
+    await stop_profile_process(preserve_desired=True)
+    await release_all_ollama_models()
+    await release_whisper_models()
+    await release_comfyui_models()
+    await release_tts_models()
+    dropped = await drop_page_cache()
+    await wait_for_memory_recovery()
+    memory = await safe_memory_breakdown()
+    residual = [
+        f"{item['name']} ({', '.join(item['models'])})" if item["models"] else item["name"]
+        for item in memory.get("runtimes", [])
+        if item["models"] or item["kind"] == "llama-server"
+    ]
+    summary = f"{memory['free'] / 1024**3:.1f} GiB libres" if memory else "medición no disponible"
+    if not dropped:
+        summary += " · caché de disco no vaciada"
+    return summary + (f" · siguen cargados: {'; '.join(residual)}" if residual else "")
+
+
+OPTIONAL_SERVICES: dict[str, dict[str, str]] = {
+    "comfyui": {
+        "name": "ComfyUI",
+        "unit": "mydgx-comfyui",
+        "impact": "Generación de imagen y vídeo y los benchmarks de ComfyUI dejan de estar disponibles.",
+    },
+    "whisper": {
+        "name": "Whisper",
+        "unit": "mydgx-whisper",
+        "impact": "Transcripción de audio y la verificación ASR de los benchmarks TTS dejan de funcionar.",
+    },
+    "tts": {
+        "name": "TTS CUDA",
+        "unit": "mydgx-tts",
+        "impact": "Síntesis de voz y benchmarks TTS dejan de estar disponibles.",
+    },
+    "open-webui": {
+        "name": "Open WebUI",
+        "unit": "open-webui",
+        "impact": "La interfaz web de chat deja de responder.",
+    },
+    "searxng": {
+        "name": "SearXNG",
+        "unit": "mydgx-searxng",
+        "impact": "La búsqueda web del chat y de Open WebUI deja de funcionar.",
+    },
+    "gateway": {
+        "name": "Gateway API",
+        "unit": "mydgx-gateway",
+        "impact": "Los clientes de la API OpenAI compatible pierden acceso a los modelos del DGX.",
+    },
+}
+MEMORY_MODE_STATE_FILE = Path(settings.database_path).expanduser().resolve().parent / "memory-mode.json"
+_memory_mode_lock = asyncio.Lock()
+
+
+def memory_mode_state() -> dict[str, Any]:
+    try:
+        state = json.loads(MEMORY_MODE_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"stopped": [], "profiles": [], "since": None}
+    stopped = [item for item in state.get("stopped", []) if item in OPTIONAL_SERVICES]
+    profiles = [item for item in state.get("profiles", []) if isinstance(item, str) and item]
+    return {
+        "stopped": stopped,
+        "profiles": profiles,
+        "since": state.get("since") if stopped or profiles else None,
+    }
+
+
+def save_memory_mode_state(stopped: list[str], profiles: list[str] | None = None) -> None:
+    previous = memory_mode_state()
+    stopped = [item for item in dict.fromkeys(stopped) if item in OPTIONAL_SERVICES]
+    profiles = list(dict.fromkeys(previous["profiles"] if profiles is None else profiles))
+    if not stopped and not profiles:
+        MEMORY_MODE_STATE_FILE.unlink(missing_ok=True)
+        return
+    MEMORY_MODE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = MEMORY_MODE_STATE_FILE.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps({"stopped": stopped, "profiles": profiles, "since": previous["since"] or utc_now()}),
+        encoding="utf-8",
+    )
+    temporary.replace(MEMORY_MODE_STATE_FILE)
+
+
+def running_profile_pids() -> dict[str, list[int]]:
+    pids: dict[str, list[int]] = {}
+    for profile_id, mapping in _runtime_profile_models.items():
+        for runtime_key in mapping.values():
+            process = _profile_processes.get(runtime_key)
+            if process and process.returncode is None:
+                pids.setdefault(profile_id, []).append(process.pid)
+    return pids
+
+
+def optional_service_installed(service_id: str) -> bool:
+    return Path(f"/etc/systemd/system/{OPTIONAL_SERVICES[service_id]['unit']}.service").is_file()
+
+
+def optional_service_active(service_id: str) -> bool:
+    if not shutil.which("systemctl"):
+        return False
+    result = run_command(["systemctl", "is-active", OPTIONAL_SERVICES[service_id]["unit"]], 5)
+    return result.stdout.strip() in {"active", "activating", "reloading"}
+
+
+async def set_optional_service(service_id: str, action: Literal["start", "stop"]) -> None:
+    spec = OPTIONAL_SERVICES[service_id]
+    if not await asyncio.to_thread(optional_service_installed, service_id):
+        raise HTTPException(status_code=404, detail=f"{spec['name']} no está instalado como servicio")
+    if action == "stop":
+        if service_id == "comfyui":
+            await release_comfyui_models()
+        elif service_id == "whisper":
+            await release_whisper_models()
+        elif service_id == "tts":
+            await release_tts_models()
+    result = await asyncio.to_thread(
+        run_command, ["sudo", "-n", "systemctl", action, spec["unit"]], 120,
+    )
+    success = result.returncode == 0
+    detail = (result.stderr or result.stdout).strip()[:500]
+    db.audit(f"memory_mode.service.{action}", spec["unit"], success, detail)
+    db.log(
+        "info" if success else "error",
+        "runtime",
+        f"memory_mode.service.{action}",
+        f"{spec['name']}: {'detenido' if action == 'stop' else 'arrancado'}" if success else f"{spec['name']}: falló {action}",
+        entity_type="service",
+        entity_id=service_id,
+        detail={"action": action, "success": success},
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail=detail or f"No se pudo {action} {spec['name']}")
+
+
+MEMORY_MODE_REAPPLY_SECONDS = 240
+
+
+async def reapply_memory_mode() -> None:
+    """Enabled units come back after a reboot; keep the ones memory mode stopped stopped until «Restaurar»."""
+    if not shutil.which("systemctl"):
+        return
+    deadline = time.monotonic() + MEMORY_MODE_REAPPLY_SECONDS
+    while time.monotonic() < deadline:
+        async with _memory_mode_lock:
+            pending = memory_mode_state()["stopped"]
+            if not pending:
+                return
+            for service_id in pending:
+                if await asyncio.to_thread(optional_service_active, service_id):
+                    try:
+                        await set_optional_service(service_id, "stop")
+                        db.log(
+                            "info", "runtime", "memory_mode.reapplied",
+                            f"{OPTIONAL_SERVICES[service_id]['name']} sigue detenido por el modo memoria tras el reinicio",
+                        )
+                    except HTTPException:
+                        continue
+        await asyncio.sleep(5)
+
+
+async def memory_mode_status() -> dict[str, Any]:
+    memory, ollama = await asyncio.gather(safe_memory_breakdown(), benchmark_ollama_residents())
+    runtime_bytes: dict[str, int] = {}
+    pid_bytes: dict[int, int] = {}
+    for runtime in memory.get("runtimes", []):
+        runtime_bytes[runtime["kind"]] = runtime_bytes.get(runtime["kind"], 0) + int(runtime["bytes"])
+        pid_bytes[int(runtime["pid"])] = int(runtime["bytes"])
+    state = await asyncio.to_thread(memory_mode_state)
+    profile_pids = running_profile_pids()
+    profiles = [
+        {
+            "id": profile["id"],
+            "name": profile["name"],
+            "models": [str(model.get("name") or model["id"]) for model in running_profile_models(profile)],
+            "bytes": sum(pid_bytes.get(pid, 0) for pid in profile_pids.get(profile["id"], [])),
+        }
+        for profile in running_profiles()
+    ]
+    stopped_profiles = [
+        {"id": row["id"], "name": row["name"]}
+        for profile_id in state["profiles"]
+        for row in db.rows("SELECT id,name FROM profiles WHERE id=?", (profile_id,))
+    ]
+
+    def describe(service_id: str) -> dict[str, Any]:
+        spec = OPTIONAL_SERVICES[service_id]
+        installed = optional_service_installed(service_id)
+        return {
+            "id": service_id,
+            "name": spec["name"],
+            "unit": spec["unit"],
+            "impact": spec["impact"],
+            "installed": installed,
+            "active": installed and optional_service_active(service_id),
+            "bytes": runtime_bytes.get(service_id, 0),
+            "stopped_by_memory_mode": service_id in state["stopped"],
+        }
+
+    services = await asyncio.to_thread(lambda: [describe(item) for item in OPTIONAL_SERVICES])
+    return {
+        "services": services,
+        "ollama_models": sorted(ollama or []),
+        "ollama_bytes": runtime_bytes.get("ollama", 0),
+        "profiles": profiles,
+        "stopped_profiles": stopped_profiles,
+        "stopped": state["stopped"],
+        "since": state["since"],
+        "memory": memory,
+    }
+
+
+async def restore_whisper_runtime(snapshot: dict[str, Any]) -> list[str]:
+    if not snapshot.get("reachable"):
+        return []
+    endpoint = settings.whisper_url.rstrip("/")
+    requested = [
+        str(item) for item in snapshot.get("loaded_models", [])
+        if isinstance(item, str)
+    ]
+    await release_whisper_models()
+    if not requested:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=600) as client:
+            for model_id in requested:
+                response = await client.post(f"{endpoint}/v1/models/{model_id}/load")
+                response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return [f"Whisper: {type(exc).__name__}"]
+    return []
+
+
+def benchmark_suite_model(profile_id: str, model_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        raise RuntimeError("El perfil del modelo ya no existe")
+    profile = rows[0]
+    model = next(
+        (item for item in profile_models(profile) if str(item.get("id")) == model_id),
+        None,
+    )
+    if not model:
+        raise RuntimeError("El modelo ya no existe en su perfil")
+    if not profile_model_is_downloaded(model):
+        raise RuntimeError("El archivo local del modelo ya no está disponible")
+    return profile, model
+
+
+async def load_benchmark_suite_item(item: dict[str, Any]) -> str:
+    global _runtime_profile_id
+    if item["engine"] in {"ollama", "comfyui"} and not item["profile_id"]:
+        await resolve_benchmark_target(item["target"])
+        return item["target"]
+    if item["engine"] == "whisper" and not item["profile_id"]:
+        await resolve_benchmark_target(item["target"])
+        return item["target"]
+    if str(item["target"]).startswith("gguf:"):
+        model = await resolve_benchmark_target(item["target"])
+        runtime_key = f"benchmark-suite:{item['suite_id']}:{item['position']}"
+        await launch_profile_model(
+            BENCHMARK_GGUF_PROFILE, model, int(model["_benchmark_context"]), runtime_key,
+        )
+        return item["target"]
+    if str(item["target"]).startswith("tts:"):
+        model = await resolve_benchmark_target(item["target"])
+        await load_managed_tts_model(str(model["model_ref"]))
+        return item["target"]
+    profile, model = benchmark_suite_model(item["profile_id"], item["model_id"])
+    context = int(model.get("context_size") or 8192)
+    runtime_key = f"benchmark-suite:{item['suite_id']}:{item['position']}"
+    await launch_profile_model(profile, model, context, runtime_key)
+    _runtime_profile_models[profile["id"]] = {str(model["id"]): runtime_key}
+    _runtime_profile_ids.append(profile["id"])
+    _runtime_profile_id = profile["id"]
+    publish_runtime_snapshot()
+    return f"profile:{profile['id']}:{model['id']}"
+
+
+async def load_benchmark_suite_item_cancellable(
+    item: dict[str, Any],
+    cancel_event: asyncio.Event,
+) -> str:
+    load_task = asyncio.create_task(load_benchmark_suite_item(item))
+    cancel_task = asyncio.create_task(cancel_event.wait())
+    try:
+        done, _ = await asyncio.wait(
+            {load_task, cancel_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if cancel_task in done or db.job_cancel_requested(
+            db.rows("SELECT job_id FROM benchmark_suites WHERE id=?", (item["suite_id"],))[0]["job_id"]
+        ):
+            load_task.cancel()
+            await asyncio.gather(load_task, return_exceptions=True)
+            raise BenchmarkCancelled()
+        return await load_task
+    finally:
+        cancel_task.cancel()
+        await asyncio.gather(cancel_task, return_exceptions=True)
+
+
+async def restore_benchmark_suite_snapshot(snapshot: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    await stop_profile_process(preserve_desired=True)
+    await release_all_ollama_models()
+    for profile_id in snapshot.get("profile_ids", []):
+        rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+        if not rows:
+            errors.append(f"perfil {profile_id} eliminado")
+            continue
+        try:
+            await start_profile_process(rows[0], persist_desired=False)
+        except Exception as exc:
+            errors.append(f"{rows[0]['name']}: {type(exc).__name__}")
+    requested_residents = [
+        str(name) for name in snapshot.get("ollama_residents", [])
+        if isinstance(name, str) and name
+    ]
+    restored = await restore_ollama_residents(requested_residents)
+    missing = {
+        normalized_ollama_name(name) for name in requested_residents
+    } - {
+        normalized_ollama_name(name) for name in restored
+    }
+    if missing:
+        errors.append(f"Ollama no restauró {len(missing)} modelo(s)")
+    errors.extend(await restore_whisper_runtime(snapshot.get("whisper") or {}))
+    return errors
+
+
+def benchmark_suite_payload(suite: dict[str, Any]) -> dict[str, Any]:
+    value = dict(suite)
+    value["snapshot"] = json.loads(value.pop("snapshot_json") or "{}")
+    jobs = db.rows(
+        "SELECT progress,message FROM jobs WHERE id=?",
+        (value["job_id"],),
+    )
+    value["progress"] = float(jobs[0]["progress"]) if jobs else 0.0
+    value["message"] = jobs[0]["message"] if jobs else ""
+    value["items"] = db.rows(
+        """
+        SELECT position,candidate_key,target,model_name,engine,protocol_id,modality,artifact_hash,
+            artifact_size,profile_id,model_id,status,run_id,error,started_at,completed_at
+        FROM benchmark_suite_items WHERE suite_id=? ORDER BY position
+        """,
+        (value["id"],),
+    )
+    return value
+
+
+def active_benchmark_suite() -> dict[str, Any] | None:
+    rows = db.rows(
+        """
+        SELECT * FROM benchmark_suites
+        WHERE status IN ('queued','running','restoring')
+        ORDER BY created_at DESC LIMIT 1
+        """
+    )
+    return benchmark_suite_payload(rows[0]) if rows else None
+
+
+async def run_benchmark_suite(suite_id: str, job_id: str) -> None:
+    global _benchmark_suite_task
+    cancel_event = _job_cancel_events.setdefault(job_id, asyncio.Event())
+    rows = db.rows("SELECT * FROM benchmark_suites WHERE id=?", (suite_id,))
+    if not rows:
+        return
+    suite = rows[0]
+    snapshot = json.loads(suite["snapshot_json"] or "{}")
+    final_status = "completed"
+    final_message = "Suite de benchmarks completada y estado restaurado"
+    restoration_errors: list[str] = []
+    try:
+        db.execute(
+            "UPDATE benchmark_suites SET status='running',started_at=? WHERE id=?",
+            (utc_now(), suite_id),
+        )
+        db.update_job(job_id, "running", 1, "Guardando estado y liberando modelos")
+        set_benchmark_gate(job_id, 3600)
+        released = await release_all_benchmark_memory()
+        db.update_job(job_id, "running", 2, f"Memoria vaciada · {released}")
+        items = db.rows(
+            "SELECT * FROM benchmark_suite_items WHERE suite_id=? ORDER BY position",
+            (suite_id,),
+        )
+        total = max(1, len(items))
+        completed = 0
+        for item in items:
+            if cancel_event.is_set() or db.job_cancel_requested(job_id):
+                raise BenchmarkCancelled()
+            set_benchmark_gate(job_id, 3600)
+            progress = completed / total * 94
+            db.execute(
+                """
+                UPDATE benchmark_suites
+                SET current_position=?,current_target=?,current_child_job_id=NULL
+                WHERE id=?
+                """,
+                (item["position"], item["target"], suite_id),
+            )
+            db.execute(
+                """
+                UPDATE benchmark_suite_items
+                SET status='loading',started_at=?,error='' WHERE id=?
+                """,
+                (utc_now(), item["id"]),
+            )
+            db.update_job(
+                job_id,
+                "running",
+                progress,
+                f"Cargando {item['model_name']} · {completed + 1}/{total}",
+            )
+            try:
+                target = await load_benchmark_suite_item_cancellable(item, cancel_event)
+                if cancel_event.is_set() or db.job_cancel_requested(job_id):
+                    raise BenchmarkCancelled()
+                child_job_id = db.create_job("benchmark.run", target)
+                run_id = str(uuid.uuid4())
+                db.execute(
+                    """
+                    UPDATE benchmark_suites SET current_child_job_id=? WHERE id=?
+                    """,
+                    (child_job_id, suite_id),
+                )
+                db.execute(
+                    """
+                    UPDATE benchmark_suite_items SET status='running',run_id=? WHERE id=?
+                    """,
+                    (run_id, item["id"]),
+                )
+                outcome = await run_benchmark_job(
+                    child_job_id,
+                    run_id,
+                    BenchmarkRunRequest(
+                        target=target,
+                        protocol_id=str(item["protocol_id"]),
+                        repetitions=int(suite["repetitions"]),
+                        strict_isolation=True,
+                    ),
+                    parent_job_id=job_id,
+                    suite_progress=(int(item["position"]), total),
+                )
+                set_benchmark_gate(job_id, 3600)
+                if cancel_event.is_set() or db.job_cancel_requested(job_id):
+                    raise BenchmarkCancelled()
+                item_status = "completed" if outcome == "completed" else "failed"
+                error = "" if item_status == "completed" else outcome
+            except BenchmarkCancelled:
+                db.execute(
+                    """
+                    UPDATE benchmark_suite_items
+                    SET status='cancelled',error='Cancelado por el usuario',completed_at=?
+                    WHERE id=?
+                    """,
+                    (utc_now(), item["id"]),
+                )
+                raise
+            except ExternalRuntimeUnavailable as exc:
+                item_status = "skipped"
+                error = redact_log_text(str(exc), 500)
+            except Exception as exc:
+                item_status = "failed"
+                error = redact_log_text(f"{type(exc).__name__}: {exc}", 500)
+            finally:
+                released = await release_all_benchmark_memory()
+                db.update_job(job_id, "running", (completed + 1) / total * 94, f"Memoria vaciada · {released}")
+            db.execute(
+                """
+                UPDATE benchmark_suite_items
+                SET status=?,error=?,completed_at=? WHERE id=?
+                """,
+                (item_status, error, utc_now(), item["id"]),
+            )
+            completed += 1
+            db.execute(
+                """
+                UPDATE benchmark_suites
+                SET completed_models=?,current_child_job_id=NULL WHERE id=?
+                """,
+                (completed, suite_id),
+            )
+        db.update_job(job_id, "running", 96, "Restaurando el estado anterior")
+    except BenchmarkCancelled:
+        final_status = "cancelled"
+        final_message = "Suite detenida; estado anterior restaurado"
+    except asyncio.CancelledError:
+        final_status = "interrupted"
+        final_message = "Suite interrumpida al detener MyDGX"
+        raise
+    except Exception as exc:
+        final_status = "failed"
+        final_message = redact_log_text(f"{type(exc).__name__}: {exc}", 500)
+    finally:
+        db.execute(
+            "UPDATE benchmark_suites SET status='restoring' WHERE id=?",
+            (suite_id,),
+        )
+        set_benchmark_gate(job_id, 1800)
+        try:
+            restoration_errors = await restore_benchmark_suite_snapshot(snapshot)
+        except Exception as exc:
+            restoration_errors = [f"{type(exc).__name__}: restauración no completada"]
+        if restoration_errors:
+            final_status = "failed"
+            final_message = "Suite terminada, pero el estado no se restauró por completo"
+        completed_at = utc_now()
+        db.execute(
+            """
+            UPDATE benchmark_suites
+            SET status=?,current_target='',current_child_job_id=NULL,error=?,completed_at=?
+            WHERE id=?
+            """,
+            (
+                final_status,
+                redact_log_text("; ".join(restoration_errors), 1000),
+                completed_at,
+                suite_id,
+            ),
+        )
+        if final_status == "completed":
+            db.update_job(job_id, "completed", 100, final_message)
+        elif final_status == "cancelled":
+            db.update_job(job_id, "cancelled", 100, final_message)
+        else:
+            db.update_job(job_id, "failed", 100, final_message)
+        db.execute(
+            """
+            INSERT OR REPLACE INTO job_results(job_id,result_json,created_at)
+            VALUES(?,?,?)
+            """,
+            (
+                job_id,
+                canonical_json({
+                    "suite_id": suite_id,
+                    "status": final_status,
+                    "restoration_errors": restoration_errors,
+                }),
+                completed_at,
+            ),
+        )
+        set_benchmark_gate(None)
+        _job_cancel_events.pop(job_id, None)
+        _benchmark_suite_task = None
+        db.audit("benchmark.suite", suite_id, final_status == "completed", final_status)
+
+
+def benchmark_eligible_targets() -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    try:
+        if not local_benchmark_endpoint(settings.ollama_url):
+            raise ValueError("Ollama no es loopback")
+        response = httpx.get(
+            f"{settings.ollama_url.rstrip('/')}/api/tags",
+            timeout=5,
+        )
+        response.raise_for_status()
+        for item in response.json().get("models", []):
+            name = str(item.get("name") or item.get("model") or "")
+            if name:
+                is_vision = False
+                try:
+                    shown = httpx.post(
+                        f"{settings.ollama_url.rstrip('/')}/api/show",
+                        json={"name": name},
+                        timeout=5,
+                    )
+                    shown.raise_for_status()
+                    capabilities = shown.json().get("capabilities") or []
+                    is_vision = any(
+                        str(value).casefold() == "vision" for value in capabilities
+                    )
+                except (httpx.HTTPError, ValueError):
+                    pass
+                values.append({
+                    "target": f"ollama:{name}",
+                    "name": name,
+                    "engine": "ollama",
+                    "source": "ollama",
+                    "loaded": False,
+                    "protocol_id": (
+                        VISION_BENCHMARK_PROTOCOL_ID
+                        if is_vision else BENCHMARK_PROTOCOL_ID
+                    ),
+                    "modality": "vision" if is_vision else "text-generation",
+                })
+    except (httpx.HTTPError, ValueError):
+        pass
+    if managed_comfyui_enabled() and managed_flux_benchmark_model():
+        values.append({
+            "target": "comfyui:flux1-schnell-fp8",
+            "name": COMFYUI_MANAGED_MODELS["comfyui-image"]["name"],
+            "engine": "comfyui",
+            "source": "managed",
+            "loaded": True,
+            "protocol_id": IMAGE_BENCHMARK_PROTOCOL_ID,
+            "modality": "image-generation",
+        })
+    if managed_comfyui_enabled() and managed_wan_benchmark_model():
+        values.append({
+            "target": "comfyui:wan2.1-t2v-1.3b",
+            "name": COMFYUI_MANAGED_MODELS["comfyui-video"]["name"],
+            "engine": "comfyui",
+            "source": "managed",
+            "loaded": True,
+            "protocol_id": VIDEO_BENCHMARK_PROTOCOL_ID,
+            "modality": "video-generation",
+        })
+    for profile in running_profiles():
+        for model in running_profile_models(profile):
+            task = str(model.get("task") or "chat")
+            if task not in {"chat", "vision", "tts", "asr", "embeddings", "reranking"}:
+                continue
+            if task in {"vision", "tts", "embeddings", "reranking"} and not local_benchmark_endpoint(
+                model_endpoint(model)
+            ):
+                continue
+            protocol_id = {
+                "asr": ASR_BENCHMARK_PROTOCOL_ID,
+                "vision": VISION_BENCHMARK_PROTOCOL_ID,
+                "tts": TTS_BENCHMARK_PROTOCOL_ID,
+                "embeddings": EMBEDDINGS_BENCHMARK_PROTOCOL_ID,
+                "reranking": RERANKING_BENCHMARK_PROTOCOL_ID,
+            }.get(task, BENCHMARK_PROTOCOL_ID)
+            values.append({
+                "target": f"profile:{profile['id']}:{model['id']}",
+                "name": str(model.get("name") or model.get("model_ref") or model["id"]),
+                "engine": str(model.get("engine") or ""),
+                "source": "profile",
+                "profile_id": profile["id"],
+                "loaded": True,
+                "protocol_id": protocol_id,
+                "modality": BENCHMARK_PROTOCOLS[protocol_id]["modality"],
+            })
+    unique: dict[str, dict[str, Any]] = {}
+    for value in values:
+        unique[value["target"]] = value
+    return list(unique.values())
+
+
+PARAMETER_COUNT_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9.])(\d+(?:\.\d+)?)\s*([BM])(?:-A(\d+(?:\.\d+)?)B)?(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+BENCHMARK_HIDDEN_TAG_PREFIXES = ("region:", "license:", "endpoints", "autotrain", "arxiv:", "base_model:", "dataset:", "doi:")
+
+
+def model_parameter_counts(*names: str) -> tuple[float | None, float | None]:
+    for name in names:
+        if match := PARAMETER_COUNT_PATTERN.search(name or ""):
+            scale = 1.0 if match.group(2).upper() == "B" else 0.001
+            active = float(match.group(3)) if match.group(3) else None
+            return round(float(match.group(1)) * scale, 3), active
+    return None, None
+
+
+def model_card_summary(markdown: str, limit: int = 320) -> str:
+    paragraphs: list[str] = []
+    current: list[str] = []
+    in_code = False
+    for raw in markdown.splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code or line.startswith(("#", "!", "<", "|", ">", "[!", "---", "- **")):
+            if current:
+                paragraphs.append(" ".join(current))
+                current = []
+            continue
+        if not line:
+            if current:
+                paragraphs.append(" ".join(current))
+                current = []
+            continue
+        current.append(line)
+    if current:
+        paragraphs.append(" ".join(current))
+    for paragraph in paragraphs:
+        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", paragraph)
+        text = re.sub(r"[*_`]+", "", text).strip()
+        if len(text) >= 60:
+            return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
+    return ""
+
+
+def benchmark_model_info(run: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+    remote = metadata.get("huggingface") if isinstance(metadata.get("huggingface"), dict) else {}
+    runtime = metadata.get("runtime") if isinstance(metadata.get("runtime"), dict) else {}
+    source_id = str(run.get("source_id") or "")
+    saved = saved_model_description(source_id) if run.get("source") == "huggingface" and "/" in source_id else None
+    card = remote.get("card_data") if isinstance(remote.get("card_data"), dict) else {}
+    if not card and saved:
+        card = saved.get("metadata") or {}
+
+    def listed(value: Any) -> list[str]:
+        values = value if isinstance(value, list) else [value] if value else []
+        return [str(item) for item in values if item][:6]
+
+    parameters, active = model_parameter_counts(source_id.split("/")[-1], str(runtime.get("name") or ""), str(run.get("filename") or ""))
+    tags = [
+        str(tag) for tag in remote.get("tags") or []
+        if not str(tag).startswith(BENCHMARK_HIDDEN_TAG_PREFIXES)
+    ][:8]
+    return {
+        "name": str(runtime.get("name") or source_id.split("/")[-1] or source_id),
+        "author": source_id.split("/")[0] if "/" in source_id else "",
+        "task": runtime.get("task") or "",
+        "pipeline_tag": remote.get("pipeline_tag") or card.get("pipeline_tag") or "",
+        "license": ", ".join(listed(card.get("license"))),
+        "base_model": ", ".join(listed(card.get("base_model"))[:2]),
+        "languages": listed(card.get("language")),
+        "library": str(card.get("library_name") or ""),
+        "downloads": int(remote.get("downloads") or 0) or None,
+        "likes": int(remote.get("likes") or 0) or None,
+        "tags": tags,
+        "parameters_b": parameters,
+        "active_parameters_b": active,
+        "estimated_memory_mb": runtime.get("estimated_memory_mb") or None,
+        "input_modalities": listed(runtime.get("input_modalities")),
+        "output_modalities": listed(runtime.get("output_modalities")),
+        "summary": model_card_summary(str((saved or {}).get("description") or run.get("card_text") or "")),
+    }
+
+
+@app.get("/api/benchmarks", dependencies=secure)
+async def benchmarks(
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    suite_candidates = await benchmark_suite_candidates(include_measured=True)
+    protocols = db.rows(
+        "SELECT id,version,name,modality,definition_hash,active,created_at FROM benchmark_protocols"
+    )
+    runs = db.rows(
+        """
+        SELECT r.*,m.source,m.source_id,m.revision,m.filename,m.artifact_hash,
+            m.artifact_size,m.quantization,m.architecture,m.metadata_json,m.card_text,
+            p.name AS protocol_name,p.version AS protocol_version,
+            e.environment_hash,e.hardware_json
+        FROM benchmark_runs r
+        JOIN benchmark_models m ON m.id=r.model_id
+        JOIN benchmark_protocols p ON p.id=r.protocol_id
+        JOIN benchmark_environments e ON e.id=r.environment_id
+        ORDER BY r.created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    model_infos: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        run["summary"] = json.loads(run.pop("summary_json") or "{}")
+        run["runtime"] = json.loads(run.pop("runtime_json") or "{}")
+        run["hardware"] = json.loads(run.pop("hardware_json") or "{}")
+        metadata_text = run.pop("metadata_json") or "{}"
+        if run["model_id"] not in model_infos:
+            try:
+                metadata = json.loads(metadata_text)
+            except json.JSONDecodeError:
+                metadata = {}
+            model_infos[run["model_id"]] = benchmark_model_info(run, metadata if isinstance(metadata, dict) else {})
+        run.pop("card_text", None)
+        run["model_info"] = model_infos[run["model_id"]]
+    queue = db.rows(
+        """
+        SELECT id,target,reason,status,attempts,last_reason,job_id,created_at,updated_at
+        FROM benchmark_queue
+        ORDER BY CASE WHEN status IN ('pending','running') THEN 0 ELSE 1 END,
+            updated_at DESC
+        LIMIT 30
+        """
+    )
+    suite_rows = db.rows(
+        "SELECT * FROM benchmark_suites ORDER BY created_at DESC LIMIT 5"
+    )
+    suites = [benchmark_suite_payload(row) for row in suite_rows]
+    return {
+        "enabled": settings.benchmark_enabled,
+        "auto_new_models": benchmark_auto_enabled(),
+        "quiet_seconds": settings.benchmark_quiet_seconds,
+        "queue": queue,
+        "suite": suites[0] if suites else None,
+        "suite_history": suites,
+        "suite_candidates": suite_candidates,
+        "active": benchmark_is_active(),
+        "active_job_id": _benchmark_active_job_id,
+        "protocols": protocols,
+        "eligible_targets": await asyncio.to_thread(benchmark_eligible_targets),
+        "runs": runs,
+        "score_algorithm": BENCHMARK_SCORE_ALGORITHM,
+        "score_algorithms": BENCHMARK_SCORE_ALGORITHMS,
+    }
+
+
+@app.post("/api/benchmarks/runs", dependencies=secure)
+async def start_benchmark(
+    payload: BenchmarkRunRequest,
+    background: BackgroundTasks,
+) -> dict[str, str]:
+    if not settings.benchmark_enabled:
+        raise HTTPException(status_code=403, detail="Los benchmarks están desactivados")
+    if payload.protocol_id not in BENCHMARK_PROTOCOLS:
+        raise HTTPException(status_code=404, detail="Protocolo de benchmark no encontrado")
+    pending = db.rows(
+        """
+        SELECT id FROM jobs
+        WHERE kind='benchmark.run' AND status IN ('queued','running','cancelling')
+        LIMIT 1
+        """
+    )
+    if pending:
+        raise HTTPException(status_code=409, detail="Ya hay un benchmark en cola o ejecución")
+    await resolve_benchmark_target(payload.target)
+    run_id = str(uuid.uuid4())
+    job_id = db.create_job("benchmark.run", payload.target)
+    background.add_task(run_benchmark_job, job_id, run_id, payload)
+    return {"job_id": job_id, "run_id": run_id}
+
+
+@app.post("/api/benchmarks/suite", dependencies=secure)
+async def start_benchmark_suite(payload: BenchmarkSuiteRequest) -> dict[str, str]:
+    global _benchmark_suite_task
+    if not settings.benchmark_enabled:
+        raise HTTPException(status_code=403, detail="Los benchmarks están desactivados")
+    if active_benchmark_suite():
+        raise HTTPException(status_code=409, detail="Ya hay una suite de benchmarks activa")
+    active_jobs = db.rows(
+        """
+        SELECT kind FROM jobs
+        WHERE status IN ('queued','running','cancelling')
+        LIMIT 1
+        """
+    )
+    if active_jobs:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Hay otra operación activa: {active_jobs[0]['kind']}",
+        )
+    busy = await benchmark_runtime_busy()
+    if busy:
+        raise HTTPException(status_code=409, detail=busy)
+    candidates = await benchmark_suite_candidates(
+        include_measured=payload.candidate_keys is not None,
+    )
+    if payload.candidate_keys is not None:
+        requested = set(payload.candidate_keys)
+        if not requested:
+            raise HTTPException(
+                status_code=400,
+                detail="Selecciona al menos un modelo para ejecutar la suite",
+            )
+        available = {str(candidate["candidate_key"]) for candidate in candidates}
+        unknown = requested - available
+        if unknown:
+            raise HTTPException(
+                status_code=409,
+                detail="La selección contiene modelos que ya no están disponibles",
+            )
+        candidates = [
+            candidate
+            for candidate in candidates
+            if str(candidate["candidate_key"]) in requested
+        ]
+        blocked = [
+            candidate for candidate in candidates
+            if not candidate.get("runnable", True)
+        ]
+        if blocked:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{blocked[0]['name']} no se puede ejecutar: "
+                    f"{blocked[0].get('blocked_reason') or 'runtime no disponible'}"
+                ),
+            )
+    else:
+        candidates = [
+            candidate for candidate in candidates
+            if candidate.get("runnable", True)
+        ]
+    if not candidates:
+        raise HTTPException(
+            status_code=409,
+            detail="Todos los modelos locales elegibles ya completaron la suite",
+        )
+    residents = sorted(await benchmark_ollama_residents() or set())
+    snapshot = {
+        "profile_ids": list(_runtime_profile_ids),
+        "ollama_residents": residents,
+        "whisper": await whisper_runtime_snapshot(),
+        "captured_at": utc_now(),
+    }
+    suite_id = str(uuid.uuid4())
+    job_id = db.create_job("benchmark.suite", f"{len(candidates)} modelos")
+    now = utc_now()
+    with db.connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """
+            INSERT INTO benchmark_suites(
+                id,job_id,status,repetitions,total_models,snapshot_json,created_at
+            ) VALUES(?,?,'queued',?,?,?,?)
+            """,
+            (
+                suite_id,
+                job_id,
+                payload.repetitions,
+                len(candidates),
+                canonical_json(snapshot),
+                now,
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO benchmark_suite_items(
+                suite_id,position,candidate_key,target,model_name,engine,
+                protocol_id,modality,artifact_hash,artifact_size,profile_id,model_id,status
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'pending')
+            """,
+            [
+                (
+                    suite_id,
+                    position,
+                    candidate["candidate_key"],
+                    candidate["target"],
+                    candidate["name"],
+                    candidate["engine"],
+                    candidate.get("protocol_id", BENCHMARK_PROTOCOL_ID),
+                    candidate.get("modality", "text-generation"),
+                    candidate["artifact_hash"],
+                    candidate["artifact_size"],
+                    candidate["profile_id"],
+                    candidate["model_id"],
+                )
+                for position, candidate in enumerate(candidates, start=1)
+            ],
+        )
+        connection.commit()
+    _benchmark_suite_task = asyncio.create_task(run_benchmark_suite(suite_id, job_id))
+    _benchmark_background_tasks.add(_benchmark_suite_task)
+    _benchmark_suite_task.add_done_callback(_benchmark_background_tasks.discard)
+    db.audit("benchmark.suite.start", suite_id, True, f"{len(candidates)} modelos")
+    return {"suite_id": suite_id, "job_id": job_id}
+
+
+@app.post("/api/benchmarks/suite/{suite_id}/stop", dependencies=secure)
+async def stop_benchmark_suite(suite_id: str) -> dict[str, bool]:
+    rows = db.rows(
+        """
+        SELECT job_id,current_child_job_id,status FROM benchmark_suites
+        WHERE id=? AND status IN ('queued','running','restoring')
+        """,
+        (suite_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Suite activa no encontrada")
+    suite = rows[0]
+    if suite["status"] == "restoring":
+        raise HTTPException(
+            status_code=409,
+            detail="La suite ya está restaurando el estado anterior",
+        )
+    db.request_job_cancel(suite["job_id"])
+    event = _job_cancel_events.get(suite["job_id"])
+    if event:
+        event.set()
+    child_job_id = suite.get("current_child_job_id")
+    if child_job_id:
+        db.request_job_cancel(child_job_id)
+        child_event = _job_cancel_events.get(child_job_id)
+        if child_event:
+            child_event.set()
+    db.audit("benchmark.suite.stop", suite_id, True)
+    return {"cancel_requested": True}
+
+
+@app.post("/api/benchmarks/queue/{entry_id}/skip", dependencies=secure)
+async def skip_benchmark_queue_entry(entry_id: str) -> dict[str, bool]:
+    rows = db.rows(
+        "SELECT target FROM benchmark_queue WHERE id=? AND status='pending'",
+        (entry_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Entrada pendiente no encontrada")
+    db.execute(
+        """
+        UPDATE benchmark_queue SET status='skipped',last_reason='Descartado por el usuario',
+            updated_at=?
+        WHERE id=?
+        """,
+        (utc_now(), entry_id),
+    )
+    db.audit("benchmark.queue.skip", rows[0]["target"], True)
+    return {"skipped": True}
+
+
+@app.get("/api/benchmarks/runs/{run_id}", dependencies=secure)
+async def benchmark_run(run_id: str) -> dict[str, Any]:
+    rows = db.rows(
+        """
+        SELECT r.*,
+            m.id AS benchmark_model_id,m.source,m.source_id,m.revision,m.filename,
+            m.artifact_hash,m.artifact_size,m.quantization,m.architecture,
+            m.metadata_json,m.card_text,m.created_at AS model_created_at,
+            e.environment_hash,e.hardware_json,e.software_json,
+            p.name AS protocol_name,p.version AS protocol_version,
+            p.definition_json,p.definition_hash
+        FROM benchmark_runs r
+        JOIN benchmark_models m ON m.id=r.model_id
+        JOIN benchmark_environments e ON e.id=r.environment_id
+        JOIN benchmark_protocols p ON p.id=r.protocol_id
+        WHERE r.id=?
+        """,
+        (run_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Benchmark no encontrado")
+    result = rows[0]
+    for key in (
+        "summary_json", "runtime_json", "metadata_json", "hardware_json",
+        "software_json", "definition_json",
+    ):
+        result[key.removesuffix("_json")] = json.loads(result.pop(key) or "{}")
+    result["model_info"] = benchmark_model_info(result, result["metadata"] if isinstance(result["metadata"], dict) else {})
+    samples = db.rows(
+        "SELECT * FROM benchmark_samples WHERE run_id=? ORDER BY id",
+        (run_id,),
+    )
+    for sample in samples:
+        sample["native_metrics"] = json.loads(sample.pop("native_metrics_json") or "{}")
+    result["samples"] = samples
+    result["telemetry"] = db.rows(
+        "SELECT * FROM benchmark_telemetry WHERE run_id=? ORDER BY id",
+        (run_id,),
+    )
+    return result
+
+
+@app.get("/api/benchmarks/runs/{run_id}/export", dependencies=secure)
+async def export_benchmark_run(run_id: str) -> dict[str, Any]:
+    run = await benchmark_run(run_id)
+    run.pop("job_id", None)
+    run["card_text"] = str(run.get("card_text") or "")[:65_536]
+    bundle = {
+        "schema": "mydgx-benchmark-bundle",
+        "schema_version": 1,
+        "exported_at": utc_now(),
+        "run": run,
+    }
+    bundle["checksum"] = content_hash(bundle)
+    db.audit("benchmark.export", run_id, True)
+    return bundle
+
+
+@app.post("/api/benchmarks/import", dependencies=secure)
+async def import_benchmark_run(payload: BenchmarkImportRequest) -> dict[str, Any]:
+    bundle = payload.bundle
+    if len(canonical_json(bundle).encode("utf-8")) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="El bundle supera 10 MiB")
+    if bundle.get("schema") != "mydgx-benchmark-bundle" or bundle.get("schema_version") != 1:
+        raise HTTPException(status_code=400, detail="Formato de benchmark no compatible")
+    supplied_checksum = str(bundle.get("checksum") or "")
+    unsigned = {key: value for key, value in bundle.items() if key != "checksum"}
+    if not supplied_checksum or not hmac.compare_digest(supplied_checksum, content_hash(unsigned)):
+        raise HTTPException(status_code=400, detail="Checksum del benchmark inválido")
+    imported = bundle.get("run")
+    if not isinstance(imported, dict):
+        raise HTTPException(status_code=400, detail="El bundle no contiene un run válido")
+    run_id = str(imported.get("id") or "")
+    model_id = str(imported.get("benchmark_model_id") or "")
+    environment_id = str(imported.get("environment_id") or "")
+    protocol_id = str(imported.get("protocol_id") or "")
+    if not all(re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", value) for value in (
+        run_id, model_id, environment_id, protocol_id,
+    )):
+        raise HTTPException(status_code=400, detail="Identificadores del bundle inválidos")
+    if db.rows("SELECT id FROM benchmark_runs WHERE id=?", (run_id,)):
+        return {"imported": False, "run_id": run_id, "duplicate": True}
+    definition = imported.get("definition")
+    runtime = imported.get("runtime")
+    metadata = sanitize_log_detail(imported.get("metadata") or {})
+    hardware = sanitize_log_detail(imported.get("hardware") or {})
+    software = sanitize_log_detail(imported.get("software") or {})
+    summary = sanitize_log_detail(imported.get("summary") or {})
+    samples = imported.get("samples") or []
+    telemetry = imported.get("telemetry") or []
+    if (
+        not isinstance(definition, dict)
+        or not isinstance(runtime, dict)
+        or not isinstance(samples, list)
+        or not isinstance(telemetry, list)
+        or len(samples) > 1000
+        or len(telemetry) > 10_000
+    ):
+        raise HTTPException(status_code=400, detail="Contenido del bundle inválido")
+    definition_hash = str(imported.get("definition_hash") or "")
+    if definition_hash != content_hash(definition):
+        raise HTTPException(status_code=400, detail="La definición del protocolo no coincide")
+    protocol_rows = db.rows(
+        "SELECT definition_hash FROM benchmark_protocols WHERE id=?",
+        (protocol_id,),
+    )
+    if protocol_rows and protocol_rows[0]["definition_hash"] != definition_hash:
+        raise HTTPException(status_code=409, detail="Conflicto con el protocolo local")
+    artifact_hash = str(imported.get("artifact_hash") or "")
+    environment_hash = str(imported.get("environment_hash") or "")
+    runtime_hash = str(imported.get("runtime_hash") or "")
+    if (
+        not re.fullmatch(r"[a-fA-F0-9]{64}", artifact_hash)
+        or not re.fullmatch(r"[a-fA-F0-9]{64}", environment_hash)
+        or runtime_hash != benchmark_runtime_hash(runtime)
+    ):
+        raise HTTPException(status_code=400, detail="Fingerprints del bundle inválidos")
+    job_id = str(uuid.uuid4())
+    now = utc_now()
+    try:
+        with db.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO benchmark_protocols(
+                    id,version,name,modality,definition_json,definition_hash,active,created_at
+                ) VALUES(?,?,?,?,?,?,0,?)
+                """,
+                (
+                    protocol_id,
+                    int(imported.get("protocol_version") or 1),
+                    str(imported.get("protocol_name") or protocol_id)[:200],
+                    str(definition.get("modality") or "unknown")[:80],
+                    canonical_json(definition),
+                    definition_hash,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO benchmark_models(
+                    id,source,source_id,revision,filename,artifact_hash,artifact_size,
+                    quantization,architecture,metadata_json,card_text,created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    model_id,
+                    str(imported.get("source") or "external")[:40],
+                    str(imported.get("source_id") or "")[:300],
+                    str(imported.get("revision") or "")[:200],
+                    str(imported.get("filename") or "")[:1000],
+                    artifact_hash,
+                    int(imported["artifact_size"]) if imported.get("artifact_size") is not None else None,
+                    str(imported.get("quantization") or "")[:80],
+                    str(imported.get("architecture") or "")[:300],
+                    canonical_json(metadata),
+                    redact_log_text(imported.get("card_text") or "", 65_536),
+                    str(imported.get("model_created_at") or now),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO benchmark_environments(
+                    id,environment_hash,hardware_json,software_json,created_at
+                ) VALUES(?,?,?,?,?)
+                """,
+                (
+                    environment_id,
+                    environment_hash,
+                    canonical_json(hardware),
+                    canonical_json(software),
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO jobs(
+                    id,kind,target,status,progress,message,cancel_requested,created_at,updated_at
+                ) VALUES(?, 'benchmark.import', ?, 'completed',100,'Benchmark importado',0,?,?)
+                """,
+                (job_id, str(imported.get("target") or "")[:300], now, now),
+            )
+            connection.execute(
+                """
+                INSERT INTO job_events(job_id,status,progress,message,created_at)
+                VALUES(?,'completed',100,'Benchmark importado',?)
+                """,
+                (job_id, now),
+            )
+            connection.execute(
+                """
+                INSERT INTO benchmark_runs(
+                    id,job_id,protocol_id,model_id,environment_id,target,runtime_hash,
+                    runtime_json,score_algorithm,score,status,valid,invalid_reason,
+                    summary_json,imported,created_at,started_at,completed_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)
+                """,
+                (
+                    run_id, job_id, protocol_id, model_id, environment_id,
+                    str(imported.get("target") or "")[:300], runtime_hash,
+                    canonical_json(runtime),
+                    str(imported.get("score_algorithm") or "")[:100],
+                    float(imported["score"]) if imported.get("score") is not None else None,
+                    "completed", int(bool(imported.get("valid"))),
+                    redact_log_text(imported.get("invalid_reason") or "", 500),
+                    canonical_json(summary),
+                    str(imported.get("created_at") or now),
+                    imported.get("started_at"),
+                    imported.get("completed_at"),
+                ),
+            )
+            for sample in samples:
+                if not isinstance(sample, dict):
+                    continue
+                native = sanitize_log_detail(sample.get("native_metrics") or {})
+                connection.execute(
+                    """
+                    INSERT INTO benchmark_samples(
+                        run_id,case_id,phase,repetition,started_at,ttft_ms,total_ms,
+                        prompt_tokens,output_tokens,output_tps,chars_per_second,
+                        output_chars,output_hash,native_metrics_json,valid,error
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        run_id, str(sample.get("case_id") or "")[:100],
+                        str(sample.get("phase") or "")[:40],
+                        int(sample.get("repetition") or 0),
+                        str(sample.get("started_at") or now),
+                        sample.get("ttft_ms"), float(sample.get("total_ms") or 0),
+                        sample.get("prompt_tokens"), sample.get("output_tokens"),
+                        sample.get("output_tps"), sample.get("chars_per_second"),
+                        int(sample.get("output_chars") or 0),
+                        str(sample.get("output_hash") or "")[:64],
+                        canonical_json(native), int(bool(sample.get("valid"))),
+                        redact_log_text(sample.get("error") or "", 500),
+                    ),
+                )
+            for point in telemetry:
+                if not isinstance(point, dict):
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO benchmark_telemetry(
+                        run_id,created_at,cpu_percent,memory_used,gpu_utilization,
+                        gpu_memory_used,gpu_temperature,gpu_power_watts
+                    ) VALUES(?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        run_id, str(point.get("created_at") or now),
+                        point.get("cpu_percent"), point.get("memory_used"),
+                        point.get("gpu_utilization"), point.get("gpu_memory_used"),
+                        point.get("gpu_temperature"), point.get("gpu_power_watts"),
+                    ),
+                )
+            connection.commit()
+    except (ValueError, TypeError, sqlite3.Error) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No se pudo importar el benchmark: {type(exc).__name__}",
+        ) from exc
+    db.audit("benchmark.import", run_id, True)
+    return {"imported": True, "run_id": run_id, "duplicate": False}
+
+
+class ChatRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=32000)
+    history: list[dict[str, str]] = Field(default_factory=list, max_length=40)
+
+
+@app.post("/api/chat", dependencies=secure)
+async def chat(payload: ChatRequest) -> dict[str, Any]:
+    ensure_interactive_inference_available()
+    safe_history = [
+        {"role": item.get("role"), "content": item.get("content", "")[:32000]}
+        for item in payload.history
+        if item.get("role") in {"user", "assistant", "system"}
+    ]
+    messages = [*safe_history, {"role": "user", "content": payload.message}]
+    if payload.model.startswith("profile:"):
+        profile_reference = payload.model.removeprefix("profile:")
+        profile_id, separator, model_id = profile_reference.partition(":")
+        model_id = model_id if separator else "primary"
+        rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+        if not rows:
+            raise HTTPException(status_code=404, detail="Perfil no encontrado")
+        profile = rows[0]
+        model = next((item for item in profile_models(profile) if item["id"] == model_id), None)
+        if not model:
+            raise HTTPException(status_code=404, detail="Modelo del perfil no encontrado")
+        if model.get("task", "chat") not in {"chat", "vision"}:
+            raise HTTPException(status_code=400, detail="Este modelo no admite chat")
+        if model["engine"] != "ollama":
+            try:
+                async with httpx.AsyncClient(timeout=float(model.get("timeout_seconds") or 600)) as client:
+                    request_payload: dict[str, Any] = {
+                        "model": model.get("model_alias") or model["model_ref"],
+                        "messages": messages,
+                        "temperature": model["temperature"],
+                        "top_p": model["top_p"],
+                        "stream": False,
+                    }
+                    if model.get("repeat_penalty", 0) > 0:
+                        request_payload["repeat_penalty"] = model["repeat_penalty"]
+                    if model.get("top_k", 0) > 0:
+                        request_payload["top_k"] = model["top_k"]
+                        request_payload["min_p"] = model.get("min_p", 0)
+                    if model.get("presence_penalty", 0) > 0:
+                        request_payload["presence_penalty"] = model["presence_penalty"]
+                    response = await client.post(
+                        f"{model_endpoint(model)}/v1/chat/completions",
+                        json=request_payload,
+                    )
+                    response.raise_for_status()
+                    completion = response.json()
+                content = completion.get("choices", [{}])[0].get("message", {}).get("content", "")
+                return {"message": {"role": "assistant", "content": content}, "metrics": {}}
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=503, detail="El servicio de chat no está disponible") from exc
+        model_name = model["model_ref"]
+    else:
+        model_name = payload.model
+    result = await ollama_payload(
+        "/api/chat",
+        "POST",
+        {"model": model_name, "messages": messages, "stream": False},
+        timeout=600,
+    )
+    return {"message": result.get("message", {}), "metrics": {
+        "total_duration": result.get("total_duration"),
+        "eval_count": result.get("eval_count"),
+        "eval_duration": result.get("eval_duration"),
+    }}
+
+
+class AssistantChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=32_000)
+    history: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
+    model: str | None = Field(default=None, max_length=200)
+
+
+class AssistantActionRequest(BaseModel):
+    action_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+
+
+ASSISTANT_DOC_PATHS = (
+    ROOT / "README.md",
+    ROOT / "docs",
+    ROOT / "config" / "dgx-health-check" / "README.md",
+    ROOT / "macos" / "MyDGXTray" / "README.md",
+)
+ASSISTANT_ACTION_TOOLS = {
+    "start_profile", "stop_profile", "activate_profile",
+    "download_huggingface_model", "download_ollama_model",
+    "favorite_huggingface_model", "cancel_job", "control_service",
+    "control_engine", "profile_app_action", "release_memory", "restore_memory",
+}
+ASSISTANT_CONTROLLABLE_ENGINES = ("comfyui", "whisper", "searxng")
+_assistant_pending_actions: dict[str, dict[str, Any]] = {}
+
+
+def assistant_tool(
+    name: str,
+    description: str,
+    properties: dict[str, Any] | None = None,
+    required: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties or {},
+                "required": required or [],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+ASSISTANT_TOOLS = [
+    assistant_tool(
+        "get_assistant_capabilities",
+        "Lista todas las consultas y acciones confirmadas que puede realizar el asistente MyDGX.",
+    ),
+    assistant_tool(
+        "search_mydgx_docs",
+        "Busca documentación local de MyDGX. Úsala para explicar funciones, configuración, API, perfiles, gateway, despliegue o solución de problemas.",
+        {"query": {"type": "string", "description": "Pregunta o términos a buscar", "maxLength": 300}},
+        ["query"],
+    ),
+    assistant_tool("get_overview", "Obtiene el resumen actual del equipo, telemetría y salud de servicios."),
+    assistant_tool(
+        "get_metrics_summary",
+        "Resume telemetría histórica del host en un intervalo reciente.",
+        {"minutes": {"type": "integer", "minimum": 1, "maximum": 10080, "default": 60}},
+    ),
+    assistant_tool(
+        "get_model_metrics",
+        "Obtiene telemetría de modelos cargados.",
+        {
+            "minutes": {"type": "integer", "minimum": 1, "maximum": 10080, "default": 60},
+            "profile_id": {"type": "string", "maxLength": 80},
+        },
+    ),
+    assistant_tool("get_system_readiness", "Comprueba si MyDGX y el sistema están preparados y devuelve avisos y recomendaciones."),
+    assistant_tool("get_system_versions", "Lista versiones de sistema, CUDA, drivers y runtimes de inferencia."),
+    assistant_tool("get_system_integrity", "Consulta integridad del kernel, paquetes, NVIDIA y servicios de MyDGX."),
+    assistant_tool("get_storage", "Consulta particiones, espacio usado por modelos, NVMe y SMART."),
+    assistant_tool("get_models", "Lista modelos locales de Ollama y Hugging Face y modelos cargados; indica si están en Default, encendidos en Quick y qué perfil los carga (loaded_by)."),
+    assistant_tool(
+        "get_benchmarks",
+        "Consulta benchmarks reales persistidos: score, TTFT, tokens por segundo, estabilidad, entorno y validez. No confunde estas mediciones con estimaciones.",
+        {
+            "model": {"type": "string", "maxLength": 200},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+        },
+    ),
+    assistant_tool("get_profiles", "Lista perfiles, modelos configurados, memoria estimada y estado de ejecución."),
+    assistant_tool(
+        "recommend_models",
+        "Busca y ordena modelos de Hugging Face para este equipo usando memoria, compatibilidad, rendimiento y Score comunidad HF.",
+        {
+            "query": {"type": "string", "minLength": 2, "maxLength": 120},
+            "task": {"type": "string", "enum": ["any", "chat", "code", "reasoning", "embedding", "vision", "audio-chat", "video-chat", "image-generation", "asr", "tts", "video-generation", "reranking"], "default": "any"},
+            "size": {"type": "string", "enum": ["any", "compact", "balanced", "large"], "default": "any"},
+            "alignment": {"type": "string", "enum": ["any", "standard", "uncensored"], "default": "any"},
+            "runtime": {"type": "string", "enum": ["any", "llama.cpp", "external"], "default": "any"},
+            "format": {"type": "string", "enum": ["any", "gguf", "safetensors", "onnx"], "default": "any"},
+            "modality": {"type": "string", "enum": ["any", "text", "image", "audio", "video"], "default": "any"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3},
+        },
+        ["query"],
+    ),
+    assistant_tool(
+        "search_huggingface_models",
+        "Busca modelos generales en Hugging Face y devuelve popularidad, tendencia, tareas y modalidades.",
+        {
+            "query": {"type": "string", "minLength": 2, "maxLength": 120},
+            "task": {"type": "string", "enum": ["any", "chat", "code", "reasoning", "embedding", "vision", "audio-chat", "video-chat", "image-generation", "asr", "tts", "video-generation", "reranking"], "default": "any"},
+            "modality": {"type": "string", "enum": ["any", "text", "image", "audio", "video"], "default": "any"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 8, "default": 5},
+        },
+        ["query"],
+    ),
+    assistant_tool(
+        "inspect_huggingface_model",
+        "Inspecciona metadatos, formatos, archivos y capacidades de un repositorio exacto de Hugging Face.",
+        {
+            "repo_id": {"type": "string", "description": "owner/model", "maxLength": 200},
+            "revision": {"type": "string", "default": "main", "maxLength": 120},
+        },
+        ["repo_id"],
+    ),
+    assistant_tool(
+        "get_profile_runtime_plan",
+        "Calcula el plan conjunto de memoria y puertos antes de arrancar un perfil.",
+        {"profile_id": {"type": "string", "maxLength": 80}},
+        ["profile_id"],
+    ),
+    assistant_tool("get_gateway_status", "Consulta configuración pública, aliases y salud del gateway OpenAI-compatible."),
+    assistant_tool("get_multimodal_capabilities", "Lista modelos y tareas disponibles en el Laboratorio IA."),
+    assistant_tool("get_engines", "Lista motores de inferencia descubiertos y su disponibilidad."),
+    assistant_tool("get_services", "Lista servicios systemd y contenedores detectados."),
+    assistant_tool("get_jobs", "Lista trabajos recientes, progreso y estado."),
+    assistant_tool(
+        "get_recent_events",
+        "Obtiene logs técnicos y auditoría recientes, ya redactados. Permite filtrar por nivel, categoría o texto para diagnosticar errores.",
+        {
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+            "level": {"type": "string", "enum": ["any", "debug", "info", "warning", "error", "critical"], "default": "any"},
+            "category": {"type": "string", "description": "Categoría exacta, por ejemplo runtime, profile, engine, http, benchmark", "maxLength": 80},
+            "query": {"type": "string", "description": "Texto a buscar en mensaje, acción o entidad", "maxLength": 120},
+        },
+    ),
+    assistant_tool(
+        "get_api_reference",
+        "Consulta la referencia de la API HTTP de MyDGX (dashboard /api y gateway /v1): método, ruta, cuerpo, confirmaciones requeridas y autenticación. Úsala para explicar cómo integrar o automatizar MyDGX.",
+        {
+            "query": {"type": "string", "description": "Área o términos: perfiles, memoria, benchmarks, chat completions, borrar modelo...", "maxLength": 200},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 40, "default": 15},
+        },
+    ),
+    assistant_tool("get_config", "Consulta la configuración pública: URLs, funciones activadas y si hay token HF o claves configuradas (solo sí/no, nunca valores)."),
+    assistant_tool("get_memory_mode", "Consulta el modo memoria: servicios opcionales, cuánta memoria usa cada uno, qué está parado y qué perfiles ocupan memoria."),
+    assistant_tool("get_profile_apps", "Lista las apps de perfil disponibles (directorios con start.sh), su estado y qué perfiles las usan."),
+    assistant_tool("get_updates", "Lista actualizaciones APT disponibles, con categoría y si son de seguridad."),
+    assistant_tool(
+        "start_profile",
+        "Propone arrancar un perfil. Requiere confirmación explícita del usuario antes de ejecutarse.",
+        {"profile_id": {"type": "string", "description": "ID exacto obtenido con get_profiles", "maxLength": 80}},
+        ["profile_id"],
+    ),
+    assistant_tool(
+        "stop_profile",
+        "Propone detener un perfil cargado o todos. Requiere confirmación explícita.",
+        {"profile_id": {"type": "string", "description": "ID exacto o __all__", "maxLength": 80}},
+        ["profile_id"],
+    ),
+    assistant_tool(
+        "activate_profile",
+        "Propone marcar un perfil como predeterminado sin arrancarlo. Requiere confirmación.",
+        {"profile_id": {"type": "string", "maxLength": 80}},
+        ["profile_id"],
+    ),
+    assistant_tool(
+        "download_huggingface_model",
+        "Propone descargar un snapshot completo de Hugging Face. Requiere confirmación por consumo de red y disco.",
+        {
+            "repo_id": {"type": "string", "description": "owner/model", "maxLength": 200},
+            "revision": {"type": "string", "default": "main", "maxLength": 120},
+        },
+        ["repo_id"],
+    ),
+    assistant_tool(
+        "download_ollama_model",
+        "Propone descargar un modelo de Ollama. Requiere confirmación por consumo de red y disco.",
+        {"name": {"type": "string", "maxLength": 200}},
+        ["name"],
+    ),
+    assistant_tool(
+        "favorite_huggingface_model",
+        "Propone guardar o quitar un modelo de favoritos. Requiere confirmación.",
+        {
+            "repo_id": {"type": "string", "maxLength": 200},
+            "enabled": {"type": "boolean"},
+        },
+        ["repo_id", "enabled"],
+    ),
+    assistant_tool(
+        "cancel_job",
+        "Propone cancelar un trabajo compatible. Requiere confirmación explícita.",
+        {"job_id": {"type": "string", "description": "ID exacto obtenido con get_jobs", "maxLength": 80}},
+        ["job_id"],
+    ),
+    assistant_tool(
+        "control_service",
+        "Propone iniciar, detener o reiniciar un servicio permitido. Requiere confirmación y que el control esté habilitado.",
+        {
+            "name": {"type": "string", "description": "Servicio exacto obtenido con get_services", "maxLength": 100},
+            "action": {"type": "string", "enum": ["start", "stop", "restart"]},
+        },
+        ["name", "action"],
+    ),
+    assistant_tool(
+        "control_engine",
+        "Propone activar o desactivar de forma persistente ComfyUI, Whisper o SearXNG. Requiere confirmación; no se puede desactivar un motor que usa un perfil cargado.",
+        {
+            "engine_id": {"type": "string", "enum": list(ASSISTANT_CONTROLLABLE_ENGINES)},
+            "action": {"type": "string", "enum": ["start", "stop"]},
+        },
+        ["engine_id", "action"],
+    ),
+    assistant_tool(
+        "profile_app_action",
+        "Propone arrancar, detener o reiniciar una app de perfil con su start.sh. Requiere confirmación.",
+        {
+            "name": {"type": "string", "description": "Nombre exacto obtenido con get_profile_apps", "maxLength": 64},
+            "action": {"type": "string", "enum": ["start", "stop", "restart"]},
+        },
+        ["name", "action"],
+    ),
+    assistant_tool(
+        "release_memory",
+        "Propone liberar memoria con el modo memoria: parar servicios opcionales, descargar modelos de Ollama y, si se pide, detener perfiles. Requiere confirmación.",
+        {
+            "services": {
+                "type": "array",
+                "items": {"type": "string", "enum": list(OPTIONAL_SERVICES)},
+                "description": "Servicios opcionales a parar, obtenidos con get_memory_mode",
+                "maxItems": len(OPTIONAL_SERVICES),
+            },
+            "release_ollama": {"type": "boolean", "default": True},
+            "stop_profiles": {"type": "boolean", "default": False},
+        },
+        ["services"],
+    ),
+    assistant_tool(
+        "restore_memory",
+        "Propone volver a arrancar los servicios y perfiles que paró el modo memoria. Requiere confirmación.",
+    ),
+]
+
+
+def assistant_tools_for_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    user_text = " ".join(
+        str(message.get("content") or "")
+        for message in messages
+        if message.get("role") == "user"
+    ).casefold()
+    selected = {
+        "get_assistant_capabilities", "search_mydgx_docs", "get_overview", "get_models", "get_profiles",
+        "get_jobs", "get_system_readiness",
+    }
+    categories = [
+        (
+            ("modelo", "model", "hugging", "ollama", "recom", "código", "code", "visión", "embedding", "cuant", "descarg", "favorito"),
+            {
+                "get_models", "recommend_models", "search_huggingface_models",
+                "inspect_huggingface_model", "get_storage", "get_profile_runtime_plan",
+                "get_benchmarks",
+                "download_huggingface_model", "download_ollama_model",
+                "favorite_huggingface_model",
+            },
+        ),
+        (
+            ("benchmark", "rendimiento", "ttft", "tokens por segundo", "tok/s", "latencia"),
+            {"get_benchmarks", "get_models", "get_system_versions"},
+        ),
+        (
+            ("perfil", "profile", "arranc", "detener", "reiniciar", "activar", "app", "ragkit", "start.sh"),
+            {
+                "get_profiles", "get_profile_runtime_plan", "start_profile", "stop_profile",
+                "activate_profile", "get_services", "control_service",
+                "get_profile_apps", "profile_app_action",
+            },
+        ),
+        (
+            ("sistema", "system", "gpu", "cpu", "memoria", "memory", "temperatura", "potencia", "almacen", "disco", "nvme", "servicio", "motor", "engine", "versión", "integridad", "preparado"),
+            {
+                "get_overview", "get_metrics_summary", "get_model_metrics",
+                "get_system_readiness", "get_system_versions", "get_system_integrity",
+                "get_storage", "get_engines", "get_services", "control_service",
+                "get_memory_mode",
+            },
+        ),
+        (
+            ("memoria", "memory", "liberar", "libera", "hueco", "sitio", "restaur", "comfy", "whisper", "searxng", "open webui", "openwebui", "tts", "motor", "engine", "desactiv"),
+            {"get_memory_mode", "get_engines", "release_memory", "restore_memory", "control_engine"},
+        ),
+        (
+            ("gateway", "openai", "anthropic", "alias", "endpoint", "api", "curl", "http", "integra", "automatiz", "script", "sdk", "/v1"),
+            {"get_gateway_status", "search_mydgx_docs", "get_profiles", "get_api_reference", "get_config"},
+        ),
+        (
+            ("config", "variable", "ajuste", "clave", "token", "seguridad", "security", "acceso", "túnel", "tunel"),
+            {"get_config", "search_mydgx_docs", "get_gateway_status"},
+        ),
+        (
+            ("actualiz", "update", "apt", "paquete", "repar"),
+            {"get_updates", "get_system_integrity", "get_system_versions"},
+        ),
+        (
+            ("multimodal", "imagen", "image", "audio", "vídeo", "video", "voz", "transcri", "tts", "asr"),
+            {
+                "get_multimodal_capabilities", "recommend_models",
+                "search_huggingface_models", "inspect_huggingface_model",
+            },
+        ),
+        (
+            ("log", "error", "fallo", "trabajo", "job", "auditor", "evento", "cancel"),
+            {"get_jobs", "get_recent_events", "cancel_job"},
+        ),
+    ]
+    for keywords, tools in categories:
+        if any(keyword in user_text for keyword in keywords):
+            selected.update(tools)
+    return [
+        tool for tool in ASSISTANT_TOOLS
+        if tool["function"]["name"] in selected
+    ]
+
+
+def assistant_system_prompt() -> str:
+    return f"""
+Eres el asistente operativo de MyDGX, un panel local y open source para equipos NVIDIA GB10.
+Responde con precisión y de forma concisa en el idioma del usuario.
+
+MyDGX administra telemetría, modelos, perfiles multimodelo, motores,
+almacenamiento, benchmarks, trabajos, gateway OpenAI-compatible y comprobaciones del sistema.
+Fecha actual UTC: {datetime.now(timezone.utc).date().isoformat()}.
+
+Secciones de la interfaz:
+- Resumen: telemetría en vivo, mapa de memoria unificada, consumo por modelo y actividad.
+- Chat: chat con modelos locales y este asistente.
+- Modelos: recomendaciones para el equipo, instalados (Ollama y Hugging Face), descarga, verificación de integridad, favoritos, carga y descarga de Ollama en memoria, botones Encender/Apagar (perfil Quick) y casilla Default.
+- Benchmarks: mediciones reproducibles, suites, cola automática de modelos nuevos, exportación e importación.
+- Perfiles: recetas de inferencia con uno o varios modelos, motor, puerto, contexto y app opcional; hasta dos perfiles de usuario cargados a la vez, más Default y Quick.
+- Almacenamiento: particiones, uso por tipo de dato, NVMe y SMART.
+- Motores: estado de runtimes, activar o desactivar ComfyUI, Whisper y SearXNG, y modo memoria.
+- Laboratorio IA: imagen, audio, vídeo, visión, embeddings y reranking.
+- Configuración: tema, clave de acceso del navegador y gateway.
+- Sistema: readiness, versiones, integridad, servicios, actualizaciones APT y reparación.
+- Logs: diagnóstico filtrable y auditoría.
+
+Conceptos:
+- La memoria del GB10 es unificada (CPU y GPU comparten 128 GB); un modelo que no cabe no se carga.
+- Descargar un modelo no lo carga en memoria; arrancar un perfil sí.
+- Perfil predeterminado: se recarga al iniciar MyDGX; se fija con activate_profile.
+- Perfil Default (mydgx-default): de solo lectura; reúne los modelos marcados como Default en Modelos y arranca siempre al iniciar MyDGX. No cuenta para el límite de dos perfiles.
+- Perfil Quick (mydgx-quick): de solo lectura; se crea al pulsar Encender en un modelo de Modelos (si cabe en memoria), se vacía con Apagar; se conserva si solo se reinicia el servicio MyDGX (deploy sin --repair) y se vacía al reiniciar el equipo o con deploy --repair. No cuenta para el límite de dos perfiles.
+- Default y Quick no se editan, activan ni borran desde Perfiles; se gestionan desde Modelos. Un modelo cargado por un perfil no se puede borrar hasta detenerlo.
+- App del perfil: directorio con start.sh (start/stop/restart/status) que arranca y para con el perfil; recibe MYDGX_GATEWAY_URL y no recibe secretos.
+- App web: una app de perfil puede tener alias y puerto (se configuran en el editor del perfil). start.sh recibe MYDGX_APP_HOST=127.0.0.1, MYDGX_APP_PORT, MYDGX_APP_ALIAS y MYDGX_APP_URL y debe escuchar en ese puerto. Con la app en marcha aparece un acceso directo en Resumen (junto a DGX Dashboard) y en la app de la barra de menús, que abre el túnel SSH para ese puerto. get_profile_apps devuelve la configuración en "web".
+- Gateway: endpoint único OpenAI y Anthropic (por defecto http://127.0.0.1:4000/v1) que enruta por alias a los perfiles cargados.
+- Modo memoria: pausa temporal de servicios opcionales y Ollama para hacer sitio, con restauración posterior.
+- Un motor activo (Whisper, ComfyUI) puede no tener modelos cargados: cargan bajo demanda.
+- Las operaciones largas son trabajos con progreso; consulta get_jobs.
+
+Reglas:
+- Para cualquier dato actual del equipo usa una herramienta; nunca inventes métricas, estados o IDs.
+- Si preguntan qué puedes hacer, usa get_assistant_capabilities.
+- Para preguntas sobre MyDGX busca la documentación cuando la respuesta no esté en resultados previos.
+- Para recomendar modelos usa recommend_models y explica compatibilidad, memoria, rendimiento estimado y Score comunidad HF; no presentes estimaciones como benchmarks.
+- Para hablar de rendimiento medido usa get_benchmarks y distingue protocolo, entorno y validez.
+- Antes de una acción identifica el recurso con una herramienta de lectura.
+- Las herramientas de acción solo crean una propuesta. Explica qué ocurrirá y pide que el usuario la confirme en la interfaz.
+- Para dudas de memoria o "no cabe" usa get_memory_mode y get_profiles; puedes proponer release_memory y después restore_memory.
+- Para preguntas sobre la API, integración o automatización usa get_api_reference. Puedes mostrar ejemplos curl de endpoints documentados para que el usuario los ejecute, siempre con marcadores como YOUR_API_KEY o $MYDGX_API_KEY, e indica el texto de confirmación cuando el endpoint lo exija.
+- Para diagnosticar errores usa get_recent_events con level=error o con el texto relevante, y get_jobs.
+- Nunca solicites, muestres ni infieras claves, tokens, contraseñas, cookies o contenido de .env.
+- No inventes endpoints, comandos ni SQL; no presentes llamadas HTTP como herramientas que tú ejecutas.
+- Si una capacidad no está disponible, dilo claramente y ofrece el siguiente paso seguro.
+""".strip()
+
+
+@lru_cache(maxsize=1)
+def assistant_document_chunks() -> list[dict[str, str]]:
+    files: list[Path] = []
+    for configured in ASSISTANT_DOC_PATHS:
+        if configured.is_file():
+            files.append(configured)
+        elif configured.is_dir():
+            files.extend(sorted(configured.rglob("*.md")))
+    chunks: list[dict[str, str]] = []
+    for path in files:
+        try:
+            if path.stat().st_size > 1_000_000:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        relative = str(path.relative_to(ROOT))
+        heading = relative
+        buffer: list[str] = []
+        size = 0
+        for paragraph in re.split(r"\n\s*\n", text):
+            paragraph = paragraph.strip()
+            if not paragraph:
+                continue
+            if paragraph.startswith("#"):
+                if buffer:
+                    chunks.append({"source": relative, "heading": heading, "text": "\n\n".join(buffer)})
+                    buffer, size = [], 0
+                heading = paragraph.lstrip("#").strip() or heading
+            if buffer and size + len(paragraph) > 1800:
+                chunks.append({"source": relative, "heading": heading, "text": "\n\n".join(buffer)})
+                buffer, size = [], 0
+            buffer.append(paragraph)
+            size += len(paragraph)
+        if buffer:
+            chunks.append({"source": relative, "heading": heading, "text": "\n\n".join(buffer)})
+    return chunks
+
+
+def search_assistant_documents(query: str) -> dict[str, Any]:
+    terms = {
+        term for term in re.findall(r"[a-záéíóúüñ0-9._/-]{3,}", query.casefold())
+        if term not in {"para", "como", "cómo", "esta", "este", "mydgx", "sobre"}
+    }
+    if not terms:
+        terms = {query.casefold().strip()}
+    ranked: list[tuple[int, dict[str, str]]] = []
+    for chunk in assistant_document_chunks():
+        body = f"{chunk['source']} {chunk['heading']} {chunk['text']}".casefold()
+        score = sum(body.count(term) for term in terms)
+        score += sum(3 for term in terms if term in chunk["heading"].casefold())
+        if score:
+            ranked.append((score, chunk))
+    ranked.sort(key=lambda item: (-item[0], item[1]["source"], item[1]["heading"]))
+    return {
+        "query": query,
+        "results": [
+            {
+                "source": chunk["source"],
+                "heading": chunk["heading"],
+                "content": chunk["text"][:2200],
+            }
+            for _, chunk in ranked[:5]
+        ],
+    }
+
+
+API_REFERENCE_PATH = ROOT / "docs" / "api.md"
+API_REFERENCE_ROW = re.compile(r"\| (GET|POST|PUT|PATCH|DELETE) \| `([^`]+)` \| (.+) \|")
+
+
+@lru_cache(maxsize=1)
+def api_reference_entries() -> tuple[dict[str, str], ...]:
+    try:
+        text = API_REFERENCE_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return ()
+    entries: list[dict[str, str]] = []
+    area = ""
+    for line in text.splitlines():
+        if line.startswith("## "):
+            area = line[3:].strip()
+        elif match := API_REFERENCE_ROW.fullmatch(line.strip()):
+            entries.append({
+                "area": area,
+                "method": match.group(1),
+                "path": match.group(2),
+                "description": match.group(3).strip(),
+            })
+    return tuple(entries)
+
+
+def assistant_api_reference(query: str, limit: int) -> dict[str, Any]:
+    entries = api_reference_entries()
+    terms = {
+        term for term in re.findall(r"[a-záéíóúüñ0-9._/{}-]{3,}", query.casefold())
+        if term not in {"api", "endpoint", "endpoints", "ruta", "rutas", "para", "como", "cómo", "mydgx", "llamar", "usar"}
+    }
+    if terms:
+        ranked: list[tuple[int, dict[str, str]]] = []
+        for entry in entries:
+            body = " ".join(entry.values()).casefold()
+            score = sum(body.count(term) for term in terms)
+            score += sum(2 for term in terms if term in entry["path"].casefold() or term in entry["area"].casefold())
+            if score:
+                ranked.append((score, entry))
+        ranked.sort(key=lambda item: -item[0])
+        endpoints: list[dict[str, str]] = [entry for _, entry in ranked[:limit]]
+    else:
+        endpoints = [
+            {"area": area, "endpoints": ", ".join(f"{item['method']} {item['path']}" for item in entries if item["area"] == area)}
+            for area in dict.fromkeys(item["area"] for item in entries)
+        ]
+    gateway = gateway_runtime_config()
+    return {
+        "dashboard_base_url": f"http://127.0.0.1:{settings.port}",
+        "gateway_base_url": f"http://127.0.0.1:{gateway['port']}/v1",
+        "authentication": {
+            "dashboard": "Cookie de sesión tras POST /api/auth/login o cabecera X-MyDGX-Key: YOUR_API_KEY",
+            "dashboard_password_required": bool(dashboard_password()),
+            "dashboard_key_required": bool(settings.mydgx_api_key),
+            "gateway": "Authorization: Bearer YOUR_GATEWAY_API_KEY (no necesaria desde loopback)",
+            "gateway_key_configured": bool(settings.gateway_api_key),
+            "browser": "Las peticiones de otras webs (Origin o Host ajenos) se rechazan con 403",
+        },
+        "conventions": [
+            "Las operaciones largas devuelven job_id; su estado está en GET /api/jobs/{job_id}.",
+            "Los borrados piden ?confirm= con el nombre exacto; otras acciones piden un campo confirm en el cuerpo.",
+            "Los errores tienen la forma {\"detail\": \"...\"}.",
+        ],
+        "total_endpoints": len(entries),
+        "endpoints": endpoints,
+        "reference": "docs/api.md",
+    }
+
+
+def summarize_metric_rows(rows: list[dict[str, Any]], minutes: int) -> dict[str, Any]:
+    fields = (
+        "cpu_percent", "memory_percent", "memory_used", "memory_total",
+        "gpu_utilization", "gpu_memory_used", "gpu_memory_total",
+        "gpu_temperature", "gpu_power_watts", "disk_percent",
+        "network_sent", "network_received",
+    )
+    summary: dict[str, Any] = {}
+    for field in fields:
+        values = [
+            float(row[field]) for row in rows
+            if isinstance(row.get(field), (int, float))
+        ]
+        if values:
+            summary[field] = {
+                "latest": values[-1],
+                "average": round(sum(values) / len(values), 2),
+                "minimum": min(values),
+                "maximum": max(values),
+                "change": round(values[-1] - values[0], 2),
+            }
+    return {
+        "minutes": minutes,
+        "samples": len(rows),
+        "from": rows[0].get("created_at") if rows else None,
+        "to": rows[-1].get("created_at") if rows else None,
+        "metrics": summary,
+    }
+
+
+def assistant_action_label(name: str, arguments: dict[str, Any]) -> str:
+    if name in {"start_profile", "activate_profile"}:
+        rows = db.rows("SELECT name FROM profiles WHERE id=?", (arguments.get("profile_id"),))
+        verb = "Arrancar" if name == "start_profile" else "Activar"
+        return f"{verb} perfil {rows[0]['name'] if rows else arguments.get('profile_id', '')}"
+    if name == "stop_profile":
+        target = arguments.get("profile_id", "")
+        rows = db.rows("SELECT name FROM profiles WHERE id=?", (target,))
+        return "Detener todos los perfiles" if target == "__all__" else f"Detener perfil {rows[0]['name'] if rows else target}"
+    if name == "cancel_job":
+        return f"Cancelar trabajo {arguments.get('job_id', '')}"
+    if name == "download_huggingface_model":
+        return f"Descargar snapshot Hugging Face {arguments.get('repo_id', '')}"
+    if name == "download_ollama_model":
+        return f"Descargar modelo Ollama {arguments.get('name', '')}"
+    if name == "favorite_huggingface_model":
+        verb = "Guardar" if arguments.get("enabled") else "Quitar"
+        return f"{verb} favorito {arguments.get('repo_id', '')}"
+    if name == "control_engine":
+        verb = "Activar" if arguments.get("action") == "start" else "Desactivar"
+        return f"{verb} motor {arguments.get('engine_id', '')}"
+    if name == "profile_app_action":
+        verbs = {"start": "Arrancar", "stop": "Detener", "restart": "Reiniciar"}
+        return f"{verbs.get(str(arguments.get('action')), 'Ejecutar')} app {arguments.get('name', '')}"
+    if name == "release_memory":
+        parts = [
+            "parar " + ", ".join(OPTIONAL_SERVICES[item]["name"] for item in arguments.get("services", []))
+            if arguments.get("services") else "",
+            "descargar modelos de Ollama" if arguments.get("release_ollama") else "",
+            "detener perfiles" if arguments.get("stop_profiles") else "",
+        ]
+        return "Liberar memoria: " + ("; ".join(part for part in parts if part) or "vaciar caché de páginas")
+    if name == "restore_memory":
+        return "Restaurar lo que paró el modo memoria"
+    return f"{str(arguments.get('action', '')).capitalize()} servicio {arguments.get('name', '')}"
+
+
+def validate_assistant_action(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if name in {"start_profile", "activate_profile"}:
+        profile_id = str(arguments.get("profile_id") or "")[:80]
+        if not db.rows("SELECT 1 FROM profiles WHERE id=?", (profile_id,)):
+            raise HTTPException(status_code=404, detail="Perfil no encontrado")
+        return {"profile_id": profile_id}
+    if name == "stop_profile":
+        profile_id = str(arguments.get("profile_id") or "")[:80]
+        if profile_id != "__all__" and profile_id not in _runtime_profile_ids:
+            raise HTTPException(status_code=409, detail="El perfil no está cargado")
+        return {"profile_id": profile_id}
+    if name == "cancel_job":
+        job_id = str(arguments.get("job_id") or "")[:80]
+        rows = db.rows("SELECT kind,status FROM jobs WHERE id=?", (job_id,))
+        if not rows:
+            raise HTTPException(status_code=404, detail="Trabajo no encontrado")
+        if rows[0]["kind"] not in CANCELLABLE_JOB_KINDS or rows[0]["status"] not in {"queued", "running"}:
+            raise HTTPException(status_code=409, detail="El trabajo no se puede cancelar")
+        return {"job_id": job_id}
+    if name in {"download_huggingface_model", "favorite_huggingface_model"}:
+        repo_id = str(arguments.get("repo_id") or "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo_id):
+            raise HTTPException(status_code=400, detail="Repositorio Hugging Face inválido")
+        if name == "favorite_huggingface_model":
+            enabled = arguments.get("enabled")
+            if not isinstance(enabled, bool):
+                raise HTTPException(status_code=400, detail="El estado de favorito debe ser booleano")
+            return {"repo_id": repo_id, "enabled": enabled}
+        revision = str(arguments.get("revision") or "main")[:120]
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+", revision):
+            raise HTTPException(status_code=400, detail="Revisión inválida")
+        return {"repo_id": repo_id, "revision": revision}
+    if name == "download_ollama_model":
+        model_name = str(arguments.get("name") or "")[:200]
+        if not re.fullmatch(r"[A-Za-z0-9._:/-]+", model_name):
+            raise HTTPException(status_code=400, detail="Nombre de modelo Ollama inválido")
+        return {"name": model_name}
+    if name == "control_service":
+        service_name = str(arguments.get("name") or "")[:100]
+        action = str(arguments.get("action") or "")
+        if not settings.enable_service_control:
+            raise HTTPException(status_code=403, detail="Control de servicios desactivado")
+        if service_name not in settings.service_names or action not in {"start", "stop", "restart"}:
+            raise HTTPException(status_code=400, detail="Servicio o acción no permitidos")
+        return {"name": service_name, "action": action}
+    if name == "control_engine":
+        engine_id = str(arguments.get("engine_id") or "")
+        action = str(arguments.get("action") or "")
+        if engine_id not in ASSISTANT_CONTROLLABLE_ENGINES or action not in {"start", "stop"}:
+            raise HTTPException(status_code=400, detail="Motor o acción no permitidos")
+        users = profiles_using_engine(engine_id) if action == "stop" else []
+        if users:
+            raise HTTPException(status_code=409, detail=f"Lo usan perfiles cargados: {', '.join(users)}")
+        return {"engine_id": engine_id, "action": action}
+    if name == "profile_app_action":
+        app_name = str(arguments.get("name") or "")[:64]
+        action = str(arguments.get("action") or "")
+        if action not in {"start", "stop", "restart"}:
+            raise HTTPException(status_code=400, detail="Acción de app no permitida")
+        if not re.fullmatch(PROFILE_APP_NAME, app_name) or profile_app_dir(app_name) is None:
+            raise HTTPException(status_code=404, detail="App de perfil no disponible")
+        return {"name": app_name, "action": action}
+    if name == "release_memory":
+        services = arguments.get("services") or []
+        if not isinstance(services, list) or any(item not in OPTIONAL_SERVICES for item in services):
+            raise HTTPException(status_code=400, detail=f"Servicios válidos: {', '.join(OPTIONAL_SERVICES)}")
+        release_ollama = arguments.get("release_ollama", True)
+        stop_profiles = arguments.get("stop_profiles", False)
+        if not isinstance(release_ollama, bool) or not isinstance(stop_profiles, bool):
+            raise HTTPException(status_code=400, detail="release_ollama y stop_profiles deben ser booleanos")
+        return {"services": list(dict.fromkeys(services)), "release_ollama": release_ollama, "stop_profiles": stop_profiles}
+    if name == "restore_memory":
+        state = memory_mode_state()
+        if not state["stopped"] and not state["profiles"]:
+            raise HTTPException(status_code=409, detail="El modo memoria no tiene nada parado que restaurar")
+        return {}
+    raise HTTPException(status_code=400, detail="Acción no permitida")
+
+
+def create_assistant_pending_action(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    now = time.time()
+    for action_id, action in list(_assistant_pending_actions.items()):
+        if action["expires_at_epoch"] <= now:
+            _assistant_pending_actions.pop(action_id, None)
+    action_id = str(uuid.uuid4())
+    expires_at_epoch = now + max(60, settings.assistant_action_ttl_seconds)
+    action = {
+        "id": action_id,
+        "name": name,
+        "label": assistant_action_label(name, arguments),
+        "arguments": arguments,
+        "expires_at": datetime.fromtimestamp(expires_at_epoch, timezone.utc).isoformat(),
+        "expires_at_epoch": expires_at_epoch,
+    }
+    _assistant_pending_actions[action_id] = action
+    db.audit("assistant.action.proposed", name, True, json.dumps(arguments, ensure_ascii=False))
+    return {key: value for key, value in action.items() if key != "expires_at_epoch"}
+
+
+def compact_profiles(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "runtime": payload.get("runtime"),
+        "autostart_enabled": payload.get("autostart_enabled"),
+        "profiles": [
+            {
+                "id": profile.get("id"),
+                "name": profile.get("name"),
+                "active": bool(profile.get("active")),
+                "downloaded": profile.get("downloaded"),
+                "favorite": bool(profile.get("favorite")),
+                "memory_plan": profile.get("memory_plan"),
+                "models": [
+                    {
+                        "id": model.get("id"),
+                        "name": model.get("name"),
+                        "engine": model.get("engine"),
+                        "model_ref": model.get("model_ref"),
+                        "model_alias": model.get("model_alias"),
+                        "task": model.get("task"),
+                        "enabled": model.get("enabled"),
+                        "downloaded": model.get("downloaded"),
+                        "port": model.get("port"),
+                    }
+                    for model in profile.get("models", [])
+                ],
+            }
+            for profile in payload.get("profiles", [])
+        ],
+    }
+
+
+async def execute_assistant_read_tool(name: str, arguments: dict[str, Any]) -> Any:
+    if name == "get_assistant_capabilities":
+        names = [str(tool["function"]["name"]) for tool in ASSISTANT_TOOLS]
+        return {
+            "read_tools": [tool for tool in names if tool not in ASSISTANT_ACTION_TOOLS],
+            "action_tools": [tool for tool in names if tool in ASSISTANT_ACTION_TOOLS],
+            "actions_require_confirmation": True,
+            "excluded": ["comandos arbitrarios", "SQL arbitrario", "borrados", "lectura de secretos"],
+        }
+    if name == "search_mydgx_docs":
+        return search_assistant_documents(str(arguments.get("query") or "")[:300])
+    if name == "get_overview":
+        return await overview()
+    if name == "get_metrics_summary":
+        minutes = max(1, min(10080, int(arguments.get("minutes") or 60)))
+        return summarize_metric_rows(await metrics_history(minutes=minutes), minutes)
+    if name == "get_model_metrics":
+        minutes = max(1, min(10080, int(arguments.get("minutes") or 60)))
+        profile_id = str(arguments.get("profile_id") or "")[:80] or None
+        return await model_metrics_history(minutes=minutes, profile_id=profile_id)
+    if name == "get_system_readiness":
+        return await system_readiness()
+    if name == "get_system_versions":
+        return await asyncio.to_thread(software_versions)
+    if name == "get_system_integrity":
+        return await asyncio.to_thread(system_integrity)
+    if name == "get_storage":
+        return await storage()
+    if name == "get_models":
+        payload = await models()
+        return {
+            "ollama": [
+                {**{key: item.get(key) for key in ("name", "model", "size", "modified_at", "quick", "loaded_by")}, "default": item.get("persistent")}
+                for item in payload.get("ollama", [])
+            ],
+            "running": [
+                {key: item.get(key) for key in ("name", "model", "size", "expires_at", "size_vram")}
+                for item in payload.get("running", [])
+            ],
+            "huggingface": [
+                {**{key: item.get(key) for key in ("repo_id", "size", "quantizations", "quick", "loaded_by", "downloaded_at")}, "default": item.get("persistent")}
+                for item in payload.get("huggingface", [])
+            ],
+        }
+    if name == "get_benchmarks":
+        try:
+            limit = max(1, min(20, int(arguments.get("limit") or 5)))
+        except (TypeError, ValueError):
+            limit = 5
+        model_filter = str(arguments.get("model") or "").strip().casefold()
+        payload = await benchmarks(limit=max(limit * 4, 20))
+        runs = [
+            run for run in payload["runs"]
+            if not model_filter
+            or model_filter in str(run.get("source_id") or "").casefold()
+            or model_filter in str(run.get("target") or "").casefold()
+        ][:limit]
+        return {
+            "score_algorithm": payload["score_algorithm"],
+            "runs": [
+                {
+                    "model": run.get("source_id"),
+                    "artifact_hash": run.get("artifact_hash"),
+                    "quantization": run.get("quantization"),
+                    "protocol": run.get("protocol_name"),
+                    "environment_hash": run.get("environment_hash"),
+                    "valid": bool(run.get("valid")),
+                    "imported": bool(run.get("imported")),
+                    "created_at": run.get("created_at"),
+                    "summary": run.get("summary"),
+                }
+                for run in runs
+            ],
+        }
+    if name == "get_profiles":
+        return compact_profiles(await profiles())
+    if name == "recommend_models":
+        query = str(arguments.get("query") or "")[:120]
+        if len(query.strip()) < 2:
+            raise HTTPException(status_code=422, detail="La búsqueda debe tener al menos 2 caracteres")
+        allowed = {
+            "task": {"any", "chat", "code", "reasoning", "embedding", "vision", "audio-chat", "video-chat", "image-generation", "asr", "tts", "video-generation", "reranking"},
+            "size": {"any", "compact", "balanced", "large"},
+            "alignment": {"any", "standard", "uncensored"},
+            "runtime": {"any", "llama.cpp", "external"},
+            "format": {"any", "gguf", "safetensors", "onnx"},
+            "modality": {"any", "text", "image", "audio", "video"},
+        }
+        aliases = {
+            "task": {
+                "code-generation": "code", "coding": "code", "programming": "code",
+                "text-generation": "chat", "conversation": "chat",
+                "speech-to-text": "asr", "text-to-speech": "tts",
+            },
+            "modality": {
+                "code": "text", "coding": "text", "text-generation": "text",
+                "vision": "image", "speech": "audio",
+            },
+        }
+        values = {
+            key: aliases.get(key, {}).get(
+                str(arguments.get(key) or "any").strip().casefold(),
+                str(arguments.get(key) or "any").strip().casefold(),
+            )
+            for key in allowed
+        }
+        values = {
+            key: value if value in allowed[key] else "any"
+            for key, value in values.items()
+        }
+        try:
+            limit = int(arguments.get("limit") or 3)
+        except (TypeError, ValueError):
+            limit = 3
+        limit = max(1, min(5, limit))
+        search_limit = min(30, max(limit * 6, 20))
+        results = await search_models(
+            query,
+            values["task"],
+            values["size"],
+            values["alignment"],
+            values["runtime"],
+            values["format"],
+            values["modality"],
+            search_limit,
+        )
+        effective_query = query
+        fallback_queries = {
+            "code": "coder",
+            "chat": "instruct",
+            "reasoning": "reasoning",
+            "embedding": "embedding",
+            "vision": "vision",
+            "audio-chat": "audio",
+            "video-chat": "video",
+            "image-generation": "image generation",
+            "asr": "speech recognition",
+            "tts": "text to speech",
+            "video-generation": "video generation",
+            "reranking": "reranker",
+        }
+        fallback_query = fallback_queries.get(values["task"], values["task"])
+        if (
+            values["task"] != "any"
+            and fallback_query.casefold() != query.strip().casefold()
+            and (
+                len(results) < limit
+                or not any(bool(item.get("fits")) for item in results)
+            )
+        ):
+            effective_query = fallback_query
+            fallback_results = await search_models(
+                effective_query,
+                values["task"],
+                values["size"],
+                values["alignment"],
+                values["runtime"],
+                values["format"],
+                values["modality"],
+                search_limit,
+            )
+            results = list({
+                str(item.get("id")): item
+                for item in [*results, *fallback_results]
+                if item.get("id")
+            }.values())
+        def quantization_rank(item: dict[str, Any]) -> int:
+            quantization = str(item.get("recommended_quantization") or "").upper()
+            if re.search(r"(?:^|[-_])Q[4568](?:_|$)", quantization):
+                return 0
+            if re.search(r"(?:^|[-_])Q3(?:_|$)", quantization):
+                return 1
+            return 2
+
+        results.sort(key=lambda item: (
+            not bool(item.get("fits")),
+            quantization_rank(item),
+            not bool(item.get("trusted_publisher")),
+            -float(item.get("recommended_score") or 0),
+            -float(item.get("community_score") or 0),
+            -int(item.get("downloads") or 0),
+        ))
+        diverse: list[dict[str, Any]] = []
+        duplicate_families: list[dict[str, Any]] = []
+        families: set[str] = set()
+        ignored_family_tokens = {
+            "abliterated", "awq", "cyber", "exl2", "fp16", "gguf", "gptq",
+            "instruct", "mtp", "uncensored",
+        }
+        for item in results:
+            model_name = str(item.get("id") or "").partition("/")[2]
+            family = "-".join(
+                token
+                for token in re.findall(r"[a-z0-9.]+", model_name.casefold())
+                if token not in ignored_family_tokens
+                and not re.fullmatch(r"(?:i?q|ud-q)\d.*", token)
+            )
+            if family and family in families:
+                duplicate_families.append(item)
+                continue
+            families.add(family)
+            diverse.append(item)
+        results = [*diverse, *duplicate_families][:limit]
+        device = device_identity()
+        return {
+            "query": query,
+            "effective_query": effective_query,
+            "device_model": device["device_model"],
+            "is_dgx_spark": device["is_dgx_spark"],
+            "count": len(results),
+            "recommendations": [
+                {
+                    key: item.get(key)
+                    for key in (
+                        "id", "recommended_score", "recommendation_status",
+                        "community_score", "downloads", "likes", "trending_score",
+                        "tasks", "recommended_quantization", "recommended_context",
+                        "estimated_tokens_per_second", "recommended_slots",
+                        "estimated_memory_mb", "memory_budget_mb",
+                        "memory_available_budget_mb", "fits", "fits_now",
+                        "architecture", "active_parameters_b", "runtime_requirement",
+                        "trusted_publisher", "reasons", "warnings",
+                    )
+                }
+                for item in results
+            ],
+        }
+    if name == "search_huggingface_models":
+        query = str(arguments.get("query") or "")[:120]
+        task = str(arguments.get("task") or "any")
+        modality = str(arguments.get("modality") or "any")
+        if len(query.strip()) < 2:
+            raise HTTPException(status_code=422, detail="La búsqueda debe tener al menos 2 caracteres")
+        if task not in {"any", "chat", "code", "reasoning", "embedding", "vision", "audio-chat", "video-chat", "image-generation", "asr", "tts", "video-generation", "reranking"}:
+            raise HTTPException(status_code=422, detail="Tarea inválida")
+        if modality not in {"any", "text", "image", "audio", "video"}:
+            raise HTTPException(status_code=422, detail="Modalidad inválida")
+        limit = max(1, min(8, int(arguments.get("limit") or 5)))
+        return await search_all_huggingface(query, task, modality, limit)
+    if name == "inspect_huggingface_model":
+        repo_id = str(arguments.get("repo_id") or "")
+        revision = str(arguments.get("revision") or "main")[:120]
+        if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo_id):
+            raise HTTPException(status_code=422, detail="Repositorio Hugging Face inválido")
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+", revision):
+            raise HTTPException(status_code=422, detail="Revisión inválida")
+        result = await inspect_hf_model(repo_id, revision)
+        return {
+            key: result.get(key)
+            for key in (
+                "repo_id", "revision", "pipeline_tag", "license", "tasks",
+                "input_modalities", "output_modalities", "formats",
+                "recommended_engines", "downloads", "files",
+            )
+        }
+    if name == "get_profile_runtime_plan":
+        return await runtime_plan(str(arguments.get("profile_id") or "")[:80])
+    if name == "get_gateway_status":
+        return await gateway_config()
+    if name == "get_multimodal_capabilities":
+        return await multimodal_capabilities()
+    if name == "get_engines":
+        return await serving_engines()
+    if name == "get_services":
+        return await services()
+    if name == "get_jobs":
+        return (await jobs())[:30]
+    if name == "get_recent_events":
+        limit = max(1, min(50, int(arguments.get("limit") or 20)))
+        level = str(arguments.get("level") or "any").casefold()
+        category = str(arguments.get("category") or "")[:80]
+        query = str(arguments.get("query") or "").strip()[:120]
+        clauses: list[str] = []
+        params: list[Any] = []
+        if level in {"debug", "info", "warning", "error", "critical"}:
+            clauses.append("level=?")
+            params.append(level)
+        if category:
+            clauses.append("category=?")
+            params.append(category)
+        if query:
+            clauses.append("(message LIKE ? OR action LIKE ? OR entity_id LIKE ?)")
+            params.extend([f"%{query}%"] * 3)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        audit_where = "WHERE action LIKE ? OR target LIKE ? OR detail LIKE ? " if query else ""
+        return {
+            "logs": db.rows(
+                "SELECT created_at,level,category,action,message,entity_type,entity_id "
+                f"FROM system_logs {where}ORDER BY id DESC LIMIT ?",
+                (*params, limit),
+            ),
+            "audit": db.rows(
+                "SELECT created_at,action,target,success,detail FROM audit_events "
+                f"{audit_where}ORDER BY id DESC LIMIT ?",
+                (*([f"%{query}%"] * 3 if query else []), limit),
+            ),
+        }
+    if name == "get_api_reference":
+        try:
+            limit = max(1, min(40, int(arguments.get("limit") or 15)))
+        except (TypeError, ValueError):
+            limit = 15
+        return assistant_api_reference(str(arguments.get("query") or "")[:200], limit)
+    if name == "get_config":
+        return await public_config()
+    if name == "get_memory_mode":
+        return await memory_mode_status()
+    if name == "get_profile_apps":
+        return profile_apps_overview()
+    if name == "get_updates":
+        return await updates()
+    raise HTTPException(status_code=400, detail=f"Herramienta no permitida: {name}")
+
+
+def assistant_safe_json(value: Any, limit: int = 24_000) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, default=str)
+    if len(encoded) <= limit:
+        return encoded
+    return json.dumps(
+        {"truncated": True, "content": encoded[:limit]},
+        ensure_ascii=False,
+    )
+
+
+def assistant_parameter_size_b(value: str) -> float | None:
+    matches = re.findall(r"(?i)(?<![A-Za-z0-9])(\d+(?:\.\d+)?)\s*B(?![A-Za-z])", value)
+    return max((float(item) for item in matches), default=None)
+
+
+async def assistant_model_candidates(requested: str | None) -> list[str]:
+    candidates: list[str] = []
+    for value in (requested, settings.assistant_model):
+        normalized = str(value or "").strip()
+        if normalized and normalized.casefold() != "auto":
+            candidates.append(normalized)
+    if settings.assistant_fallback_to_available:
+        for profile in running_profiles():
+            for model in running_profile_models(profile):
+                evidence = f"{model.get('name', '')} {model.get('model_ref', '')}"
+                parameters = assistant_parameter_size_b(evidence)
+                if (
+                    model.get("task", "chat") in {"chat", "vision"}
+                    and (parameters is None or parameters >= settings.assistant_min_fallback_parameters_b)
+                ):
+                    candidates.append(f"profile:{profile['id']}:{model['id']}")
+        active = active_profile()
+        if active:
+            for model in profile_models(active):
+                evidence = f"{model.get('name', '')} {model.get('model_ref', '')}"
+                parameters = assistant_parameter_size_b(evidence)
+                if (
+                    model.get("enabled", True)
+                    and model.get("task", "chat") in {"chat", "vision"}
+                    and (parameters is None or parameters >= settings.assistant_min_fallback_parameters_b)
+                ):
+                    candidates.append(f"profile:{active['id']}:{model['id']}")
+        try:
+            tags = (await ollama_payload("/api/tags")).get("models", [])
+            for item in tags:
+                evidence = (
+                    f"{item.get('name', '')} "
+                    f"{(item.get('details') or {}).get('parameter_size', '')}"
+                )
+                parameters = assistant_parameter_size_b(evidence)
+                if parameters is None or parameters >= settings.assistant_min_fallback_parameters_b:
+                    candidates.append(str(item.get("name") or ""))
+        except HTTPException:
+            pass
+    return list(dict.fromkeys(candidate for candidate in candidates if candidate))
+
+
+@app.get("/api/assistant/status", dependencies=secure)
+async def assistant_status() -> dict[str, Any]:
+    installed_ollama: list[str] = []
+    ollama_reachable = False
+    try:
+        tags = (await ollama_payload("/api/tags")).get("models", [])
+        installed_ollama = [
+            str(item.get("name") or "") for item in tags if item.get("name")
+        ]
+        ollama_reachable = True
+    except HTTPException:
+        pass
+    profile_candidates = []
+    for profile in running_profiles():
+        for model in running_profile_models(profile):
+            if model.get("task", "chat") in {"chat", "vision"}:
+                profile_candidates.append(f"profile:{profile['id']}:{model['id']}")
+    preferred = settings.assistant_model.strip()
+    preferred_available = (
+        preferred.casefold() == "auto"
+        or preferred in installed_ollama
+        or preferred in profile_candidates
+    )
+    available = list(dict.fromkeys([*profile_candidates, *installed_ollama]))
+    tool_names = [
+        str(tool["function"]["name"])
+        for tool in ASSISTANT_TOOLS
+    ]
+    ready = settings.assistant_enabled and bool(
+        preferred_available or (settings.assistant_fallback_to_available and available)
+    )
+    return {
+        "enabled": settings.assistant_enabled,
+        "ready": ready,
+        "preferred_model": preferred,
+        "preferred_available": preferred_available,
+        "fallback_enabled": settings.assistant_fallback_to_available,
+        "ollama_reachable": ollama_reachable,
+        "available_models": available,
+        "documentation_chunks": len(assistant_document_chunks()),
+        "action_confirmation_required": True,
+        "dynamic_tool_routing": True,
+        "read_tools": [name for name in tool_names if name not in ASSISTANT_ACTION_TOOLS],
+        "action_tools": [name for name in tool_names if name in ASSISTANT_ACTION_TOOLS],
+        "remediation": (
+            None
+            if ready
+            else f"Instala el modelo preferido con: ollama pull {preferred}"
+            if preferred and preferred.casefold() != "auto"
+            else "Instala o carga un modelo local de chat compatible"
+        ),
+    }
+
+
+def assistant_profile_model(reference: str) -> dict[str, Any] | None:
+    profile_reference = reference.removeprefix("profile:")
+    profile_id, separator, model_id = profile_reference.partition(":")
+    model_id = model_id if separator else "primary"
+    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        return None
+    model = next((item for item in profile_models(rows[0]) if item["id"] == model_id), None)
+    if model:
+        model["_profile_id"] = profile_id
+    return model
+
+
+def assistant_provider_messages(messages: list[dict[str, Any]], provider: str) -> list[dict[str, Any]]:
+    converted = []
+    for message in messages:
+        item = {key: value for key, value in message.items() if value is not None}
+        if item.get("role") == "assistant" and item.get("tool_calls"):
+            calls = []
+            for call in item["tool_calls"]:
+                arguments = call["function"].get("arguments") or {}
+                calls.append({
+                    "id": call.get("id"),
+                    "type": "function",
+                    "function": {
+                        "name": call["function"]["name"],
+                        "arguments": (
+                            arguments
+                            if provider == "ollama"
+                            else json.dumps(arguments, ensure_ascii=False)
+                        ),
+                    },
+                })
+            item["tool_calls"] = calls
+        if item.get("role") == "tool":
+            if provider == "ollama":
+                item.pop("tool_call_id", None)
+            else:
+                item.pop("tool_name", None)
+        converted.append(item)
+    return converted
+
+
+def normalize_assistant_tool_calls(raw_calls: Any) -> list[dict[str, Any]]:
+    normalized = []
+    for raw in raw_calls or []:
+        function = raw.get("function") or {}
+        arguments = function.get("arguments") or {}
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+        if not isinstance(arguments, dict) or not isinstance(function.get("name"), str):
+            continue
+        normalized.append({
+            "id": str(raw.get("id") or f"call_{uuid.uuid4().hex}"),
+            "type": "function",
+            "function": {"name": function["name"], "arguments": arguments},
+        })
+    return normalized
+
+
+async def call_assistant_model(
+    candidate: str,
+    messages: list[dict[str, Any]],
+    *,
+    tools_enabled: bool = True,
+) -> tuple[dict[str, Any], str]:
+    model = assistant_profile_model(candidate) if candidate.startswith("profile:") else None
+    if candidate.startswith("profile:") and not model:
+        raise HTTPException(status_code=404, detail="Modelo de asistente no encontrado")
+    if model and model.get("task", "chat") not in {"chat", "vision"}:
+        raise HTTPException(status_code=400, detail="El modelo configurado no admite chat")
+    if not model or model["engine"] == "ollama":
+        model_name = model["model_ref"] if model else candidate
+        ollama_request: dict[str, Any] = {
+            "model": model_name,
+            "messages": assistant_provider_messages(messages, "ollama"),
+            "stream": False,
+            "options": {"temperature": 0.2},
+        }
+        if tools_enabled:
+            ollama_request["tools"] = assistant_tools_for_messages(messages)
+        result = await ollama_payload(
+            "/api/chat",
+            "POST",
+            ollama_request,
+            timeout=600,
+        )
+        response_message = result.get("message") or {}
+        return {
+            "role": "assistant",
+            "content": str(response_message.get("content") or ""),
+            "tool_calls": normalize_assistant_tool_calls(response_message.get("tool_calls")),
+        }, model_name
+    if str(model.get("api_protocol") or "openai") != "openai":
+        raise HTTPException(status_code=409, detail="El modelo no ofrece un protocolo compatible con herramientas")
+    request_payload = {
+        "model": model.get("model_alias") or model["model_ref"],
+        "messages": assistant_provider_messages(messages, "openai"),
+        "temperature": 0.2,
+        "stream": False,
+    }
+    if tools_enabled:
+        request_payload["tools"] = assistant_tools_for_messages(messages)
+        request_payload["tool_choice"] = "auto"
+    try:
+        async with httpx.AsyncClient(timeout=float(model.get("timeout_seconds") or 600)) as client:
+            response = await client.post(f"{model_endpoint(model)}/v1/chat/completions", json=request_payload)
+            response.raise_for_status()
+            result = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="El modelo de asistente no está disponible") from exc
+    response_message = (result.get("choices") or [{}])[0].get("message") or {}
+    return {
+        "role": "assistant",
+        "content": str(response_message.get("content") or ""),
+        "tool_calls": normalize_assistant_tool_calls(response_message.get("tool_calls")),
+    }, candidate
+
+
+def assistant_fallback_response(
+    tool_results: list[dict[str, Any]],
+    pending_actions: list[dict[str, Any]],
+) -> str:
+    if pending_actions:
+        labels = "\n".join(f"- {action['label']}" for action in pending_actions)
+        return f"He preparado estas acciones. Revísalas y confírmalas en la interfaz:\n{labels}"
+    successful = [
+        item for item in tool_results
+        if not isinstance(item.get("result"), dict) or "error" not in item["result"]
+    ]
+    recommendation = next(
+        (item["result"] for item in reversed(successful) if item["name"] == "recommend_models"),
+        None,
+    )
+    if isinstance(recommendation, dict):
+        models = recommendation.get("recommendations") or []
+        if not models:
+            return "No encontré modelos que cumplan esos filtros. Prueba una búsqueda más amplia."
+        fitting = sum(bool(model.get("fits")) for model in models)
+        capacity_gb = round(float(models[0].get("memory_budget_mb") or 0) / 1024, 1)
+        available_gb = round(
+            float(models[0].get("memory_available_budget_mb") or 0) / 1024,
+            1,
+        )
+        device_model = recommendation.get("device_model") or "equipo actual"
+        context = (
+            f"Evaluación para {device_model}: {capacity_gb:g} GB de presupuesto seguro "
+            f"por capacidad y {available_gb:g} GB disponibles ahora."
+        )
+        if fitting == len(models):
+            heading = "Estas son las mejores opciones que caben por capacidad:"
+        elif fitting:
+            noun = "opción" if fitting == 1 else "opciones"
+            verb = "cabe" if fitting == 1 else "caben"
+            heading = (
+                f"Encontré {fitting} {noun} que {verb} por capacidad; "
+                "completo la lista con las alternativas más cercanas:"
+            )
+        else:
+            heading = (
+                "No encontré opciones que quepan en el presupuesto seguro del equipo. "
+                "Estas son las alternativas más cercanas:"
+            )
+        lines = [context, heading]
+        for index, model in enumerate(models, 1):
+            memory_gb = round(float(model.get("estimated_memory_mb") or 0) / 1024, 1)
+            context_k = int(model.get("recommended_context") or 0) // 1024
+            slots = int(model.get("recommended_slots") or 1)
+            configuration = (
+                f"{memory_gb:g} GB estimados con {context_k}K de contexto y "
+                f"{slots} {'slot' if slots == 1 else 'slots'}"
+            )
+            performance = (
+                f"estimación teórica GB10 ≈{model['estimated_tokens_per_second']:g} tok/s"
+                if recommendation.get("is_dgx_spark")
+                and model.get("estimated_tokens_per_second")
+                else "rendimiento no estimado en este host"
+            )
+            quantization = model.get("recommended_quantization") or "formato del runtime"
+            fit = (
+                "cabe y puede cargarse ahora"
+                if model.get("fits_now")
+                else "cabe por capacidad, pero primero hay que liberar memoria"
+                if model.get("fits")
+                else "no cabe en el presupuesto seguro del equipo"
+            )
+            lines.append(
+                f"{index}. {model.get('id')} — MyDGX {model.get('recommended_score', 0)}/100, "
+                f"señales comunidad HF {model.get('community_score', 0)}/100, {quantization}, "
+                f"{configuration}, {performance}; {fit}."
+            )
+            warnings = [
+                warning for warning in (model.get("warnings") or [])
+                if "requiere liberar memoria" not in warning
+            ]
+            if warnings:
+                lines.append(f"   Aviso: {warnings[0]}")
+        return "\n".join(lines)
+    search = next(
+        (item["result"] for item in reversed(successful) if item["name"] == "search_huggingface_models"),
+        None,
+    )
+    if isinstance(search, list):
+        if not search:
+            return "No encontré modelos en Hugging Face con esos filtros."
+        return "\n".join([
+            "Resultados de Hugging Face:",
+            *[
+                f"{index}. {model.get('id')} — comunidad HF {model.get('community_score', 0)}/100, "
+                f"{int(model.get('downloads') or 0):,} descargas y {int(model.get('likes') or 0):,} likes."
+                for index, model in enumerate(search, 1)
+            ],
+        ])
+    documentation = next(
+        (item["result"] for item in reversed(successful) if item["name"] == "search_mydgx_docs"),
+        None,
+    )
+    if isinstance(documentation, dict) and documentation.get("results"):
+        result = documentation["results"][0]
+        return (
+            f"Según {result.get('source')} — {result.get('heading')}:\n"
+            f"{str(result.get('content') or '')[:1200]}"
+        )
+    if successful:
+        names = ", ".join(dict.fromkeys(item["name"] for item in successful))
+        return f"Consulté correctamente: {names}. El modelo no pudo sintetizar la respuesta; intenta concretar la pregunta."
+    return "No pude obtener datos válidos para responder. Revisa el estado del modelo y vuelve a intentarlo."
+
+
+def assistant_direct_recommendation_arguments(message: str) -> dict[str, Any] | None:
+    text = message.casefold()
+    if "modelo" not in text or not any(
+        marker in text
+        for marker in ("recomiend", "recomend", "modelos para", "modelos de")
+    ):
+        return None
+    task_keywords = (
+        ("video-gener", "video-generation"),
+        ("generar vídeo", "video-generation"),
+        ("generar video", "video-generation"),
+        ("imagen", "image-generation"),
+        ("transcri", "asr"),
+        ("speech to text", "asr"),
+        ("texto a voz", "tts"),
+        ("text to speech", "tts"),
+        ("embedding", "embedding"),
+        ("rerank", "reranking"),
+        ("visión", "vision"),
+        ("vision", "vision"),
+        ("razon", "reasoning"),
+        ("reason", "reasoning"),
+        ("código", "code"),
+        ("codigo", "code"),
+        ("code", "code"),
+        ("program", "code"),
+        ("chat", "chat"),
+    )
+    task = next((value for keyword, value in task_keywords if keyword in text), "chat")
+    query_by_task = {
+        "code": "coder",
+        "chat": "instruct",
+        "reasoning": "reasoning",
+        "embedding": "embedding",
+        "vision": "vision",
+        "image-generation": "image generation",
+        "asr": "speech recognition",
+        "tts": "text to speech",
+        "video-generation": "video generation",
+        "reranking": "reranker",
+    }
+    number_words = {
+        " uno ": 1, " un ": 1, " una ": 1,
+        " dos ": 2, " tres ": 3, " cuatro ": 4, " cinco ": 5,
+    }
+    padded = f" {text} "
+    limit = next(
+        (value for word, value in number_words.items() if word in padded),
+        3,
+    )
+    numeric_limit = re.search(r"(?<!\d)([1-5])(?!\d)", text)
+    if numeric_limit:
+        limit = int(numeric_limit.group(1))
+    return {
+        "query": query_by_task[task],
+        "task": task,
+        "size": (
+            "compact"
+            if any(word in text for word in ("ligero", "compact", "pequeñ"))
+            else "large"
+            if any(word in text for word in ("grande", "large"))
+            else "any"
+        ),
+        "alignment": "uncensored" if any(
+            word in text for word in ("uncensored", "sin censura", "abliter")
+        ) else "standard",
+        "runtime": "llama.cpp" if any(
+            word in text for word in ("llama.cpp", "gguf")
+        ) else "any",
+        "format": "gguf" if "gguf" in text else "any",
+        "modality": "any",
+        "limit": limit,
+    }
+
+
+@app.post("/api/assistant/chat", dependencies=secure)
+async def assistant_chat(payload: AssistantChatRequest) -> dict[str, Any]:
+    ensure_interactive_inference_available()
+    if not settings.assistant_enabled:
+        raise HTTPException(status_code=503, detail="El asistente está desactivado")
+    direct_recommendation = assistant_direct_recommendation_arguments(payload.message)
+    if direct_recommendation:
+        try:
+            result = await execute_assistant_read_tool(
+                "recommend_models",
+                direct_recommendation,
+            )
+            status = "ok"
+        except (HTTPException, ValueError, TypeError) as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            result = {"error": str(detail)[:500]}
+            status = "error"
+        tool_results = [{
+            "name": "recommend_models",
+            "arguments": direct_recommendation,
+            "result": result,
+        }]
+        content = (
+            assistant_fallback_response(tool_results, [])
+            if status == "ok"
+            else "No pude consultar el catálogo de modelos ahora mismo. Inténtalo de nuevo en unos minutos."
+        )
+        db.audit("assistant.chat", "mydgx-recommender", status == "ok", "recommend_models")
+        return {
+            "message": {"role": "assistant", "content": content},
+            "model": "mydgx-recommender",
+            "tools_used": [{"name": "recommend_models", "status": status}],
+            "pending_actions": [],
+        }
+    safe_history = [
+        {
+            "role": item.get("role"),
+            "content": str(item.get("content") or "")[:32_000],
+        }
+        for item in payload.history
+        if item.get("role") in {"user", "assistant"}
+    ]
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": assistant_system_prompt()},
+        *safe_history,
+        {"role": "user", "content": payload.message},
+    ]
+    candidates = await assistant_model_candidates(payload.model)
+    if not candidates:
+        raise HTTPException(
+            status_code=503,
+            detail="No hay un modelo de chat disponible para el asistente",
+        )
+    selected = ""
+    first_message: dict[str, Any] | None = None
+    failures: list[str] = []
+    for candidate in candidates:
+        try:
+            first_message, selected = await call_assistant_model(candidate, messages)
+            break
+        except HTTPException as exc:
+            failures.append(f"{candidate}: {exc.detail}")
+    if first_message is None:
+        db.audit("assistant.chat", "model", False, "; ".join(failures)[:1000])
+        attempted = ", ".join(candidates[:5])
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"No se pudo iniciar ningún modelo de asistente ({attempted}). "
+                "Comprueba /api/assistant/status, la instalación del modelo y la memoria disponible."
+            ),
+        )
+
+    tools_used: list[dict[str, Any]] = []
+    tool_results: list[dict[str, Any]] = []
+    seen_tool_calls: set[str] = set()
+    pending_actions: list[dict[str, Any]] = []
+    response_message = first_message
+    maximum_rounds = max(1, min(10, settings.assistant_max_tool_rounds))
+    for round_index in range(maximum_rounds):
+        tool_calls = response_message.get("tool_calls") or []
+        if not tool_calls:
+            break
+        messages.append(response_message)
+        repeated_call = False
+        for call in tool_calls:
+            name = call["function"]["name"]
+            arguments = call["function"]["arguments"]
+            signature = f"{name}:{json.dumps(arguments, sort_keys=True, ensure_ascii=False)}"
+            if signature in seen_tool_calls:
+                repeated_call = True
+                result = {
+                    "status": "already_provided",
+                    "instruction": "No vuelvas a llamar esta herramienta. Responde al usuario con los resultados anteriores.",
+                }
+            else:
+                seen_tool_calls.add(signature)
+                try:
+                    if name in ASSISTANT_ACTION_TOOLS:
+                        arguments = validate_assistant_action(name, arguments)
+                        action = create_assistant_pending_action(name, arguments)
+                        pending_actions.append(action)
+                        result = {
+                            "status": "confirmation_required",
+                            "action_id": action["id"],
+                            "label": action["label"],
+                            "expires_at": action["expires_at"],
+                        }
+                    else:
+                        result = await execute_assistant_read_tool(name, arguments)
+                    tools_used.append({"name": name, "status": "ok"})
+                except (HTTPException, ValueError, TypeError) as exc:
+                    detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+                    result = {"error": str(detail)[:500]}
+                    tools_used.append({"name": name, "status": "error"})
+                tool_results.append({"name": name, "arguments": arguments, "result": result})
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call["id"],
+                "tool_name": name,
+                "content": assistant_safe_json(result),
+            })
+        force_final = repeated_call or round_index == maximum_rounds - 1
+        try:
+            response_message, _ = await call_assistant_model(
+                selected,
+                messages,
+                tools_enabled=not force_final,
+            )
+        except HTTPException:
+            response_message = {"role": "assistant", "content": "", "tool_calls": []}
+            break
+        if force_final:
+            break
+    content = str(response_message.get("content") or "").strip()
+    has_recommendations = any(
+        item["name"] == "recommend_models"
+        and isinstance(item.get("result"), dict)
+        and "error" not in item["result"]
+        for item in tool_results
+    )
+    if has_recommendations or not content:
+        content = assistant_fallback_response(tool_results, pending_actions)
+    db.audit("assistant.chat", selected, True, ",".join(item["name"] for item in tools_used))
+    return {
+        "message": {"role": "assistant", "content": content},
+        "model": selected,
+        "tools_used": tools_used,
+        "pending_actions": pending_actions,
+    }
+
+
+@app.post("/api/assistant/actions/confirm", dependencies=secure)
+async def confirm_assistant_action(
+    payload: AssistantActionRequest,
+    background: BackgroundTasks,
+) -> dict[str, Any]:
+    action = _assistant_pending_actions.pop(payload.action_id, None)
+    if not action or action["expires_at_epoch"] <= time.time():
+        raise HTTPException(status_code=404, detail="La propuesta no existe o ha caducado")
+    name = action["name"]
+    arguments = action["arguments"]
+    try:
+        if name == "start_profile":
+            result = await start_profile(str(arguments.get("profile_id") or ""), background)
+        elif name == "stop_profile":
+            profile_id = str(arguments.get("profile_id") or "")
+            result = await stop_profile() if profile_id == "__all__" else await stop_one_profile(profile_id)
+        elif name == "activate_profile":
+            result = await activate_profile(str(arguments.get("profile_id") or ""))
+        elif name == "download_huggingface_model":
+            result = await start_hf_download(
+                HfDownloadRequest(
+                    repo_id=str(arguments.get("repo_id") or ""),
+                    revision=str(arguments.get("revision") or "main"),
+                ),
+                background,
+            )
+        elif name == "download_ollama_model":
+            result = await start_ollama_pull(
+                OllamaPullRequest(name=str(arguments.get("name") or "")),
+                background,
+            )
+        elif name == "favorite_huggingface_model":
+            result = await update_huggingface_favorite(HfFavoritePayload(
+                repo_id=str(arguments.get("repo_id") or ""),
+                enabled=bool(arguments.get("enabled")),
+            ))
+        elif name == "cancel_job":
+            result = await cancel_job(str(arguments.get("job_id") or ""))
+        elif name == "control_service":
+            service_name = str(arguments.get("name") or "")
+            service_operation = str(arguments.get("action") or "")
+            result = await service_action(ServiceActionRequest(
+                name=service_name,
+                action=service_operation,
+                confirm=f"{service_operation} {service_name}",
+            ))
+        elif name == "control_engine":
+            engine_id = str(arguments.get("engine_id") or "")
+            engine_operation = str(arguments.get("action") or "")
+            result = await engine_action(engine_id, EngineActionRequest(
+                action=engine_operation,
+                confirm=f"{engine_operation} {engine_id}",
+            ))
+        elif name == "profile_app_action":
+            result = await profile_app_action(str(arguments.get("name") or ""), str(arguments.get("action") or ""))
+        elif name == "release_memory":
+            result = await memory_mode_release(MemoryModeReleaseRequest(
+                services=list(arguments.get("services") or []),
+                release_ollama=bool(arguments.get("release_ollama", True)),
+                stop_profiles=bool(arguments.get("stop_profiles", False)),
+                confirm="liberar memoria",
+            ))
+        elif name == "restore_memory":
+            result = await memory_mode_restore(MemoryModeConfirmRequest(confirm="restaurar servicios"))
+        else:
+            raise HTTPException(status_code=400, detail="Acción no permitida")
+    except Exception:
+        db.audit("assistant.action.confirm", name, False)
+        raise
+    db.audit("assistant.action.confirm", name, True)
+    return {"executed": True, "action": name, "result": result}
+
+
+@app.post("/api/assistant/actions/reject", dependencies=secure)
+async def reject_assistant_action(payload: AssistantActionRequest) -> dict[str, bool]:
+    action = _assistant_pending_actions.pop(payload.action_id, None)
+    if action:
+        db.audit("assistant.action.reject", action["name"], True)
+    return {"rejected": bool(action)}
+
+
+@app.get("/api/jobs", dependencies=secure)
+async def jobs() -> list[dict[str, Any]]:
+    job_rows = db.rows("SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50")
+    if not job_rows:
+        return []
+    job_ids = [job["id"] for job in job_rows]
+    placeholders = ",".join("?" for _ in job_ids)
+    event_rows = db.rows(
+        f"""
+        SELECT id,job_id,status,progress,message,created_at
+        FROM job_events
+        WHERE job_id IN ({placeholders})
+        ORDER BY id DESC
+        LIMIT 300
+        """,
+        tuple(job_ids),
+    )
+    events: dict[str, list[dict[str, Any]]] = {}
+    for event in event_rows:
+        events.setdefault(event["job_id"], []).append(event)
+    for job in job_rows:
+        job["events"] = events.get(job["id"], [])
+    return job_rows
+
+
+@app.get("/api/jobs/{job_id}", dependencies=secure)
+async def job(job_id: str) -> dict[str, Any]:
+    rows = db.rows("SELECT * FROM jobs WHERE id=?", (job_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Trabajo no encontrado")
+    result = rows[0]
+    result["events"] = db.rows(
+        """
+        SELECT id,job_id,status,progress,message,created_at
+        FROM job_events
+        WHERE job_id=?
+        ORDER BY id DESC
+        LIMIT 100
+        """,
+        (job_id,),
+    )
+    return result
+
+
+CANCELLABLE_JOB_KINDS = frozenset({
+    "ollama.pull", "ollama.update", "huggingface.files.download",
+    "huggingface.integrity", "benchmark.run", "benchmark.suite", "profile.prepare-start",
+})
+
+
+@app.post("/api/jobs/{job_id}/cancel", dependencies=secure)
+async def cancel_job(job_id: str) -> dict[str, bool]:
+    job_rows = db.rows("SELECT kind,status FROM jobs WHERE id=?", (job_id,))
+    if not job_rows:
+        raise HTTPException(status_code=404, detail="Trabajo no encontrado")
+    if job_rows[0]["kind"] not in CANCELLABLE_JOB_KINDS:
+        raise HTTPException(status_code=400, detail="Este tipo de trabajo no admite cancelación segura")
+    if not db.request_job_cancel(job_id):
+        raise HTTPException(status_code=409, detail=f"El trabajo ya está {job_rows[0]['status']}")
+    event = _job_cancel_events.get(job_id)
+    if event:
+        event.set()
+    if job_rows[0]["kind"] == "benchmark.suite":
+        suite_rows = db.rows(
+            "SELECT current_child_job_id FROM benchmark_suites WHERE job_id=?",
+            (job_id,),
+        )
+        child_job_id = suite_rows[0].get("current_child_job_id") if suite_rows else None
+        if child_job_id:
+            db.request_job_cancel(child_job_id)
+            child_event = _job_cancel_events.get(child_job_id)
+            if child_event:
+                child_event.set()
+    db.audit("job.cancel", job_id, True)
+    return {"cancel_requested": True}
+
+
+@app.get("/api/jobs/{job_id}/result", dependencies=secure)
+async def job_result(job_id: str) -> dict[str, Any]:
+    rows = db.rows("SELECT result_json FROM job_results WHERE job_id=?", (job_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="El trabajo no tiene resultado")
+    try:
+        return json.loads(rows[0]["result_json"])
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="Resultado dañado") from exc
+
+
+@app.get("/api/logs", dependencies=secure)
+async def system_logs(
+    level: str = Query(default="", pattern=r"^(|debug|info|warning|error|critical)$"),
+    category: str = Query(default="", pattern=r"^[A-Za-z0-9._-]{0,80}$"),
+    q: str = Query(default="", max_length=120),
+    before_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=150, ge=1, le=500),
+) -> dict[str, Any]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if level:
+        clauses.append("level=?")
+        params.append(level)
+    if category:
+        clauses.append("category=?")
+        params.append(category)
+    if q.strip():
+        clauses.append(
+            "(message LIKE ? OR action LIKE ? OR entity_id LIKE ? OR detail_json LIKE ?)"
+        )
+        search = f"%{q.strip()}%"
+        params.extend([search, search, search, search])
+    if before_id is not None:
+        clauses.append("id<?")
+        params.append(before_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    entries = db.rows(
+        f"""
+        SELECT id,created_at,level,category,action,message,
+            entity_type,entity_id,job_id,detail_json
+        FROM system_logs
+        {where}
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        tuple([*params, limit]),
+    )
+    for entry in entries:
+        try:
+            entry["detail"] = json.loads(entry.pop("detail_json") or "{}")
+        except json.JSONDecodeError:
+            entry["detail"] = {"error": "Detalle no válido"}
+    summary_rows = db.rows(
+        """
+        SELECT level,COUNT(*) AS count
+        FROM system_logs
+        WHERE created_at >= ?
+        GROUP BY level
+        """,
+        (
+            datetime.fromtimestamp(
+                time.time() - 86400,
+                timezone.utc,
+            ).isoformat(),
+        ),
+    )
+    categories = [
+        row["category"]
+        for row in db.rows(
+            "SELECT category,MAX(id) AS latest FROM system_logs GROUP BY category ORDER BY latest DESC"
+        )
+    ]
+    return {
+        "entries": entries,
+        "summary": {row["level"]: row["count"] for row in summary_rows},
+        "categories": categories,
+        "retention_days": max(1, settings.log_retention_days),
+        "has_more": len(entries) == limit,
+    }
+
+
+@app.get("/api/audit", dependencies=secure)
+async def audit() -> list[dict[str, Any]]:
+    return db.rows("SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 100")
+
+
+def installed_distribution(*names: str) -> str | None:
+    for name in names:
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return None
+
+
+def payload_version(payload: Any, paths: list[str]) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for path in paths:
+        value: Any = payload
+        for key in path.split("."):
+            if not isinstance(value, dict) or key not in value:
+                value = None
+                break
+            value = value[key]
+        if isinstance(value, (str, int, float)) and str(value).strip():
+            return str(value).strip()[:160]
+    return None
+
+
+def command_version(engine_id: str, text: str) -> str | None:
+    patterns = {
+        "llama.cpp": [r"^version:\s*(.+)$"],
+        "ollama": [r"(?:client\s+)?version\s+is\s+([0-9][^\s]*)"],
+    }
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for pattern in patterns.get(engine_id, []):
+        for line in lines:
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()[:160]
+    for line in lines:
+        if re.fullmatch(r"v?\d+(?:\.\d+)+(?:[-+._a-zA-Z0-9]*)?", line):
+            return line.removeprefix("v")[:160]
+        match = re.search(
+            r"\bversion(?:\s+is)?\s*[:=]?\s*v?(\d+(?:\.\d+)+(?:[-+._a-zA-Z0-9]*))",
+            line,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1)[:160]
+    return None
+
+
+SEARXNG_URL = "http://127.0.0.1:8888"
+
+
+async def discover_serving_engines() -> list[dict[str, Any]]:
+    definitions = [
+        {
+            "id": "llama.cpp",
+            "name": "llama.cpp",
+            "binary": llama_binary(),
+            "package": None,
+            "endpoint": None,
+            "capabilities": ["chat", "vision", "completions", "embeddings", "metrics", "gguf"],
+            "managed": True,
+            "controllable": False,
+            "essential": True,
+        },
+        {
+            "id": "ollama",
+            "name": "Ollama",
+            "binary": shutil.which("ollama"),
+            "package": None,
+            "endpoint": settings.ollama_url,
+            "probe": "/api/tags",
+            "version_probe": "/api/version",
+            "version_paths": ["version"],
+            "capabilities": ["chat", "vision", "completions", "embeddings", "pull", "memory"],
+            "managed": True,
+            "controllable": False,
+            "essential": True,
+        },
+        {
+            "id": "vllm",
+            "name": "vLLM",
+            "binary": shutil.which("vllm"),
+            "package": installed_distribution("vllm"),
+            "endpoint": settings.vllm_url,
+            "probe": "/v1/models",
+            "version_probe": "/version",
+            "version_paths": ["version"],
+            "version_timeout": 20,
+            "capabilities": ["chat", "vision", "completions", "embeddings", "openai"],
+            "managed": False,
+        },
+        {
+            "id": "sglang",
+            "name": "SGLang",
+            "binary": shutil.which("sglang"),
+            "package": installed_distribution("sglang", "sglang-router"),
+            "endpoint": settings.sglang_url,
+            "probe": "/v1/models",
+            "version_probe": "/get_server_info",
+            "version_paths": ["version", "sglang_version", "server_version"],
+            "capabilities": ["chat", "vision", "completions", "openai", "tools"],
+            "managed": False,
+        },
+        {
+            "id": "tensorrt-llm",
+            "name": "TensorRT-LLM",
+            "binary": shutil.which("trtllm-serve"),
+            "package": installed_distribution("tensorrt_llm", "tensorrt-llm"),
+            "endpoint": settings.trtllm_url,
+            "probe": "/v1/models",
+            "capabilities": ["chat", "completions", "openai", "tensorrt"],
+            "managed": False,
+        },
+        {
+            "id": "lm-studio",
+            "name": "LM Studio",
+            "binary": shutil.which("lms"),
+            "package": None,
+            "endpoint": settings.lmstudio_url,
+            "probe": "/v1/models",
+            "capabilities": ["chat", "completions", "embeddings", "openai"],
+            "managed": False,
+        },
+        {
+            "id": "comfyui",
+            "name": "ComfyUI",
+            "binary": shutil.which("comfy"),
+            "package": None,
+            "endpoint": settings.comfyui_url,
+            "probe": "/system_stats",
+            "version_probe": "/system_stats",
+            "version_paths": ["system.comfyui_version", "system.version", "version"],
+            "capabilities": ["image-generation", "video-generation", "workflows"],
+            "managed": True,
+            "controllable": True,
+            "essential": False,
+            "unit": "mydgx-comfyui",
+        },
+        {
+            "id": "whisper",
+            "name": "Whisper compatible",
+            "binary": shutil.which("whisper"),
+            "package": installed_distribution("faster-whisper", "openai-whisper", "whisper"),
+            "endpoint": settings.whisper_url,
+            "probe": "/v1/models",
+            "version_probe": "/health",
+            "version_paths": ["version"],
+            "capabilities": ["asr", "audio", "openai"],
+            "managed": True,
+            "controllable": True,
+            "essential": False,
+            "unit": "mydgx-whisper",
+        },
+        {
+            "id": "searxng",
+            "name": "SearXNG",
+            "binary": None,
+            "package": None,
+            "endpoint": SEARXNG_URL,
+            "probe": "/healthz",
+            "capabilities": ["web-search", "chat", "open-webui"],
+            "managed": True,
+            "controllable": True,
+            "essential": False,
+            "unit": "mydgx-searxng",
+        },
+        {
+            "id": "riva",
+            "name": "NVIDIA Riva",
+            "binary": None,
+            "package": installed_distribution("nvidia-riva-client", "riva-client"),
+            "endpoint": settings.riva_url,
+            "probe": "/v1/models",
+            "capabilities": ["asr", "tts", "audio", "openai"],
+            "managed": False,
+        },
+    ]
+
+    async def inspect_engine(engine: dict[str, Any]) -> dict[str, Any]:
+        endpoint = engine.get("endpoint")
+        reachable = False
+        advertised_models: list[str] = []
+        endpoint_version = None
+        if endpoint:
+            try:
+                async with httpx.AsyncClient(timeout=2) as client:
+                    response = await client.get(f"{endpoint.rstrip('/')}{engine.get('probe', '/health')}")
+                    reachable = response.status_code < 500
+                    if reachable:
+                        payload = response.json()
+                        values = payload.get("models") or payload.get("data") or []
+                        advertised_models = [
+                            str(item.get("name") or item.get("id") or item.get("model"))
+                            for item in values if isinstance(item, dict)
+                        ][:100]
+                        endpoint_version = payload_version(
+                            payload,
+                            engine.get("version_paths")
+                            or ["version", "server_version", "engine_version"],
+                        )
+                        if not endpoint_version:
+                            endpoint_version = next((
+                                response.headers[header]
+                                for header in (
+                                    "x-vllm-version",
+                                    "x-sglang-version",
+                                    "x-server-version",
+                                )
+                                if response.headers.get(header)
+                            ), None)
+                    version_probe = engine.get("version_probe")
+                    if reachable and version_probe and not endpoint_version:
+                        version_response = await client.get(f"{endpoint.rstrip('/')}{version_probe}")
+                        if version_response.status_code < 400:
+                            endpoint_version = payload_version(
+                                version_response.json(),
+                                engine.get("version_paths") or ["version"],
+                            )
+            except (httpx.HTTPError, ValueError, json.JSONDecodeError):
+                pass
+        version = endpoint_version or engine.get("package")
+        if not version and engine.get("binary"):
+            commands = engine.get("version_commands") or [["--version"], ["version"]]
+            for arguments in commands:
+                try:
+                    result = await asyncio.to_thread(
+                        run_command,
+                        [engine["binary"], *arguments],
+                        int(engine.get("version_timeout", 5)),
+                    )
+                    text = "\n".join(
+                        part.strip()
+                        for part in (result.stdout, result.stderr)
+                        if part and part.strip()
+                    )
+                    if result.returncode == 0:
+                        version = command_version(str(engine["id"]), text)
+                    if version:
+                        break
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+        internal_keys = {
+            "probe", "version_probe", "version_paths", "version_commands", "version_timeout",
+        }
+        unit = engine.get("unit")
+        unit_installed = bool(unit) and Path(f"/etc/systemd/system/{unit}.service").is_file()
+        return {
+            **{key: value for key, value in engine.items() if key not in internal_keys},
+            "installed": bool(engine.get("binary") or engine.get("package") or reachable or unit_installed),
+            "reachable": reachable,
+            "running": reachable,
+            "controllable": bool(engine.get("controllable")),
+            "essential": bool(engine.get("essential")),
+            "version": version,
+            "models": advertised_models,
+        }
+
+    engines = list(await asyncio.gather(*(inspect_engine(item) for item in definitions)))
+    nim_containers = []
+    if shutil.which("docker"):
+        result = await asyncio.to_thread(
+            run_command,
+            ["docker", "ps", "--format", "{{json .}}"],
+            8,
+        )
+        for line in result.stdout.splitlines():
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            haystack = f"{item.get('Image', '')} {item.get('Names', '')}".lower()
+            if "nim" in haystack or "nvcr.io/nim" in haystack:
+                nim_containers.append({
+                    "name": item.get("Names"),
+                    "image": item.get("Image"),
+                    "ports": item.get("Ports"),
+                    "status": item.get("Status"),
+                })
+    engines.append({
+        "id": "nvidia-nim",
+        "name": "NVIDIA NIM",
+        "binary": shutil.which("docker"),
+        "package": None,
+        "endpoint": None,
+        "capabilities": ["openai", "container", "nvidia"],
+        "managed": False,
+        "controllable": False,
+        "essential": False,
+        "installed": bool(nim_containers),
+        "reachable": bool(nim_containers),
+        "running": bool(nim_containers),
+        "version": ", ".join(dict.fromkeys(
+            str(item["image"]).rsplit(":", 1)[-1]
+            for item in nim_containers
+            if item.get("image") and ":" in str(item["image"]).rsplit("/", 1)[-1]
+        )) or None,
+        "models": [],
+        "containers": nim_containers,
+    })
+    return engines
+
+
+@app.get("/api/engines", dependencies=secure)
+async def serving_engines() -> dict[str, Any]:
+    return {
+        "engines": await discover_serving_engines(),
+        "profile_runtime": profile_runtime_status(),
+    }
+
+
+class EngineActionRequest(BaseModel):
+    action: Literal["start", "stop"]
+    confirm: str
+
+
+def profiles_using_engine(engine_id: str) -> list[str]:
+    names: list[str] = []
+    for profile in running_profiles():
+        if any(
+            model.get("enabled", True) and model.get("engine") == engine_id
+            for model in profile_models(profile)
+        ):
+            names.append(str(profile["name"]))
+    return names
+
+
+@app.post("/api/engines/{engine_id}/action", dependencies=secure)
+async def engine_action(engine_id: str, payload: EngineActionRequest) -> dict[str, Any]:
+    controllable = {"comfyui", "whisper", "searxng"}
+    if engine_id not in controllable:
+        raise HTTPException(
+            status_code=400,
+            detail="Este motor es imprescindible, externo o se gestiona desde Perfiles",
+        )
+    if payload.confirm != f"{payload.action} {engine_id}":
+        raise HTTPException(status_code=400, detail="Confirmación de motor inválida")
+    users = profiles_using_engine(engine_id)
+    if payload.action == "stop" and users:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Detén primero los perfiles que usan este motor: {', '.join(users)}",
+        )
+    result = await asyncio.to_thread(
+        run_command,
+        [str(ROOT / "start.sh"), "engine", engine_id, payload.action],
+        240,
+    )
+    success = result.returncode == 0
+    detail = (result.stderr or result.stdout).strip()[:1000]
+    db.audit(f"engine.{payload.action}", engine_id, success, detail)
+    db.log(
+        "info" if success else "error",
+        "engine",
+        f"engine.{payload.action}",
+        f"{engine_id}: {'completado' if success else 'falló'}",
+        entity_type="engine",
+        entity_id=engine_id,
+        detail={"action": payload.action, "success": success},
+    )
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail=detail or f"No se pudo {payload.action} {engine_id}",
+        )
+    engines = await discover_serving_engines()
+    state = next(engine for engine in engines if engine["id"] == engine_id)
+    return {"success": True, "engine": state}
+
+
+class MemoryModeServiceRequest(BaseModel):
+    action: Literal["start", "stop"]
+    confirm: str
+
+
+class MemoryModeReleaseRequest(BaseModel):
+    services: list[str]
+    release_ollama: bool = True
+    stop_profiles: bool = False
+    confirm: str
+
+
+class MemoryModeConfirmRequest(BaseModel):
+    confirm: str
+
+
+@app.get("/api/memory-mode", dependencies=secure)
+async def memory_mode() -> dict[str, Any]:
+    return await memory_mode_status()
+
+
+@app.post("/api/memory-mode/services/{service_id}", dependencies=secure)
+async def memory_mode_service(service_id: str, payload: MemoryModeServiceRequest) -> dict[str, Any]:
+    if service_id not in OPTIONAL_SERVICES:
+        raise HTTPException(status_code=404, detail="Servicio opcional desconocido")
+    if payload.confirm != f"{payload.action} {service_id}":
+        raise HTTPException(status_code=400, detail="Confirmación de servicio inválida")
+    async with _memory_mode_lock:
+        await set_optional_service(service_id, payload.action)
+        stopped = memory_mode_state()["stopped"]
+        if payload.action == "stop":
+            stopped.append(service_id)
+        else:
+            stopped = [item for item in stopped if item != service_id]
+        await asyncio.to_thread(save_memory_mode_state, stopped)
+        if payload.action == "stop":
+            await drop_page_cache()
+        return await memory_mode_status()
+
+
+@app.post("/api/memory-mode/release", dependencies=secure)
+async def memory_mode_release(payload: MemoryModeReleaseRequest) -> dict[str, Any]:
+    if payload.confirm != "liberar memoria":
+        raise HTTPException(status_code=400, detail="Confirmación inválida")
+    unknown = [item for item in payload.services if item not in OPTIONAL_SERVICES]
+    if unknown:
+        raise HTTPException(status_code=404, detail=f"Servicios desconocidos: {', '.join(unknown)}")
+    if db.rows("SELECT id FROM benchmark_suites WHERE status IN ('queued','running','restoring') LIMIT 1"):
+        raise HTTPException(status_code=409, detail="Hay una suite de benchmarks en curso: espera a que termine o cancélala")
+    if _profile_start_lock.locked():
+        raise HTTPException(status_code=409, detail="Hay un perfil arrancando o restaurándose: espera a que termine")
+    async with _memory_mode_lock:
+        before = (await asyncio.to_thread(meminfo_bytes)).get("MemFree", 0)
+        state = memory_mode_state()
+        stopped, stopped_profiles, errors = state["stopped"], state["profiles"], []
+        if payload.stop_profiles:
+            async with _profile_start_lock:
+                for profile_id in list(_runtime_profile_ids):
+                    stopped_profiles.append(profile_id)
+                    await asyncio.to_thread(save_memory_mode_state, stopped, stopped_profiles)
+                    await stop_runtime_profile(profile_id)
+                    db.audit("memory_mode.profile.stop", profile_id, True)
+        for service_id in payload.services:
+            if not await asyncio.to_thread(optional_service_active, service_id):
+                continue
+            try:
+                await set_optional_service(service_id, "stop")
+                stopped.append(service_id)
+            except HTTPException as exc:
+                errors.append(f"{OPTIONAL_SERVICES[service_id]['name']}: {exc.detail}")
+        await asyncio.to_thread(save_memory_mode_state, stopped, stopped_profiles)
+        released = await release_all_ollama_models() if payload.release_ollama else []
+        await drop_page_cache()
+        await wait_for_memory_recovery()
+        after = (await asyncio.to_thread(meminfo_bytes)).get("MemFree", 0)
+        db.audit("memory_mode.release", ",".join(payload.services) or "-", not errors, "; ".join(errors))
+        db.log(
+            "warning" if errors else "info",
+            "runtime",
+            "memory_mode.release",
+            f"Memoria liberada: {before / 1024**3:.1f} → {after / 1024**3:.1f} GiB libres",
+            detail={
+                "services": payload.services, "profiles": stopped_profiles,
+                "ollama": released, "errors": errors,
+            },
+        )
+        return {**await memory_mode_status(), "freed_bytes": max(0, after - before), "errors": errors, "released_ollama": released}
+
+
+@app.post("/api/memory-mode/restore", dependencies=secure)
+async def memory_mode_restore(payload: MemoryModeConfirmRequest) -> dict[str, Any]:
+    if payload.confirm != "restaurar servicios":
+        raise HTTPException(status_code=400, detail="Confirmación inválida")
+    if db.rows("SELECT id FROM benchmark_suites WHERE status IN ('queued','running','restoring') LIMIT 1"):
+        raise HTTPException(status_code=409, detail="Hay una suite de benchmarks en curso: espera a que termine o cancélala")
+    if _profile_start_lock.locked():
+        raise HTTPException(status_code=409, detail="Hay un perfil arrancando o restaurándose: espera a que termine")
+    async with _memory_mode_lock:
+        state = memory_mode_state()
+        pending, errors = state["stopped"], []
+        remaining: list[str] = []
+        for service_id in pending:
+            try:
+                await set_optional_service(service_id, "start")
+            except HTTPException as exc:
+                remaining.append(service_id)
+                errors.append(f"{OPTIONAL_SERVICES[service_id]['name']}: {exc.detail}")
+        remaining_profiles: list[str] = []
+        occupying = [profile["name"] for profile in running_profiles() if profile["id"] not in state["profiles"]]
+        if state["profiles"] and occupying:
+            remaining_profiles = state["profiles"]
+            errors.append(
+                f"Perfiles no relanzados: detén antes {', '.join(occupying)} para no quedarte sin memoria"
+            )
+        else:
+            async with _profile_start_lock:
+                for profile_id in state["profiles"]:
+                    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+                    if not rows or profile_id in _runtime_profile_ids:
+                        continue
+                    try:
+                        await start_profile_process(rows[0])
+                        db.audit("memory_mode.profile.start", rows[0]["name"], True)
+                    except Exception as exc:
+                        remaining_profiles.append(profile_id)
+                        message = redact_log_text(str(getattr(exc, "detail", exc)), 300)
+                        errors.append(f"{rows[0]['name']}: {message}")
+                        db.audit("memory_mode.profile.start", rows[0]["name"], False, message)
+        await asyncio.to_thread(save_memory_mode_state, remaining, remaining_profiles)
+        db.audit(
+            "memory_mode.restore", ",".join([*pending, *state["profiles"]]) or "-", not errors, "; ".join(errors),
+        )
+        return {**await memory_mode_status(), "errors": errors}
+
+
+def software_versions() -> dict[str, Any]:
+    components: list[dict[str, Any]] = [{
+        "name": "Python",
+        "version": sys.version.split()[0],
+        "available": True,
+        "detail": sys.executable,
+        "category": "Sistema",
+    }]
+    probes = [
+        ("CUDA Toolkit", cuda_nvcc_binary(), ["--version"], "NVIDIA"),
+        ("llama.cpp", llama_binary(), ["--version"], "Inferencia"),
+        ("llama.cpp ARTIFEX b10679", configured_binary(settings.llama_cpp_b10679_path), ["--version"], "Inferencia"),
+        ("llama.cpp ARTIFEX b11429", configured_binary(settings.llama_cpp_b11429_path), ["--version"], "Inferencia"),
+        ("Ollama", shutil.which("ollama"), ["--version"], "Inferencia"),
+        ("Docker", shutil.which("docker"), ["--version"], "Contenedores"),
+        ("Docker Compose", shutil.which("docker"), ["compose", "version"], "Contenedores"),
+        ("CMake", shutil.which("cmake"), ["--version"], "Compilación"),
+        ("GCC", shutil.which("gcc"), ["--version"], "Compilación"),
+    ]
+    for name, binary, arguments, category in probes:
+        if not binary:
+            components.append({"name": name, "version": None, "available": False, "detail": "No detectado", "category": category})
+            continue
+        try:
+            result = run_command([binary, *arguments], 10)
+            text = (result.stdout or result.stderr).strip()
+            version = text.splitlines()[0][:180] if text else "instalado"
+            components.append({"name": name, "version": version, "available": result.returncode == 0, "detail": binary, "category": category})
+        except (OSError, subprocess.TimeoutExpired):
+            components.append({"name": name, "version": None, "available": False, "detail": "No se pudo consultar", "category": category})
+    if shutil.which("nvidia-smi"):
+        try:
+            result = run_command([
+                "nvidia-smi",
+                "--query-gpu=name,driver_version",
+                "--format=csv,noheader",
+            ])
+            driver = result.stdout.strip().splitlines()[0] if result.stdout.strip() else None
+            components.append({"name": "NVIDIA Driver / GPU", "version": driver, "available": bool(driver), "detail": "nvidia-smi", "category": "NVIDIA"})
+            banner = run_command(["nvidia-smi"], 10)
+            cuda_match = re.search(r"CUDA Version:\s*([0-9.]+)", banner.stdout)
+            components.append({
+                "name": "CUDA Runtime compatible",
+                "version": cuda_match.group(1) if cuda_match else None,
+                "available": bool(cuda_match),
+                "detail": "Versión máxima indicada por el driver",
+                "category": "NVIDIA",
+            })
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    dgx_release = Path("/etc/dgx-release")
+    if dgx_release.is_file():
+        try:
+            release = dgx_release.read_text(encoding="utf-8", errors="ignore").strip().replace("\n", " · ")
+            components.append({"name": "DGX OS", "version": release[:240], "available": True, "detail": str(dgx_release), "category": "Sistema"})
+        except OSError:
+            pass
+    python_packages = [
+        ("torch", "PyTorch"),
+        ("torchvision", "TorchVision"),
+        ("transformers", "Transformers"),
+        ("accelerate", "Accelerate"),
+        ("bitsandbytes", "bitsandbytes"),
+        ("vllm", "vLLM"),
+        ("sglang", "SGLang"),
+        ("llama_cpp_python", "llama-cpp-python"),
+        ("litellm", "LiteLLM"),
+        ("open-webui", "Open WebUI"),
+        ("xformers", "xFormers"),
+        ("triton", "Triton"),
+        ("numpy", "NumPy"),
+        ("huggingface-hub", "Hugging Face Hub"),
+    ]
+    for distribution, label in python_packages:
+        try:
+            package_version = importlib.metadata.version(distribution)
+            components.append({
+                "name": label,
+                "version": package_version,
+                "available": True,
+                "detail": "Entorno Python de MyDGX",
+                "category": "Python / IA",
+            })
+        except importlib.metadata.PackageNotFoundError:
+            components.append({
+                "name": label,
+                "version": None,
+                "available": False,
+                "detail": "No instalado en el entorno Python de MyDGX",
+                "category": "Python / IA",
+            })
+    packages: list[dict[str, str]] = []
+    if shutil.which("dpkg-query"):
+        result = run_command(
+            [
+                "dpkg-query", "-W", "-f=${Package}\t${Version}\n",
+                "cuda*", "cuda-cudart*", "libcublas*", "libcusparse*", "libcurand*",
+                "libcudnn*", "tensorrt*", "libnvinfer*", "libnccl*",
+                "nvidia-container-toolkit*", "nvidia-docker*", "dgx-*",
+            ],
+            20,
+        )
+        for line in result.stdout.splitlines():
+            if "\t" in line:
+                name, version = line.split("\t", 1)
+                packages.append({"name": name, "version": version})
+    return {"components": components, "packages": packages}
+
+
+async def system_readiness() -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+
+    def add(
+        check_id: str,
+        label: str,
+        category: str,
+        ok: bool,
+        detail: str,
+        remediation: str = "",
+        *,
+        required: bool = True,
+    ) -> None:
+        checks.append({
+            "id": check_id,
+            "label": label,
+            "category": category,
+            "status": "ok" if ok else ("warning" if required else "info"),
+            "required": required,
+            "detail": detail,
+            "remediation": "" if ok else remediation,
+        })
+
+    identity = device_identity()
+    os_info = os_information()
+    python_ok = sys.version_info >= (3, 10)
+    add(
+        "python", "Python 3.10+", "Base", python_ok,
+        f"Python {sys.version.split()[0]}",
+        "Instala Python 3.10 o posterior y recrea .venv.",
+    )
+    database_path = Path(settings.database_path).expanduser()
+    database_ok = database_path.parent.exists() and os.access(database_path.parent, os.W_OK)
+    add(
+        "sqlite", "Persistencia SQLite", "Base", database_ok,
+        str(database_path),
+        "Crea el directorio de datos y concede escritura al usuario de MyDGX.",
+    )
+    frontend_ok = (ROOT / "frontend" / "dist" / "index.html").is_file()
+    add(
+        "frontend", "Frontend compilado", "Base", frontend_ok,
+        "frontend/dist/index.html" if frontend_ok else "Build no encontrado",
+        "Ejecuta ./start.sh build.",
+    )
+    free_gb = psutil.disk_usage(ROOT).free / (1024 ** 3)
+    add(
+        "disk-space", "Espacio libre", "Base", free_gb >= 20,
+        f"{free_gb:.1f} GB disponibles",
+        "Libera al menos 20 GB antes de descargar modelos o imágenes de contenedor.",
+    )
+    env_ok = (ROOT / ".env").is_file()
+    add(
+        "env-file", "Configuración .env", "Base", env_ok,
+        ".env detectado" if env_ok else "No se encontró .env",
+        "Copia .env.example a .env y revisa la configuración local.",
+    )
+    core_packages = ("fastapi", "uvicorn", "psutil", "httpx", "huggingface-hub")
+    missing_packages = []
+    for package in core_packages:
+        try:
+            importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            missing_packages.append(package)
+    add(
+        "python-packages", "Librerías base de MyDGX", "Base", not missing_packages,
+        "Todas disponibles" if not missing_packages else f"Faltan: {', '.join(missing_packages)}",
+        "Ejecuta ./start.sh install para completar el entorno virtual.",
+    )
+
+    if identity["is_dgx_spark"]:
+        architecture_ok = os.uname().machine.lower() in {"aarch64", "arm64"}
+        add(
+            "architecture", "Arquitectura DGX Spark", "DGX OS", architecture_ok,
+            os.uname().machine,
+            "MyDGX detectó un Spark, pero la arquitectura no es ARM64.",
+        )
+        add(
+            "operating-system", "Sistema operativo Linux", "DGX OS",
+            bool(os_info.get("os_name")) and os.uname().sysname == "Linux",
+            f"{os_info.get('os_family', 'Linux')} · {os_info.get('os_name', 'Linux')}",
+            "Instala una versión compatible de DGX OS.",
+        )
+        add(
+            "dgx-os", "NVIDIA DGX OS", "DGX OS",
+            bool(os_info.get("is_dgx_os")),
+            str(os_info.get("dgx_release") or f"No detectado; base {os_info.get('os_family', 'Linux')}"),
+            "Comprueba /etc/dgx-release; algunos equipos OEM GB10 usan Ubuntu sin identificarse como DGX OS.",
+            required=False,
+        )
+        add(
+            "nvidia-smi", "Driver NVIDIA", "GPU",
+            bool(shutil.which("nvidia-smi")),
+            "nvidia-smi disponible" if shutil.which("nvidia-smi") else "No detectado",
+            "Repara el driver NVIDIA incluido con DGX OS.",
+        )
+        gpu_name = str(identity.get("gpu_name") or "")
+        add(
+            "gb10-gpu", "GPU NVIDIA GB10", "GPU",
+            "gb10" in gpu_name.casefold(),
+            gpu_name or "No identificada",
+            "Comprueba el driver, los permisos del dispositivo y la detección de nvidia-smi.",
+        )
+        nvcc_path = cuda_nvcc_binary()
+        cuda_ok, nvcc_detail = nvcc_cuda_status(
+            run_command([nvcc_path, "--version"], 5).stdout if nvcc_path else ""
+        )
+        add(
+            "cuda", "CUDA Toolkit 13+", "GPU",
+            cuda_ok,
+            nvcc_detail,
+            "Instala CUDA Toolkit 13 o posterior para compilar runtimes GB10.",
+            required=False,
+        )
+        add(
+            "container-toolkit", "NVIDIA Container Toolkit", "Contenedores",
+            bool(shutil.which("nvidia-ctk")),
+            "nvidia-ctk disponible" if shutil.which("nvidia-ctk") else "No detectado",
+            "Instala nvidia-container-toolkit si usarás motores en contenedores.",
+            required=False,
+        )
+        dgx_dashboard_ok = await service_probe(settings.dgx_dashboard_url)
+        add(
+            "dgx-dashboard", "DGX Dashboard", "DGX OS", dgx_dashboard_ok,
+            settings.dgx_dashboard_url,
+            "Inicia o repara el DGX Dashboard oficial.",
+            required=False,
+        )
+    else:
+        add(
+            "hardware", "Hardware DGX Spark", "Entorno", True,
+            f"Modo compatible: {identity['device_model']}",
+            required=False,
+        )
+
+    local_hosts = {"127.0.0.1", "localhost", "::1"}
+    add(
+        "api-auth", "Protección de MyDGX", "Seguridad",
+        settings.host in local_hosts or bool(settings.mydgx_api_key) or bool(dashboard_password()),
+        "Solo localhost" if settings.host in local_hosts else "Autenticación configurada" if settings.mydgx_api_key or dashboard_password() else "Escucha de red sin autenticación",
+        "Configura MYDGX_DASHBOARD_PASSWORD o MYDGX_API_KEY antes de escuchar fuera de localhost.",
+    )
+    gateway = gateway_runtime_config()
+    gateway_auth_ok = gateway["host"] in local_hosts or bool(settings.gateway_api_key)
+    add(
+        "gateway-auth", "Protección del gateway", "Seguridad",
+        not gateway["enabled"] or gateway_auth_ok,
+        "Gateway local" if gateway["host"] in local_hosts else "Clave configurada" if settings.gateway_api_key else "Escucha de red sin clave",
+        "Configura GATEWAY_API_KEY antes de exponer el gateway.",
+    )
+    gateway_ok = (
+        await service_probe(f"http://127.0.0.1:{gateway['port']}", "/health")
+        if gateway["enabled"]
+        else True
+    )
+    add(
+        "gateway", "Gateway OpenAI", "Servicios", gateway_ok,
+        "Desactivado" if not gateway["enabled"] else f"Puerto {gateway['port']}",
+        "Reinicia MyDGX para levantar el gateway configurado.",
+        required=bool(gateway["enabled"]),
+    )
+    litellm_version = installed_distribution("litellm")
+    add(
+        "gateway-adapter", "Adaptador LiteLLM", "Servicios",
+        not gateway["enabled"] or bool(litellm_version),
+        f"Versión {litellm_version}" if litellm_version else "No instalado",
+        "Ejecuta ./start.sh setup para instalar el adaptador de protocolos.",
+        required=bool(gateway["enabled"]),
+    )
+
+    profiles = db.rows("SELECT * FROM profiles ORDER BY name")
+    profile_models_flat = [
+        (profile, model)
+        for profile in profiles
+        for model in profile_models(profile)
+        if model.get("enabled", True)
+    ]
+    active_profiles = [profile for profile in profiles if profile.get("active")]
+    active_profile_rows = active_profiles[:1]
+    active_model_pairs = [
+        (profile, model)
+        for profile in active_profile_rows
+        for model in profile_models(profile)
+        if model.get("enabled", True)
+    ]
+    add(
+        "active-profile", "Perfil predeterminado", "Perfiles",
+        bool(active_profile_rows) or not settings.enable_profile_autostart,
+        "Autostart desactivado" if not settings.enable_profile_autostart else active_profile_rows[0]["name"] if active_profile_rows else "Ningún perfil activado todavía",
+        "Activa un perfil cuando quieras cargar modelos automáticamente al arrancar.",
+        required=False,
+    )
+    profile_issues: list[str] = []
+    gateway_port = int(gateway["port"])
+    for profile in active_profile_rows:
+        models = [model for model in profile_models(profile) if model.get("enabled", True)]
+        ports = [int(model["port"]) for model in models]
+        aliases = [str(model.get("model_alias") or model["model_ref"]).casefold() for model in models]
+        plan = profile_memory_plan(profile)
+        if not plan["fits"]:
+            if plan["duplicate_ports"]:
+                profile_issues.append(f"{profile['name']}: puertos duplicados")
+            else:
+                profile_issues.append(f"{profile['name']}: supera la memoria segura")
+        if len(aliases) != len(set(aliases)):
+            profile_issues.append(f"{profile['name']}: alias duplicados")
+        if gateway["enabled"] and gateway_port in ports:
+            profile_issues.append(f"{profile['name']}: usa el puerto del gateway")
+    if active_profile_rows:
+        add(
+            "profile-capacity", "Capacidad, puertos y alias", "Perfiles",
+            not profile_issues,
+            "El perfil activo es válido" if not profile_issues else " · ".join(profile_issues[:4]),
+            "Ajusta modelos, contexto, memoria reservada, puertos o alias en Perfiles.",
+        )
+    llama_models = [(profile, model) for profile, model in profile_models_flat if model["engine"] == "llama.cpp"]
+    if llama_models:
+        add(
+            "llama-runtime", "Runtime llama.cpp", "Perfiles",
+            bool(llama_binary()),
+            llama_binary() or "No detectado",
+            "Configura LLAMA_CPP_SERVER_PATH o instala llama-server compatible.",
+        )
+        active_llama_models = [
+            (profile, model)
+            for profile, model in active_model_pairs
+            if model["engine"] == "llama.cpp"
+        ]
+        missing = [
+            f"{profile['name']} / {model['name']}"
+            for profile, model in active_llama_models
+            if not profile_model_is_downloaded(model)
+        ]
+        if active_llama_models:
+            add(
+                "profile-files", "Archivos GGUF y mmproj del perfil activo", "Perfiles",
+                not missing,
+                "Todos disponibles" if not missing else f"Faltan {len(missing)}: {', '.join(missing[:3])}",
+                "Descarga los archivos indicados desde el menú Perfiles.",
+            )
+
+    ollama_models = [(profile, model) for profile, model in active_model_pairs if model["engine"] == "ollama"]
+    if ollama_models:
+        ollama_ok = await service_probe(settings.ollama_url, "/api/tags")
+        add(
+            "ollama", "Servicio Ollama", "Perfiles", ollama_ok,
+            settings.ollama_url,
+            "Instala o inicia Ollama y revisa OLLAMA_URL.",
+        )
+
+    external_endpoints: dict[str, list[str]] = {}
+    for profile, model in active_model_pairs:
+        if model["engine"] in {"llama.cpp", "ollama"}:
+            continue
+        endpoint = str(model.get("endpoint_url") or "").rstrip("/")
+        external_endpoints.setdefault(endpoint, []).append(f"{profile['name']} / {model['name']}")
+    if external_endpoints:
+        async def probe_endpoint(endpoint: str) -> bool:
+            if not endpoint:
+                return False
+            results = await asyncio.gather(
+                *(service_probe(endpoint, path) for path in ("/health", "/v1/models", "/system_stats"))
+            )
+            return any(results)
+
+        endpoint_states = await asyncio.gather(
+            *(probe_endpoint(endpoint) for endpoint in external_endpoints)
+        )
+        for (endpoint, names), endpoint_ok in zip(external_endpoints.items(), endpoint_states):
+            add(
+                f"endpoint-{hashlib.sha256(endpoint.encode()).hexdigest()[:12]}",
+                names[0], "Endpoints de perfiles", endpoint_ok,
+                endpoint or "Sin endpoint",
+                "Inicia el motor local o corrige su endpoint en Perfiles.",
+            )
+
+    add(
+        "hf-token", "Token de Hugging Face", "Integraciones",
+        bool(huggingface_token()),
+        "Configurado en .env" if huggingface_token() else "No configurado; solo modelos públicos",
+        "Configura HF_TOKEN en .env para modelos privados o gated.",
+        required=False,
+    )
+    openwebui_ok = await service_probe(settings.openwebui_url)
+    add(
+        "openwebui", "Open WebUI", "Integraciones", openwebui_ok,
+        settings.openwebui_url,
+        "Instala o inicia Open WebUI si quieres la interfaz de chat avanzada.",
+        required=False,
+    )
+    integrity = await asyncio.to_thread(system_integrity)
+    systemd_available = bool(shutil.which("systemctl") and Path("/run/systemd/system").is_dir())
+    service_ok = (
+        bool(integrity["service_installed"] and integrity["service_enabled"])
+        if systemd_available
+        else True
+    )
+    add(
+        "mydgx-systemd", "Servicio de arranque MyDGX", "Mantenimiento",
+        service_ok,
+        (
+            "Instalado, habilitado y gestionado por systemd"
+            if systemd_available and service_ok
+            else "Supervisor local activo; este entorno no ejecuta systemd"
+            if not systemd_available
+            else "Servicio systemd no instalado o deshabilitado"
+        ),
+        "Ejecuta ./start.sh deploy para instalar y habilitar el servicio.",
+        required=bool(identity["is_dgx_spark"] and systemd_available),
+    )
+    integrity_detail = (
+        f"Kernel {integrity['current_kernel']}"
+        + (" · reinicio requerido" if integrity["reboot_required"] else " · paquetes y runtimes coherentes")
+    )
+    add(
+        "system-integrity", "Integridad después de actualizaciones", "Mantenimiento",
+        bool(integrity["healthy"]),
+        integrity_detail,
+        "Ejecuta de nuevo la reparación o reinicia para activar el kernel actualizado.",
+        required=bool(identity["is_dgx_spark"]),
+    )
+    add(
+        "apt", "Gestor APT", "Mantenimiento", bool(shutil.which("apt-get")),
+        "Disponible" if shutil.which("apt-get") else "No detectado",
+        "Las actualizaciones del sistema requieren DGX OS/Ubuntu con APT.",
+        required=bool(identity["is_dgx_spark"]),
+    )
+
+    warning_count = sum(1 for check in checks if check["status"] == "warning")
+    info_count = sum(1 for check in checks if check["status"] == "info")
+    return {
+        "ready": warning_count == 0,
+        "summary": {
+            "ok": sum(1 for check in checks if check["status"] == "ok"),
+            "warnings": warning_count,
+            "optional": info_count,
+            "total": len(checks),
+        },
+        "checks": checks,
+        "checked_at": utc_now(),
+    }
+
+
+@app.get("/api/system/readiness", dependencies=secure)
+async def system_readiness_endpoint() -> dict[str, Any]:
+    return await system_readiness()
+
+
+@app.get("/api/system/versions", dependencies=secure)
+async def system_versions() -> dict[str, Any]:
+    return await asyncio.to_thread(software_versions)
+
+
+@app.get("/api/services", dependencies=secure)
+async def services() -> list[dict[str, Any]]:
+    output = []
+    if shutil.which("systemctl"):
+        for name in settings.service_names:
+            result = await asyncio.to_thread(run_command, ["systemctl", "is-active", name], 5)
+            output.append({"name": name, "type": "systemd", "status": result.stdout.strip() or "unknown"})
+    if shutil.which("docker"):
+        result = await asyncio.to_thread(
+            run_command,
+            ["docker", "ps", "-a", "--format", "{{json .}}"],
+            10,
+        )
+        for line in result.stdout.splitlines():
+            try:
+                item = json.loads(line)
+                output.append({
+                    "name": item.get("Names"),
+                    "type": "docker",
+                    "status": item.get("State", "unknown"),
+                    "image": item.get("Image"),
+                })
+            except json.JSONDecodeError:
+                continue
+    return output
+
+
+class ServiceActionRequest(BaseModel):
+    name: str
+    action: Literal["start", "stop", "restart"]
+    confirm: str
+
+
+@app.post("/api/services/action", dependencies=secure)
+async def service_action(payload: ServiceActionRequest) -> dict[str, Any]:
+    if not settings.enable_service_control:
+        raise HTTPException(status_code=403, detail="Control de servicios desactivado en .env")
+    if payload.name not in settings.service_names or payload.confirm != f"{payload.action} {payload.name}":
+        raise HTTPException(status_code=400, detail="Servicio o confirmación inválidos")
+    result = await asyncio.to_thread(
+        run_command,
+        ["sudo", "-n", "systemctl", payload.action, payload.name],
+        60,
+    )
+    success = result.returncode == 0
+    db.audit(f"service.{payload.action}", payload.name, success, result.stderr)
+    if not success:
+        raise HTTPException(status_code=500, detail=result.stderr.strip() or "Falló systemctl")
+    return {"success": True}
+
+
+def system_integrity() -> dict[str, Any]:
+    identity = device_identity()
+    linux = os.uname().sysname == "Linux"
+    report_path = Path("/var/lib/mydgx/integrity.env")
+    saved: dict[str, str] = {}
+    try:
+        if report_path.is_file():
+            for line in report_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                key, separator, value = line.partition("=")
+                if separator and re.fullmatch(r"[a-z_]+", key):
+                    saved[key] = value[:300]
+    except OSError:
+        pass
+
+    current_kernel = os.uname().release
+    latest_kernel = current_kernel
+    try:
+        versions = [
+            item.name
+            for item in Path("/lib/modules").iterdir()
+            if item.is_dir() and re.match(r"^\d+\.\d+", item.name)
+        ]
+        versions.sort(key=lambda value: [
+            (0, int(part)) if part.isdigit() else (1, part)
+            for part in re.split(r"([0-9]+)", value)
+        ])
+        if versions:
+            latest_kernel = versions[-1]
+    except OSError:
+        pass
+    reboot_required = (
+        Path("/var/run/reboot-required").is_file()
+        or latest_kernel != current_kernel
+    )
+
+    apt_ok: bool | None = None
+    dpkg_ok: bool | None = None
+    if shutil.which("apt-get"):
+        # The dashboard normally runs unprivileged. NoLocking keeps this
+        # read-only consistency check valid without requiring root.
+        apt_ok = run_command(["apt-get", "-o", "Debug::NoLocking=1", "check"], 60).returncode == 0
+    if shutil.which("dpkg"):
+        audit = run_command(["dpkg", "--audit"], 60)
+        dpkg_ok = audit.returncode == 0 and not audit.stdout.strip()
+
+    nvidia_ok: bool | None = None
+    if identity["is_dgx_spark"]:
+        nvidia_ok = bool(
+            shutil.which("nvidia-smi")
+            and run_command(["nvidia-smi", "-L"], 30).returncode == 0
+        )
+    llama_path = llama_binary()
+    llama_ok = bool(llama_path and run_command([llama_path, "--version"], 30).returncode == 0)
+    dkms_ok = saved.get("dkms_ok") == "1" if saved.get("dkms_ok") in {"0", "1"} else None
+    container_runtime_ok = (
+        saved.get("container_runtime_ok") == "1"
+        if saved.get("container_runtime_ok") in {"0", "1"}
+        else None
+    )
+    service_installed = Path("/etc/systemd/system/mydgx.service").is_file()
+    service_enabled: bool | None = None
+    service_active: bool | None = None
+    if service_installed and shutil.which("systemctl"):
+        service_enabled = run_command(["systemctl", "is-enabled", "mydgx.service"], 15).returncode == 0
+        service_active = run_command(["systemctl", "is-active", "mydgx.service"], 15).returncode == 0
+
+    checks = [
+        value
+        for value in (apt_ok, dpkg_ok, nvidia_ok, llama_ok, dkms_ok, container_runtime_ok, service_enabled)
+        if value is not None
+    ]
+    healthy = all(checks) and not reboot_required
+    return {
+        "supported": linux,
+        "healthy": healthy,
+        "status": "ok" if healthy else "warning",
+        "current_kernel": current_kernel,
+        "latest_kernel": latest_kernel,
+        "reboot_required": reboot_required,
+        "apt_ok": apt_ok,
+        "dpkg_ok": dpkg_ok,
+        "dkms_ok": dkms_ok,
+        "container_runtime_ok": container_runtime_ok,
+        "nvidia_ok": nvidia_ok,
+        "llama_ok": llama_ok,
+        "service_installed": service_installed,
+        "service_enabled": service_enabled,
+        "service_active": service_active,
+        "repair_available": SYSTEM_REPAIR_SCRIPT.is_file(),
+        "last_repair": saved.get("checked_at"),
+        "llama_rebuilt": saved.get("llama_rebuilt") == "1",
+        "driver_version": saved.get("driver_version"),
+        "cuda_version": saved.get("cuda_version"),
+    }
+
+
+@app.get("/api/system/integrity", dependencies=secure)
+async def system_integrity_endpoint() -> dict[str, Any]:
+    return await asyncio.to_thread(system_integrity)
+
+
+def parse_apt_upgradable(output: str) -> list[dict[str, Any]]:
+    packages: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        if "/" not in line or line.startswith("Listing"):
+            continue
+        name, rest = line.split("/", 1)
+        fields = rest.split()
+        if len(fields) < 3:
+            continue
+        repository, candidate_version, architecture = fields[:3]
+        current_match = re.search(r"\[upgradable from: ([^\]]+)\]", rest)
+        current_version = current_match.group(1) if current_match else ""
+        lowered = f"{name} {repository}".lower()
+        security = "security" in repository.lower()
+        if name.startswith(("linux-", "kernel-")):
+            category = "kernel"
+        elif any(token in lowered for token in ("nvidia", "cuda", "libcud")):
+            category = "nvidia"
+        elif name.startswith(("docker", "containerd")) or "container-toolkit" in lowered:
+            category = "containers"
+        elif name.startswith(("python", "nodejs", "npm")):
+            category = "runtime"
+        else:
+            category = "system"
+        packages.append({
+            "name": name,
+            "current_version": current_version,
+            "candidate_version": candidate_version,
+            "architecture": architecture,
+            "repository": repository.rstrip(","),
+            "security": security,
+            "category": category,
+            "detail": rest,
+        })
+    return packages
+
+
+@app.get("/api/updates", dependencies=secure)
+async def updates() -> dict[str, Any]:
+    if not shutil.which("apt"):
+        return {
+            "supported": False,
+            "packages": [],
+            "summary": {},
+            "reboot_required": False,
+            "checked_at": utc_now(),
+            "message": "APT no está disponible en este sistema",
+        }
+    result = await asyncio.to_thread(run_command, ["apt", "list", "--upgradable"], 30)
+    packages = parse_apt_upgradable(result.stdout)
+    categories = {
+        category: sum(package["category"] == category for package in packages)
+        for category in ("kernel", "nvidia", "containers", "runtime", "system")
+    }
+    return {
+        "supported": result.returncode == 0,
+        "packages": packages,
+        "summary": {
+            "total": len(packages),
+            "security": sum(package["security"] for package in packages),
+            **categories,
+        },
+        "reboot_required": Path("/var/run/reboot-required").exists(),
+        "checked_at": utc_now(),
+        "message": "" if result.returncode == 0 else result.stderr.strip(),
+    }
+
+
+class UpdateRequest(BaseModel):
+    confirm: Literal["ACTUALIZAR MYDGX"]
+
+
+class RepairRequest(BaseModel):
+    confirm: Literal["REPARAR MYDGX"]
+
+
+async def run_system_repair(job_id: str) -> None:
+    repair_script = SYSTEM_REPAIR_SCRIPT
+    try:
+        db.update_job(job_id, "running", 10, "Comprobando paquetes, kernel y runtimes")
+        if not repair_script.is_file():
+            raise RuntimeError("No está disponible el verificador del sistema")
+        result = await asyncio.to_thread(
+            run_command,
+            ["sudo", "-n", str(repair_script), "--repair"],
+            7200,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "La reparación no terminó correctamente")
+        integrity = await asyncio.to_thread(system_integrity)
+        db.execute(
+            "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
+            (job_id, json.dumps(integrity), utc_now()),
+        )
+        message = "Reparación completada"
+        if integrity["reboot_required"]:
+            message += "; reinicio requerido para activar el nuevo kernel"
+        db.update_job(job_id, "completed", 100, message)
+        db.audit("system.repair", "runtime", True)
+    except Exception as exc:
+        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: reparación no completada")
+        db.audit("system.repair", "runtime", False, type(exc).__name__)
+
+
+async def run_system_update(job_id: str) -> None:
+    repair_script = SYSTEM_REPAIR_SCRIPT
+    commands = [
+        (5, "Comprobando integridad de APT", ["sudo", "-n", "apt-get", "check"], 300),
+        (15, "Actualizando índices de paquetes", ["sudo", "-n", "apt-get", "update"], 1800),
+        (
+            45,
+            "Instalando actualizaciones y nuevos paquetes necesarios",
+            ["sudo", "-n", "/usr/bin/env", "DEBIAN_FRONTEND=noninteractive", "/usr/bin/apt-get", "upgrade", "--with-new-pkgs", "-y"],
+            7200,
+        ),
+        (80, "Reparando runtimes tras la actualización", ["sudo", "-n", str(repair_script), "--repair"], 7200),
+    ]
+    try:
+        if not repair_script.is_file():
+            raise RuntimeError("No está disponible el verificador post-actualización")
+        for progress, message, command, timeout in commands:
+            db.update_job(job_id, "running", progress, message)
+            result = await asyncio.to_thread(run_command, command, timeout)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or message)
+        integrity = await asyncio.to_thread(system_integrity)
+        db.execute(
+            "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
+            (job_id, json.dumps(integrity), utc_now()),
+        )
+        message = (
+            "Actualización reparada y verificada; reinicio requerido para activar el nuevo kernel"
+            if integrity["reboot_required"]
+            else "Actualización reparada y verificada correctamente"
+        )
+        db.update_job(job_id, "completed", 100, message)
+        db.audit("system.update", "apt", True)
+    except Exception as exc:
+        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: operación no completada")
+        db.audit("system.update", "apt", False, type(exc).__name__)
+
+
+@app.post("/api/updates/apply", dependencies=secure)
+async def apply_updates(payload: UpdateRequest, background: BackgroundTasks) -> dict[str, str]:
+    if not settings.enable_system_updates:
+        raise HTTPException(status_code=403, detail="Actualizaciones desactivadas en .env")
+    if not shutil.which("apt-get"):
+        raise HTTPException(status_code=409, detail="APT no está disponible")
+    active_updates = db.rows(
+        "SELECT id FROM jobs WHERE kind='system.update' AND status IN ('queued','running') LIMIT 1"
+    )
+    if active_updates:
+        raise HTTPException(status_code=409, detail="Ya hay una actualización del sistema en curso")
+    if psutil.disk_usage("/").free < 5 * 1024 ** 3:
+        raise HTTPException(status_code=409, detail="Se necesitan al menos 5 GB libres para actualizar")
+    job_id = db.create_job("system.update", "apt")
+    background.add_task(run_system_update, job_id)
+    return {"job_id": job_id}
+
+
+@app.post("/api/system/repair", dependencies=secure)
+async def repair_system(payload: RepairRequest, background: BackgroundTasks) -> dict[str, str]:
+    if not settings.enable_system_updates:
+        raise HTTPException(status_code=403, detail="Reparaciones privilegiadas desactivadas en .env")
+    active = db.rows(
+        """
+        SELECT id FROM jobs
+        WHERE kind IN ('system.update','system.repair') AND status IN ('queued','running')
+        LIMIT 1
+        """
+    )
+    if active:
+        raise HTTPException(status_code=409, detail="Ya hay una operación de mantenimiento en curso")
+    job_id = db.create_job("system.repair", "runtime")
+    background.add_task(run_system_repair, job_id)
+    return {"job_id": job_id}
+
+
+dist = ROOT / "frontend" / "dist"
+if dist.exists():
+    assets = dist / "assets"
+    if assets.exists():
+        app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def spa(path: str) -> FileResponse:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Ruta API no encontrada")
+        target = (dist / path).resolve()
+        if path and dist.resolve() in target.parents and target.is_file():
+            return FileResponse(target)
+        return FileResponse(
+            dist / "index.html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )

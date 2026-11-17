@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="900" viewBox="0 0 760 900">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-opacity=".22"/>
+    </filter>
+  </defs>
+  <rect width="760" height="900" fill="#eef1f5"/>
+  <rect x="70" y="34" width="620" height="54" rx="14" fill="#202124"/>
+  <circle cx="102" cy="61" r="15" fill="#76b900"/>
+  <text x="102" y="67" fill="white" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="16" font-weight="700" text-anchor="middle">N</text>
+  <text x="128" y="68" fill="white" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="19">GPU 22% - RAM 41%</text>
+  <rect x="135" y="108" width="490" height="716" rx="18" fill="#fbfbfc" stroke="#d1d4d9" filter="url(#shadow)"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,sans-serif" fill="#202124">
+    <text x="168" y="154" font-size="18" font-weight="600">DGX Spark - Conectado</text>
+    <line x1="155" y1="177" x2="605" y2="177" stroke="#dedfe2"/>
+    <text x="168" y="216" font-size="17">[ ]  Detener conexion y tunel</text>
+    <text x="168" y="260" font-size="17">[ ]  Apagar equipo...</text>
+    <line x1="155" y1="286" x2="605" y2="286" stroke="#dedfe2"/>
+    <text x="168" y="326" font-size="17" font-weight="600">Perfil: ARTIFEX - en ejecucion</text>
+    <text x="168" y="370" font-size="17">[ ]  Detener perfil</text>
+    <text x="168" y="414" font-size="17">[ ]  Seleccionar y arrancar perfil</text>
+    <text x="580" y="414" font-size="17">&gt;</text>
+    <line x1="155" y1="440" x2="605" y2="440" stroke="#dedfe2"/>
+    <text x="168" y="480" font-size="17">[ ]  Abrir Dashboard</text>
+    <text x="168" y="524" font-size="17">[ ]  Abrir Open WebUI</text>
+    <text x="168" y="568" font-size="17">[ ]  Abrir Terminal SSH</text>
+    <line x1="155" y1="594" x2="605" y2="594" stroke="#dedfe2"/>
+    <text x="168" y="634" font-size="17">[ ]  Preferencias...</text>
+    <text x="168" y="678" font-size="17">[ ]  Salir de MyDGX</text>
+  </g>
+  <rect x="155" y="718" width="450" height="74" rx="12" fill="#eef7e3"/>
+  <circle cx="181" cy="755" r="8" fill="#76b900"/>
+  <text x="200" y="751" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="14" font-weight="600" fill="#315800">Estado contextual</text>
+  <text x="200" y="773" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="13" fill="#46623a">Las acciones incompatibles quedan deshabilitadas.</text>
+</svg>

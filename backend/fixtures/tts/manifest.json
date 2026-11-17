@@ -1,0 +1,18 @@
+{
+  "schema": "mydgx-tts-reference-v1",
+  "voices": [
+    {
+      "id": "librispeech-1272-en",
+      "filename": "librispeech-1272-128104-0007.wav",
+      "sha256": "66ea55755fe31a7af9bb121ad33fd2037dbc8e2fc66d4cfb3f50cb8fa1e63561",
+      "bytes": 295724,
+      "duration_seconds": 9.24,
+      "format": "wav-pcm-s16le-16000-mono",
+      "language": "en",
+      "reference_text": "Painting, he tells us, is of a different quality to mathematics, and finish in art is adding more fact.",
+      "source": "LibriSpeech dev-clean 1272-128104-0007 (speaker 1272), via hf-internal-testing/librispeech_asr_dummy",
+      "source_url": "https://www.openslr.org/12",
+      "license": "CC BY 4.0 (LibriSpeech, Panayotov et al. 2015); original LibriVox recording in the public domain"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">
+  <rect width="1200" height="900" fill="#e9edf2"/>
+  <rect x="80" y="30" width="1040" height="835" rx="18" fill="#fbfbfc" stroke="#c9cdd3"/>
+  <rect x="80" y="30" width="1040" height="44" rx="18" fill="#ececef"/>
+  <circle cx="108" cy="52" r="7" fill="#ff5f57"/><circle cx="132" cy="52" r="7" fill="#febc2e"/><circle cx="156" cy="52" r="7" fill="#28c840"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,sans-serif" fill="#242528">
+    <text x="120" y="112" font-size="25" font-weight="700">Configurar un DGX Spark nuevo</text>
+    <rect x="120" y="136" width="960" height="116" rx="12" fill="#f5f6f8" stroke="#d3d6db"/>
+    <text x="142" y="164" font-size="16" font-weight="700">0. Preparar USB OEMDATA (opcional)</text>
+    <text x="142" y="192" font-size="14" fill="#595b60">Conserva el OOBE oficial y no escribe credenciales ni claves privadas.</text>
+    <rect x="142" y="207" width="235" height="32" rx="7" fill="#76b900"/><text x="260" y="229" text-anchor="middle" font-size="14" font-weight="600" fill="white">Crear archivos en OEMDATA...</text>
+    <rect x="389" y="207" width="214" height="32" rx="7" fill="white" stroke="#bdc1c7"/><text x="496" y="229" text-anchor="middle" font-size="14">Documentacion oficial</text>
+    <rect x="120" y="270" width="960" height="102" rx="12" fill="#f5f6f8" stroke="#d3d6db"/>
+    <text x="142" y="299" font-size="16" font-weight="700">1. Completa el primer arranque oficial</text>
+    <text x="142" y="326" font-size="14" fill="#595b60">Crea el usuario, conecta el Spark a la red y deja terminar las actualizaciones.</text>
+    <rect x="819" y="337" width="18" height="18" rx="4" fill="#76b900"/><text x="823" y="352" fill="white" font-size="14">X</text><text x="847" y="352" font-size="14">Primer arranque completado</text>
+    <rect x="120" y="390" width="960" height="185" rx="12" fill="#f5f6f8" stroke="#d3d6db"/>
+    <text x="142" y="419" font-size="16" font-weight="700">2. Localiza el equipo</text>
+    <rect x="142" y="438" width="210" height="34" rx="7" fill="white" stroke="#bdc1c7"/><text x="247" y="461" text-anchor="middle" font-size="14">Buscar en la red local</text>
+    <rect x="368" y="438" width="190" height="34" rx="7" fill="white" stroke="#bdc1c7"/><text x="463" y="461" text-anchor="middle" font-size="14">Equipos encontrados</text>
+    <text x="142" y="507" font-size="14">Host o IP</text><rect x="270" y="485" width="405" height="32" rx="6" fill="white" stroke="#cdd0d5"/><text x="285" y="507" font-size="14">dgx-spark.local</text>
+    <text x="702" y="507" font-size="14">Usuario</text><rect x="775" y="485" width="250" height="32" rx="6" fill="white" stroke="#cdd0d5"/><text x="790" y="507" font-size="14">usuario</text>
+    <text x="142" y="550" font-size="14">Alias</text><rect x="270" y="528" width="405" height="32" rx="6" fill="white" stroke="#cdd0d5"/><text x="285" y="550" font-size="14">DGX Spark local</text>
+    <rect x="120" y="593" width="960" height="145" rx="12" fill="#f5f6f8" stroke="#d3d6db"/>
+    <text x="142" y="622" font-size="16" font-weight="700">3. Configura el acceso mediante clave publica</text>
+    <rect x="142" y="645" width="180" height="34" rx="7" fill="#76b900"/><text x="232" y="668" text-anchor="middle" font-size="14" font-weight="600" fill="white">Generar par Ed25519</text>
+    <rect x="336" y="645" width="190" height="34" rx="7" fill="white" stroke="#bdc1c7"/><text x="431" y="668" text-anchor="middle" font-size="14">Instalar clave publica...</text>
+    <rect x="540" y="645" width="150" height="34" rx="7" fill="white" stroke="#bdc1c7"/><text x="615" y="668" text-anchor="middle" font-size="14">Verificar acceso</text>
+    <text x="142" y="711" font-size="13" fill="#595b60">La clave inicial se introduce solo en Terminal y nunca se guarda.</text>
+    <text x="120" y="783" font-size="14" fill="#397000">OK - Acceso SSH mediante clave publica verificado.</text>
+    <rect x="870" y="798" width="92" height="36" rx="8" fill="white" stroke="#bdc1c7"/><text x="916" y="822" text-anchor="middle" font-size="14">Cancelar</text>
+    <rect x="974" y="798" width="106" height="36" rx="8" fill="#087ff5"/><text x="1027" y="822" text-anchor="middle" font-size="14" font-weight="600" fill="white">Crear perfil</text>
+  </g>
+</svg>

@@ -1,0 +1,42 @@
+# Secrets and local overrides
+.env
+.env.*
+!.env.example
+config/dgx-health-check/dgx-spark.env
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.pycache/
+.pycache-check/
+.tmp-pycache/
+
+# Node
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Swift / MyDGXTray build products
+macos/MyDGXTray/.build/
+macos/MyDGXTray/.swiftpm/
+macos/MyDGXTray/dist/
+
+# Runtime data and logs
+data/
+logs/
+*.db
+*.db-shm
+*.db-wal
+*.pid
+
+# Workspaces de prueba de los clientes CLI (los reales viven en ~/opencode y ~/claude-code)
+.opencode-test/
+
+# IDE and OS
+.DS_Store
+.idea/
+.vscode/
+.cursor/

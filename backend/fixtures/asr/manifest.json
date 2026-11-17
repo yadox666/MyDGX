@@ -1,0 +1,19 @@
+{
+  "schema": "mydgx-asr-fixtures-v1",
+  "fixtures": [
+    {
+      "id": "armstrong-en",
+      "filename": "armstrong-en.wav",
+      "url": "https://raw.githubusercontent.com/Vortiago/TapScribe/main/tests/fixtures/audio/armstrong-en.wav",
+      "sha256": "1a699afe8894c8c9fc7f74fba693c61989e6583ecff042993a11deae4db493d0",
+      "bytes": 384044,
+      "duration_seconds": 12.0,
+      "format": "wav-pcm-s16le-16000-mono",
+      "language": "en",
+      "reference": "I'm going to step off the LM now.",
+      "source": "NASA Armstrong Small Step recording, redistributed by TapScribe",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/d/dd/Armstrong_Small_Step.ogg",
+      "license": "Public domain in the United States (NASA work)"
+    }
+  ]
+}

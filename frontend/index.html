@@ -8,6 +8,17 @@
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>MyDGX</title>
+    <script>
+      (function () {
+        var preference = localStorage.getItem("mydgx-theme-preference");
+        if (preference !== "system" && preference !== "light" && preference !== "dark") {
+          var legacy = localStorage.getItem("mydgx-theme");
+          preference = legacy === "light" || legacy === "dark" ? legacy : "system";
+        }
+        var dark = preference === "dark" || (preference === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

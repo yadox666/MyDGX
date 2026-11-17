@@ -75,6 +75,22 @@ import {
 
 type View = "dashboard" | "models" | "benchmarks" | "profiles" | "engines" | "chat" | "multimodal" | "storage" | "system" | "logs" | "settings";
 type Theme = "light" | "dark";
+type ThemePreference = Theme | "system";
+
+function readSystemTheme(): Theme {
+  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function storedThemePreference(): ThemePreference {
+  const preference = localStorage.getItem("mydgx-theme-preference");
+  if (preference === "system" || preference === "light" || preference === "dark") return preference;
+  const legacy = localStorage.getItem("mydgx-theme");
+  return legacy === "light" || legacy === "dark" ? legacy : "system";
+}
+
+function resolveTheme(preference: ThemePreference, systemTheme: Theme): Theme {
+  return preference === "system" ? systemTheme : preference;
+}
 type LocalModelFilter = "all" | "loaded" | "text" | "vision" | "audio" | "ollama" | "huggingface" | "compact" | "medium" | "large";
 type ModelTask = "chat" | "vision" | "embeddings" | "image-generation" | "asr" | "tts" | "video-generation" | "reranking";
 type InputModality = "text" | "image" | "audio" | "video";
@@ -6688,7 +6704,7 @@ function LogsView({ notify }: { notify: (message: string, error?: boolean) => vo
   );
 }
 
-function SettingsView({ config, theme, setTheme, notify }: { config: Config | null; theme: Theme; setTheme: (theme: Theme) => void; notify: (message: string, error?: boolean) => void }) {
+function SettingsView({ config, themePreference, setThemePreference, notify }: { config: Config | null; themePreference: ThemePreference; setThemePreference: (preference: ThemePreference) => void; notify: (message: string, error?: boolean) => void }) {
   const [key, setKey] = useState(getApiKey());
   const [gateway, setGateway] = useState<GatewayConfig | null>(null);
   useEffect(() => {
@@ -6727,7 +6743,7 @@ function SettingsView({ config, theme, setTheme, notify }: { config: Config | nu
     <div className="view-stack settings-view">
       <SectionHeading eyebrow="PREFERENCIAS" title="Configuración" />
       <Card>
-        <div className="settings-row"><div><Sun /><span><strong>Apariencia</strong><small>Elige el tema de la interfaz</small></span></div><div className="segmented"><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>Día</button><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>Noche</button></div></div>
+        <div className="settings-row"><div><Sun /><span><strong>Apariencia</strong><small>Sigue el modo del sistema o fija día o noche</small></span></div><div className="segmented theme-preference"><button className={themePreference === "system" ? "active" : ""} onClick={() => setThemePreference("system")}>Automático</button><button className={themePreference === "light" ? "active" : ""} onClick={() => setThemePreference("light")}>Día</button><button className={themePreference === "dark" ? "active" : ""} onClick={() => setThemePreference("dark")}>Noche</button></div></div>
         <div className="settings-row"><div><ShieldCheck /><span><strong>Clave de acceso MyDGX</strong><small>Se guarda únicamente en sessionStorage</small></span></div><div className="inline-form"><input type="password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={config?.api_key_required ? "Clave requerida" : "No configurada"} autoComplete="off" /><button className="button secondary" onClick={saveKey}>Guardar</button></div></div>
       </Card>
       <Card>
@@ -6845,7 +6861,9 @@ function FontSizeControl({ onChange }: { onChange: (update: (current: number) =>
 }
 
 export default function App({ onLogout }: { onLogout?: () => void }) {
-  const [theme, setThemeState] = useState<Theme>(() => (localStorage.getItem("mydgx-theme") as Theme) || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  const [themePreference, setThemePreference] = useState<ThemePreference>(storedThemePreference);
+  const [systemTheme, setSystemTheme] = useState<Theme>(readSystemTheme);
+  const theme = useMemo(() => resolveTheme(themePreference, systemTheme), [themePreference, systemTheme]);
   const [fontScale, setFontScale] = useState(() => {
     const scale = storedFontScale();
     applyFontScale(scale);
@@ -6926,9 +6944,20 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   }, [loadJobs, reportError]);
 
   useEffect(() => {
+    const media = matchMedia("(prefers-color-scheme: dark)");
+    const syncSystemTheme = () => setSystemTheme(media.matches ? "dark" : "light");
+    syncSystemTheme();
+    media.addEventListener("change", syncSystemTheme);
+    return () => media.removeEventListener("change", syncSystemTheme);
+  }, []);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("mydgx-theme", theme);
-  }, [theme]);
+    localStorage.setItem("mydgx-theme-preference", themePreference);
+    localStorage.removeItem("mydgx-theme");
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#0b0d0c" : "#f4f6f3");
+  }, [theme, themePreference]);
 
   useEffect(() => {
     applyFontScale(fontScale);
@@ -6995,7 +7024,9 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   const benchmarkSuiteJob = jobs.find(
     (job) => job.kind === "benchmark.suite" && activeJobStatuses.has(job.status),
   );
-  function setTheme(next: Theme) { setThemeState(next); }
+  function toggleTheme() {
+    setThemePreference(theme === "dark" ? "light" : "dark");
+  }
 
   let content: ReactNode;
   if (view === "dashboard") content = <Dashboard overview={overview} models={models} modelMetrics={modelMetrics} config={config} jobs={jobs} />;
@@ -7008,7 +7039,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   else if (view === "storage") content = <StorageView notify={notify} />;
   else if (view === "system") content = <SystemView config={config} jobs={jobs} overview={overview} notify={notify} />;
   else if (view === "logs") content = <LogsView notify={notify} />;
-  else content = <SettingsView config={config} theme={theme} setTheme={setTheme} notify={notify} />;
+  else content = <SettingsView config={config} themePreference={themePreference} setThemePreference={setThemePreference} notify={notify} />;
 
   return (
     <div className="app-shell">
@@ -7052,7 +7083,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
           <span>{currentLabel}</span>
           <div className="appearance-row">
             {hasActiveModels && <StopAllModelsButton notify={notify} onDone={() => { void refreshOverview(); void refreshModels(); }} />}
-            <button className="theme-toggle" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}<span>Modo {theme === "dark" ? "día" : "noche"}</span></button>
+            <button className="theme-toggle" onClick={toggleTheme} title={themePreference === "system" ? "Tema automático según el sistema" : "Tema fijo"}>{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}<span>Modo {theme === "dark" ? "día" : "noche"}</span></button>
             <FontSizeControl onChange={setFontScale} />
             {onLogout && <button className="session-logout" onClick={onLogout} title="Cerrar sesión" aria-label="Cerrar sesión"><LogOut size={16} /></button>}
           </div>

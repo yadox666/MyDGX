@@ -195,6 +195,8 @@ if [[ "$MODE" != "--check" &&
     -DGGML_CCACHE=ON \
     -DGGML_NATIVE=OFF \
     -DLLAMA_CURL=ON \
+    -DLLAMA_BUILD_UI=OFF \
+    -DLLAMA_USE_PREBUILT_UI=OFF \
     -G Ninja
   cmake --build "$LLAMA_BUILD.new" --target "${LLAMA_TOOLS[@]}" -j"$(nproc)"
   for tool in "${LLAMA_TOOLS[@]}"; do

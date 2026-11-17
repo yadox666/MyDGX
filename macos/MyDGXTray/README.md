@@ -38,6 +38,34 @@ Para instalarla, copia `dist/MyDGXTray.app` a `/Applications`. La aplicación se
 firma localmente de forma ad hoc; para distribuirla a otros Mac debe firmarse con
 Developer ID y notarizarse.
 
+### Descargar la versión compilada
+
+Cada [Release](https://github.com/yadox666/MyDGX/releases) incluye
+`MyDGXTray-<versión>-macos-universal.zip` (Apple Silicon e Intel, macOS 13 o
+posterior) y su `.sha256`. Comprueba el hash, descomprime y mueve la app a
+`/Applications`:
+
+```bash
+shasum -a 256 -c MyDGXTray-*-macos-universal.zip.sha256
+ditto -x -k MyDGXTray-*-macos-universal.zip /Applications
+```
+
+Mientras la Release esté firmada de forma ad hoc, macOS la bloquea en el primer
+arranque. Ábrela una vez, ve a **Ajustes del Sistema › Privacidad y seguridad** y
+pulsa **Abrir igualmente**.
+
+### Empaquetar una Release
+
+```bash
+./scripts/package-release.sh
+```
+
+Genera el binario universal, el zip y el hash en `dist/`. Para firmar con
+Developer ID y notarizar, define `MYDGX_SIGN_IDENTITY` con el nombre del
+certificado y `MYDGX_NOTARY_PROFILE` con un perfil creado con
+`xcrun notarytool store-credentials`; las credenciales de Apple quedan en el
+Llavero y nunca en el repositorio.
+
 ## Configuración
 
 En el primer arranque se crea una instalación de usuario autosuficiente:

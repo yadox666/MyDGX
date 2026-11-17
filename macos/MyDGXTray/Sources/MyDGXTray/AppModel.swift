@@ -104,6 +104,8 @@ final class AppModel: ObservableObject {
     private var selectedSSHEndpoints: [String: SSHEndpoint] = [:]
     private var activeTunnelEndpoints: [String: SSHEndpoint] = [:]
     private var nextAutomaticReconnectAt = Date.distantPast
+    /// A profile the user just picked is not swapped out automatically before this date.
+    private var manualSelectionUntil = Date.distantPast
 
     init() {
         do {
@@ -338,18 +340,28 @@ final class AppModel: ObservableObject {
     }
 
     private func recoverConnectionIfNeeded() async {
-        let profile = configuration.activeConnection
-        guard profile.tunnel.enabled,
-              !apiReachable,
+        var profile = configuration.activeConnection
+        guard !apiReachable,
               overview == nil,
               !operationInProgress,
-              Date() >= nextAutomaticReconnectAt,
+              Date() >= nextAutomaticReconnectAt else {
+            return
+        }
+        let unusable = !profile.tunnel.enabled || profile.ssh.host.isEmpty || profile.ssh.user.isEmpty
+        if (unusable || connectionAvailability[profile.id] != true) && Date() >= manualSelectionUntil {
+            let previous = profile
+            if selectReachableProfile() {
+                await discardStaleTunnel(previous)
+                profile = configuration.activeConnection
+            }
+        }
+        guard profile.tunnel.enabled,
               !profile.ssh.host.isEmpty,
               !profile.ssh.user.isEmpty else {
             return
         }
         nextAutomaticReconnectAt = Date().addingTimeInterval(15)
-        guard connectionAvailability[profile.id] == true else {
+        guard selectedSSHEndpoints[profile.id] != nil || connectionAvailability[profile.id] == true else {
             statusMessage = "Esperando red para reconectar…"
             return
         }
@@ -393,7 +405,49 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Picks the profile to use: LAN first (current one preferred), then whatever answers over the internet.
+    /// Relies on `selectedSSHEndpoints` from the last `refreshConnectionAvailability()`.
+    @discardableResult
+    private func selectReachableProfile(preferCurrent: Bool = true) -> Bool {
+        let current = configuration.activeConnection
+        let usable = configuration.connections.filter {
+            $0.tunnel.enabled && !$0.ssh.host.isEmpty && !$0.ssh.user.isEmpty
+        }
+        func onLAN(_ profile: ConnectionProfile) -> Bool {
+            selectedSSHEndpoints[profile.id]?.isPublic == false
+        }
+        func online(_ profile: ConnectionProfile) -> Bool {
+            selectedSSHEndpoints[profile.id] != nil
+        }
+        if preferCurrent, onLAN(current) { return false }
+        let target = usable.first(where: onLAN)
+            ?? (preferCurrent && online(current) ? current : nil)
+            ?? usable.first(where: online)
+        guard let target, target.id != current.id else { return false }
+        var updated = configuration
+        updated.activeConnectionID = target.id
+        guard (try? ConfigurationStore.save(updated)) != nil else { return false }
+        configuration = updated
+        overview = nil
+        profiles = []
+        runtime = nil
+        apiReachable = false
+        lastConnectionState = nil
+        let route = onLAN(target) ? "en la red local" : "por internet"
+        statusMessage = "\(target.alias) seleccionado (\(route))"
+        AppNotifications.send(
+            title: "Equipo seleccionado automáticamente",
+            body: online(current)
+                ? "\(target.alias) está disponible \(route); MyDGXTray lo usa en lugar de \(current.alias)."
+                : "\(current.alias) no responde; MyDGXTray usa \(target.alias) \(route)."
+        )
+        return true
+    }
+
     private func connectOnLaunch() async {
+        statusMessage = "Buscando equipos disponibles…"
+        await refreshConnectionAvailability()
+        selectReachableProfile()
         let profile = configuration.activeConnection
         guard profile.tunnel.enabled,
               !profile.ssh.host.isEmpty,
@@ -615,6 +669,9 @@ final class AppModel: ObservableObject {
                 account: apiKeyAccount ?? configuration.apiKeyAccount
             )
         }
+        if configuration.activeConnectionID != self.configuration.activeConnectionID {
+            manualSelectionUntil = Date().addingTimeInterval(120)
+        }
         self.configuration = configuration
         tunnelStateKnown = false
         requestRefresh()
@@ -627,6 +684,7 @@ final class AppModel: ObservableObject {
             try updated.setActiveConnection(id: id)
             try ConfigurationStore.save(updated)
             configuration = updated
+            manualSelectionUntil = Date().addingTimeInterval(120)
             overview = nil
             profiles = []
             runtime = nil
@@ -649,7 +707,11 @@ final class AppModel: ObservableObject {
         updated.connections.removeAll { $0.id == id }
         if wasActive {
             stopManagedTunnel()
-            updated.activeConnectionID = updated.connections[0].id
+            updated.activeConnectionID = (
+                updated.connections.first { selectedSSHEndpoints[$0.id]?.isPublic == false }
+                    ?? updated.connections.first { selectedSSHEndpoints[$0.id] != nil }
+                    ?? updated.connections[0]
+            ).id
         }
         try ConfigurationStore.save(updated)
         configuration = updated
@@ -660,6 +722,7 @@ final class AppModel: ObservableObject {
             apiReachable = false
             lastConnectionState = nil
             tunnelStateKnown = false
+            nextAutomaticReconnectAt = .distantPast
             requestRefresh()
         }
     }

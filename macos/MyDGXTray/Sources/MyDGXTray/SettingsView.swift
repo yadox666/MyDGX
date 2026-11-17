@@ -11,10 +11,12 @@ struct SettingsView: View {
     @State private var showNetworkDiscovery = false
     /// Profile ids last seen in the saved config; only ids outside this set count as new.
     @State private var savedIDs: Set<String>
+    @State private var savedActiveID: String
 
     init(model: AppModel) {
         self.model = model
         _draft = State(initialValue: model.configuration)
+        _savedActiveID = State(initialValue: model.configuration.activeConnectionID)
         _savedIDs = State(initialValue: Set(model.configuration.connections.map(\.id)))
         _selectedID = State(initialValue: model.configuration.activeConnectionID)
     }
@@ -124,6 +126,10 @@ struct SettingsView: View {
         .onReceive(model.$configuration) { updated in
             let previous = savedIDs
             savedIDs = Set(updated.connections.map(\.id))
+            if updated.activeConnectionID != savedActiveID {
+                savedActiveID = updated.activeConnectionID
+                draft.activeConnectionID = updated.activeConnectionID
+            }
             let known = Set(draft.connections.map(\.id)).union(previous)
             if let added = updated.connections.first(where: { !known.contains($0.id) }) {
                 draft = updated

@@ -183,6 +183,10 @@ La guía completa para usuarios nuevos está en
 ## Acciones remotas
 
 - **Cambiar equipo** selecciona el perfil activo por alias.
+- **Selección automática:** al arrancar, y cuando el perfil activo deja de responder,
+  la app comprueba el SSH de todos los perfiles. Usa primero un equipo encendido en
+  la red local y, si no hay ninguno, uno accesible por internet (host público).
+  Durante dos minutos después de que elijas un perfil a mano, no lo cambia.
 - **Iniciar conexión** levanta el túnel SSH configurado y actualiza la telemetría.
 - **Abrir <alias>** aparece por cada app web de un perfil que esté en
   marcha en el DGX (alias y puerto se configuran en el editor de perfiles). Con

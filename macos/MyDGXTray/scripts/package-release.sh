@@ -29,5 +29,5 @@ if [[ -n "${MYDGX_NOTARY_PROFILE:-}" ]]; then
     ditto -c -k --keepParent "$APP_DIR" "$ZIP"
 fi
 
-shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
+(cd "${ZIP:h}" && shasum -a 256 "${ZIP:t}" | tee "${ZIP:t}.sha256")
 print "Paquete creado en: $ZIP"

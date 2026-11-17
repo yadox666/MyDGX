@@ -824,6 +824,8 @@ type BenchmarkModelInfo = {
   tags: string[];
   parameters_b?: number | null;
   active_parameters_b?: number | null;
+  parameters_estimated?: boolean;
+  memory_bandwidth_gbps?: number;
   estimated_memory_mb?: number | null;
   input_modalities: string[];
   output_modalities: string[];
@@ -5220,7 +5222,13 @@ function metricRelative(metric: BenchmarkMetric, value: number | null, peers: Ar
 }
 
 function shortModelName(run: BenchmarkRun) {
-  return (run.model_info?.name || run.source_id.split("/").pop() || run.source_id).replace(/^ARTIFEX · /, "");
+  let name = (run.model_info?.name || run.source_id.split("/").pop() || run.source_id).replace(/^ARTIFEX · /, "");
+  name = name.split("/").pop() || name;
+  // Requantizers name repos "<original author>_<model>"; the base_model says who that author is.
+  const authors = (run.model_info?.base_model ?? "").split(",").map((item) => item.trim().split("/")[0]).filter(Boolean);
+  const author = authors.find((item) => name.toLowerCase().startsWith(`${item.toLowerCase()}_`) || name.toLowerCase().startsWith(`${item.toLowerCase()}.`));
+  if (author) name = name.slice(author.length + 1);
+  return name.replace(/[-_.]gguf$/i, "") || name;
 }
 
 function parameterLabel(info?: BenchmarkModelInfo) {
@@ -5302,7 +5310,89 @@ function BenchmarkModalityChartsView({ modality, runs }: { modality: string; run
         </ScatterChart>
       </ResponsiveContainer>
     </Card>}
+    {modality === "text-generation" && <BenchmarkEfficiencyCharts runs={runs} />}
   </section>;
+}
+
+function BenchmarkEfficiencyCharts({ runs }: { runs: BenchmarkRun[] }) {
+  const rows = runs.flatMap((run) => {
+    const info = run.model_info;
+    const tps = finite(run.summary.output_tokens_per_second?.mean);
+    const total = finite(info?.parameters_b);
+    const active = finite(info?.active_parameters_b) ?? total;
+    if (!tps || !total || !active) return [];
+    const weightGbPerToken = (Number(run.artifact_size || 0) / 1e9) * (active / total);
+    const bandwidth = info?.memory_bandwidth_gbps || 273;
+    return [{
+      name: shortModelName(run).slice(0, 28),
+      tps, total, active,
+      moe: active < total,
+      estimated: Boolean(info?.parameters_estimated),
+      quantization: run.quantization,
+      perParameter: tps * active,
+      bandwidthUse: weightGbPerToken ? Math.min(100, (tps * weightGbPerToken / bandwidth) * 100) : null,
+      bandwidth,
+    }];
+  });
+  if (rows.length < 2) return null;
+  const sorted = [...rows.map((row) => row.perParameter)].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const actives = rows.map((row) => row.active);
+  const [minActive, maxActive] = [Math.min(...actives) * 0.8, Math.max(...actives) * 1.25];
+  const curve = Array.from({ length: 24 }, (_, index) => {
+    const active = minActive * (maxActive / minActive) ** (index / 23);
+    return { active, tps: median / active };
+  });
+  const params = (row: typeof rows[number]) => `${row.estimated ? "≈" : ""}${row.total}B${row.moe ? ` · ${row.active}B activos (MoE)` : ""}`;
+  const tooltip = ({ payload }: { payload?: ReadonlyArray<{ payload?: unknown }> }) => {
+    const row = payload?.[0]?.payload as typeof rows[number] | undefined;
+    return row && "perParameter" in row ? <div className="benchmark-tooltip">
+      <strong>{row.name}</strong>
+      <span>{params(row)} · {row.quantization}</span>
+      <span>{row.tps.toFixed(1)} tok/s · {row.perParameter.toFixed(0)} B·tok/s</span>
+      {row.bandwidthUse != null && <span>{row.bandwidthUse.toFixed(0)} % de {row.bandwidth} GB/s</span>}
+    </div> : null;
+  };
+  const ranking = (key: "perParameter" | "bandwidthUse", title: string, hint: string, format: (value: number) => string) => {
+    const data = rows.filter((row) => row[key] != null).sort((a, b) => Number(b[key]) - Number(a[key]));
+    return <Card className="benchmark-chart">
+      <div><strong>{title}</strong><small>{hint}</small></div>
+      <ResponsiveContainer width="100%" height={Math.max(140, 34 * data.length + 40)}>
+        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 70, left: 4, bottom: 4 }}>
+          <CartesianGrid stroke="var(--border)" horizontal={false} />
+          <XAxis type="number" hide domain={[0, "dataMax"]} />
+          <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 12, fill: "var(--text-secondary)" }} />
+          <Tooltip content={tooltip} cursor={{ fill: "var(--surface-soft)" }} />
+          <Bar dataKey={key} radius={[0, 6, 6, 0]} barSize={18} isAnimationActive={false}>
+            {data.map((row, index) => <Cell key={row.name} fill={row.moe ? "var(--blue)" : "var(--accent)"} fillOpacity={index === 0 ? 1 : 0.6} />)}
+            <LabelList dataKey={key} position="right" formatter={(value: unknown) => format(Number(value))} style={{ fontSize: 12, fill: "var(--text-secondary)" }} />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </Card>;
+  };
+  return <>
+    <div className="benchmark-chart-grid">
+      {ranking("perParameter", "Eficiencia por parámetro", "tok/s × miles de millones de parámetros activos: cuánto modelo mueve por segundo. Quita la ventaja de ser pequeño · mayor es mejor", (value) => `${value.toFixed(0)} B·tok/s`)}
+      {ranking("bandwidthUse", "Aprovechamiento de la memoria", "tok/s × GB de pesos leídos por token ÷ ancho de banda del GB10. Descuenta también la cuantización; 100 % es el límite físico", (value) => `${value.toFixed(0)} %`)}
+    </div>
+    <Card className="benchmark-chart">
+      <div><strong>Velocidad frente a parámetros activos</strong><small>Escalas logarítmicas. La línea discontinua es la eficiencia mediana ({median.toFixed(0)} B·tok/s): por encima, más rápido de lo que le tocaría por su tamaño. Azul: MoE · verde: denso.</small></div>
+      <ResponsiveContainer width="100%" height={300}>
+        <ScatterChart margin={{ top: 16, right: 24, left: 4, bottom: 12 }}>
+          <CartesianGrid stroke="var(--border)" />
+          <XAxis type="number" dataKey="active" name="Parámetros activos" scale="log" domain={[minActive, maxActive]} allowDataOverflow tickFormatter={(value) => `${Number(value) >= 10 ? Number(value).toFixed(0) : Number(value).toFixed(1)}B`} tick={{ fontSize: 11 }} />
+          <YAxis type="number" dataKey="tps" name="tok/s" scale="log" domain={["auto", "auto"]} tickFormatter={(value) => `${Number(value).toFixed(0)}`} width={48} tick={{ fontSize: 11 }} />
+          <Tooltip cursor={{ strokeDasharray: "3 3" }} content={tooltip} />
+          <Scatter data={curve} line={{ stroke: "var(--text-muted)", strokeDasharray: "5 4" }} shape={() => <g />} isAnimationActive={false} legendType="none" />
+          <Scatter data={rows} isAnimationActive={false}>
+            {rows.map((row) => <Cell key={row.name} fill={row.moe ? "var(--blue)" : "var(--accent)"} fillOpacity={0.8} />)}
+            <LabelList dataKey="name" position="top" style={{ fontSize: 11, fill: "var(--text-secondary)" }} />
+          </Scatter>
+        </ScatterChart>
+      </ResponsiveContainer>
+    </Card>
+  </>;
 }
 
 function BenchmarkModelCard({

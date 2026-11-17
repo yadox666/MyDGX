@@ -2577,9 +2577,11 @@ def cached_hf_file(repo: str, filename: str) -> Path:
 
 
 def resolve_profile_model_file(profile: dict[str, Any]) -> Path:
+    # Keep the snapshot name instead of following the symlink to the hashed blob:
+    # llama.cpp finds the rest of a split GGUF from the "-00001-of-0000N" filename.
     configured = profile.get("model_file", "")
     if configured:
-        path = Path(configured).expanduser().resolve()
+        path = Path(configured).expanduser().absolute()
         if path.is_file() and path.suffix.lower() == ".gguf":
             return path
     repo = profile.get("model_repo", "")
@@ -2587,7 +2589,7 @@ def resolve_profile_model_file(profile: dict[str, Any]) -> Path:
     if repo and filename:
         try:
             cached = cached_hf_file(repo, filename)
-            return Path(cached).resolve()
+            return Path(cached).absolute()
         except Exception as exc:
             raise RuntimeError("El GGUF no está descargado; usa Descargar en el perfil") from exc
     raise RuntimeError("El perfil no tiene un archivo GGUF válido")
@@ -14917,6 +14919,46 @@ PARAMETER_COUNT_PATTERN = re.compile(
 BENCHMARK_HIDDEN_TAG_PREFIXES = ("region:", "license:", "endpoints", "autotrain", "arxiv:", "base_model:", "dataset:", "doi:")
 
 
+# Mixture-of-experts families whose names do not carry the active size (total B, active B).
+KNOWN_MOE_PARAMETERS = (
+    ("gpt-oss-120b", 116.8, 5.1),
+    ("gpt-oss-20b", 20.9, 3.6),
+    ("mixtral-8x22b", 141.0, 39.0),
+    ("mixtral-8x7b", 46.7, 12.9),
+)
+# Effective bits per weight of llama.cpp quantizations, scales and metadata included.
+QUANT_BITS_PER_WEIGHT = {
+    "F32": 32.0, "F16": 16.0, "BF16": 16.0, "Q8_0": 8.5, "Q6_K": 6.56, "Q5_K": 5.69, "Q5_0": 5.5,
+    "Q4_K": 4.85, "Q4_0": 4.55, "IQ4_XS": 4.25, "IQ4_NL": 4.5, "MXFP4": 4.25, "Q3_K": 3.9,
+    "IQ3_XXS": 3.06, "Q2_K": 3.0, "IQ2_XXS": 2.06, "IQ1_M": 1.75,
+}
+
+
+def quantization_bits_per_weight(quantization: str) -> float | None:
+    label = quantization.upper().removeprefix("UD-")
+    for key in sorted(QUANT_BITS_PER_WEIGHT, key=len, reverse=True):
+        if label.startswith(key):
+            return QUANT_BITS_PER_WEIGHT[key]
+    return None
+
+
+def estimated_parameter_counts(
+    names: tuple[str, ...], artifact_size: int, quantization: str,
+) -> tuple[float | None, float | None, bool]:
+    """(total B, active B, estimated): names first, then the file size divided by the bits of its quantization."""
+    total, active = model_parameter_counts(*names)
+    lowered = " ".join(names).casefold()
+    known = next((item for item in KNOWN_MOE_PARAMETERS if item[0] in lowered), None)
+    if known:
+        total, active = known[1], active or known[2]
+    if total:
+        return total, active, False
+    bits = quantization_bits_per_weight(quantization or "")
+    if artifact_size and bits:
+        return round(artifact_size * 8 / bits / 1e9, 1), active, True
+    return None, active, False
+
+
 def model_parameter_counts(*names: str) -> tuple[float | None, float | None]:
     for name in names:
         if match := PARAMETER_COUNT_PATTERN.search(name or ""):
@@ -14969,7 +15011,11 @@ def benchmark_model_info(run: dict[str, Any], metadata: dict[str, Any]) -> dict[
         values = value if isinstance(value, list) else [value] if value else []
         return [str(item) for item in values if item][:6]
 
-    parameters, active = model_parameter_counts(source_id.split("/")[-1], str(runtime.get("name") or ""), str(run.get("filename") or ""))
+    parameters, active, parameters_estimated = estimated_parameter_counts(
+        (source_id.split("/")[-1], str(runtime.get("name") or ""), str(run.get("filename") or "")),
+        int(run.get("artifact_size") or 0),
+        str(run.get("quantization") or ""),
+    )
     tags = [
         str(tag) for tag in remote.get("tags") or []
         if not str(tag).startswith(BENCHMARK_HIDDEN_TAG_PREFIXES)
@@ -14988,6 +15034,8 @@ def benchmark_model_info(run: dict[str, Any], metadata: dict[str, Any]) -> dict[
         "tags": tags,
         "parameters_b": parameters,
         "active_parameters_b": active,
+        "parameters_estimated": parameters_estimated,
+        "memory_bandwidth_gbps": max(1, int(settings.spark_memory_bandwidth_gbps)),
         "estimated_memory_mb": runtime.get("estimated_memory_mb") or None,
         "input_modalities": listed(runtime.get("input_modalities")),
         "output_modalities": listed(runtime.get("output_modalities")),

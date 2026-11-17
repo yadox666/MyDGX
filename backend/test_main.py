@@ -331,6 +331,15 @@ class DatabaseTests(unittest.TestCase):
         whisper = {"engine": "whisper", "model_ref": "turbo", "model_repo": "openai/whisper-large-v3-turbo"}
         self.assertEqual(main_module.gateway_model_full_name(whisper), "openai/whisper-large-v3-turbo")
 
+    def test_parameter_counts_cover_named_moe_and_size_estimates(self) -> None:
+        self.assertEqual(main_module.estimated_parameter_counts(["ggml-org/gpt-oss-120b-GGUF"], 63_000_000_000, "MXFP4"), (116.8, 5.1, False))
+        self.assertEqual(main_module.estimated_parameter_counts(["Kimi-Linear-48B-A3B"], 40_000_000_000, "Q6_K_L"), (48.0, 3.0, False))
+        total, active, estimated = main_module.estimated_parameter_counts(["BaronLLM-Offensive"], 6_560_000_000, "Q6_K")
+        self.assertEqual((total, active, estimated), (8.0, None, True))
+        self.assertEqual(main_module.quantization_bits_per_weight("UD-Q4_K_XL"), 4.85)
+        self.assertEqual(main_module.estimated_parameter_counts(["mystery"], 0, "Q4_K_M"), (None, None, False))
+        self.assertEqual(main_module.estimated_parameter_counts(["mystery"], 5_000_000_000, "weird"), (None, None, False))
+
     def test_benchmark_model_info_summarises_metadata_for_model_cards(self) -> None:
         self.assertEqual(main_module.model_parameter_counts("Cyber-Tiel-Coder-35B-A3B-GGUF"), (35.0, 3.0))
         self.assertEqual(main_module.model_parameter_counts("Qwen3-TTS-12Hz-1.7B-Base"), (1.7, None))
@@ -5832,6 +5841,23 @@ class ProfileAppTests(unittest.TestCase):
         )
         self.assertEqual(main_module.short_model_label({"model_ref": "qwen3:8b"}), "qwen3:8b")
 
+    def test_split_gguf_keeps_the_snapshot_name_llama_cpp_needs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(settings, "hf_home", directory):
+            repo_dir = Path(directory) / "hub" / "models--Org--Big-GGUF"
+            snapshot = repo_dir / "snapshots" / "0e17b7ba" / "Q4_K_M"
+            blobs = repo_dir / "blobs"
+            snapshot.mkdir(parents=True)
+            blobs.mkdir()
+            names = [f"Big-Q4_K_M-0000{index}-of-00002.gguf" for index in (1, 2)]
+            for index, name in enumerate(names):
+                blob = blobs / f"{index:064x}"
+                blob.write_bytes(b"GGUF")
+                (snapshot / name).symlink_to(blob)
+            model = {"engine": "llama.cpp", "model_repo": "Org/Big-GGUF", "model_filename": f"Q4_K_M/{names[0]}", "task": "chat"}
+            self.assertEqual(main_module.resolve_profile_model_file(model).name, names[0])
+            configured = {"engine": "llama.cpp", "model_file": str(snapshot / names[0]), "task": "chat"}
+            self.assertEqual(main_module.resolve_profile_model_file(configured).name, names[0])
+
     def test_cached_gguf_without_refs_main_is_found_offline(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(settings, "hf_home", directory):
             snapshot = Path(directory) / "hub" / "models--Org--Baron-GGUF" / "snapshots" / "0e17b7ba"
@@ -5839,7 +5865,7 @@ class ProfileAppTests(unittest.TestCase):
             (snapshot / "baron-q6_k.gguf").write_bytes(b"GGUF")
             (Path(directory) / "secret.gguf").write_bytes(b"GGUF")
             model = {"engine": "llama.cpp", "model_repo": "Org/Baron-GGUF", "model_filename": "baron-q6_k.gguf", "task": "chat"}
-            self.assertEqual(main_module.resolve_profile_model_file(model), (snapshot / "baron-q6_k.gguf").resolve())
+            self.assertEqual(main_module.resolve_profile_model_file(model).resolve(), (snapshot / "baron-q6_k.gguf").resolve())
             self.assertTrue(main_module.profile_model_is_downloaded(model))
             for repo, filename in (("Org/Baron-GGUF", "../../../../secret.gguf"), ("../Org", "baron-q6_k.gguf")):
                 with self.assertRaises(FileNotFoundError):

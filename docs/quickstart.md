@@ -65,8 +65,6 @@ ni conectarse a él por la red local. Si lo denegaste, el asistente lo detecta y
 ofrece **Abrir Ajustes de Red local**: activa **MyDGX Tray** en **Ajustes del
 Sistema › Privacidad y seguridad › Red local** y pulsa **Buscar otra vez**.
 
-![Paso 1: explicación del permiso de red local](images/setup-permission.png)
-
 ### Elegir el Spark
 
 El asistente busca el Spark en tu red durante unos segundos y lo muestra con su

@@ -50,6 +50,10 @@ shasum -a 256 -c MyDGXTray-*-macos-universal.zip.sha256
 ditto -x -k MyDGXTray-*-macos-universal.zip /Applications
 ```
 
+La aplicación incluye el código de MyDGX de la misma versión, así que no hace
+falta descargar el repositorio para desplegar: deja vacío **Proyecto local** en
+Preferencias.
+
 Mientras la Release esté firmada de forma ad hoc, macOS la bloquea en el primer
 arranque. Ábrela una vez, ve a **Ajustes del Sistema › Privacidad y seguridad** y
 pulsa **Abrir igualmente**.
@@ -60,7 +64,10 @@ pulsa **Abrir igualmente**.
 ./scripts/package-release.sh
 ```
 
-Genera el binario universal, el zip y el hash en `dist/`. Para firmar con
+Genera el binario universal, incluye el proyecto del commit actual
+(`git archive HEAD`, sin archivos sin versionar como `.env`) y deja el zip y el
+hash en `dist/`. Se niega a empaquetar con cambios sin commit para que la app
+no lleve código distinto del publicado. Para firmar con
 Developer ID y notarizar, define `MYDGX_SIGN_IDENTITY` con el nombre del
 certificado y `MYDGX_NOTARY_PROFILE` con un perfil creado con
 `xcrun notarytool store-credentials`; las credenciales de Apple quedan en el
@@ -79,6 +86,8 @@ En el primer arranque se crea una instalación de usuario autosuficiente:
 ├── certificates/
 ├── backups/
 ├── logs/
+├── run/
+├── source/          copia de MyDGX incluida en la app, usada al desplegar
 └── bin/
     ├── mydgx-ssh
     ├── mydgx-tunnel

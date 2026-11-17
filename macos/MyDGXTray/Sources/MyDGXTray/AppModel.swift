@@ -926,6 +926,37 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// A configured "Proyecto local" wins; otherwise the project bundled with the app is used.
+    func canDeploy(_ profile: ConnectionProfile) -> Bool {
+        !Self.configuredSourcePath(profile).isEmpty || SupportLayout.bundledSource != nil
+    }
+
+    func deploymentSourceDescription(_ profile: ConnectionProfile) -> String {
+        let configured = Self.configuredSourcePath(profile)
+        if !configured.isEmpty { return configured }
+        return "la versión \(SupportLayout.bundledSourceVersion) incluida en MyDGXTray"
+    }
+
+    private static func configuredSourcePath(_ profile: ConnectionProfile) -> String {
+        let path = NSString(string: profile.deployment.sourcePath).expandingTildeInPath
+        // Older builds stored the launch directory, which is "/" when opened from Finder.
+        return path == "/" ? "" : path
+    }
+
+    private func deploymentSource(_ profile: ConnectionProfile) throws -> String {
+        let configured = Self.configuredSourcePath(profile)
+        if !configured.isEmpty {
+            guard SupportLayout.isDeploySource(configured) else {
+                throw RemoteActionError.invalidDeploySource
+            }
+            return configured
+        }
+        guard SupportLayout.bundledSource != nil else {
+            throw RemoteActionError.invalidDeploySource
+        }
+        return try SupportLayout.stageBundledSource().path
+    }
+
     func openFirstDeployment(for profileID: String) {
         do {
             guard let profile = configuration.connections.first(where: { $0.id == profileID }) else {
@@ -933,14 +964,7 @@ final class AppModel: ObservableObject {
             }
             try profile.validate()
             try validateSSHCredentials(profile)
-            let source = NSString(string: profile.deployment.sourcePath).expandingTildeInPath
-            var isDirectory: ObjCBool = false
-            guard !source.isEmpty,
-                  FileManager.default.fileExists(atPath: source, isDirectory: &isDirectory),
-                  isDirectory.boolValue,
-                  FileManager.default.isExecutableFile(atPath: "\(source)/start.sh") else {
-                throw RemoteActionError.invalidDeploySource
-            }
+            let source = try deploymentSource(profile)
             try SupportLayout.install()
             let launcher = SupportLayout.bin.appendingPathComponent(
                 "mydgx-first-deploy-\(profile.id).command"
@@ -1814,13 +1838,7 @@ final class AppModel: ObservableObject {
             throw RemoteActionError.tunnelFailed
         }
         try validateSSHCredentials(profile)
-        let source = NSString(string: profile.deployment.sourcePath).expandingTildeInPath
-        var isDirectory: ObjCBool = false
-        guard !source.isEmpty,
-              FileManager.default.fileExists(atPath: source, isDirectory: &isDirectory),
-              isDirectory.boolValue else {
-            throw RemoteActionError.invalidDeploySource
-        }
+        let source = try deploymentSource(profile)
         try SupportLayout.install()
         let sshCommand = (["/usr/bin/ssh"] + sshBaseArguments(profile))
             .map(shellQuote)
@@ -2109,7 +2127,7 @@ enum RemoteActionError: LocalizedError {
         case .tunnelFailed:
             return "El túnel SSH no pudo iniciarse. Revisa el log del perfil en ~/.MyDGX/logs."
         case .invalidDeploySource:
-            return "Selecciona un directorio local válido para desplegar."
+            return "Selecciona en Proyecto local una carpeta de MyDGX que contenga start.sh."
         case let .deployFailed(code):
             return "El despliegue falló (código \(code)). Revisa ~/.MyDGX/logs."
         case let .profilePreflightFailed(message):

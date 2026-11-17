@@ -10,7 +10,47 @@ enum SupportLayout {
     static let logs = root.appendingPathComponent("logs", isDirectory: true)
     static let backups = root.appendingPathComponent("backups", isDirectory: true)
     static let run = root.appendingPathComponent("run", isDirectory: true)
+    static let source = root.appendingPathComponent("source", isDirectory: true)
     static let knownHosts = root.appendingPathComponent("known_hosts")
+
+    /// The MyDGX project shipped inside the app by package-release.sh, if any.
+    static var bundledSource: URL? {
+        guard let url = Bundle.main.resourceURL?.appendingPathComponent("MyDGX-Dashboard", isDirectory: true),
+              isDeploySource(url.path) else {
+            return nil
+        }
+        return url
+    }
+
+    static var bundledSourceVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+    }
+
+    static func isDeploySource(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return !path.isEmpty
+            && FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+            && FileManager.default.isExecutableFile(atPath: "\(path)/start.sh")
+    }
+
+    /// Copies the bundled project to ~/.MyDGX/source so deployments never run
+    /// from the signed (and possibly translocated, read-only) app bundle.
+    static func stageBundledSource() throws -> URL {
+        guard let bundled = bundledSource else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        try install()
+        let staging = root.appendingPathComponent(".source-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        try FileManager.default.copyItem(at: bundled, to: staging)
+        if FileManager.default.fileExists(atPath: source.path) {
+            try FileManager.default.removeItem(at: source)
+        }
+        try FileManager.default.moveItem(at: staging, to: source)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: source.path)
+        return source
+    }
 
     static func sessionKnownHosts(profileID: String) -> URL {
         let safeID = profileID.replacingOccurrences(

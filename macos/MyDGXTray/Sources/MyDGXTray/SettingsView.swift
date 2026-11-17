@@ -265,7 +265,9 @@ struct SettingsView: View {
 
             Section("Despliegue") {
                 pathField(
-                    title: "Proyecto local",
+                    title: SupportLayout.bundledSource == nil
+                        ? "Proyecto local"
+                        : "Proyecto local (vacío: versión \(SupportLayout.bundledSourceVersion) incluida)",
                     value: profile.deployment.sourcePath,
                     canChooseDirectories: true
                 )
@@ -278,7 +280,7 @@ struct SettingsView: View {
                 }
                 .disabled(
                     model.operationInProgress
-                        || profile.wrappedValue.deployment.sourcePath.isEmpty
+                        || !model.canDeploy(profile.wrappedValue)
                         || profile.wrappedValue.ssh.host.isEmpty
                 )
                 .help("Prepara un Spark nuevo en Terminal; sudo solicitará la contraseña directamente")
@@ -289,7 +291,7 @@ struct SettingsView: View {
                 }
                 .disabled(
                     model.operationInProgress
-                        || profile.wrappedValue.deployment.sourcePath.isEmpty
+                        || !model.canDeploy(profile.wrappedValue)
                         || profile.wrappedValue.ssh.host.isEmpty
                 )
                 if let deployment = model.deploymentStatus {
@@ -375,7 +377,6 @@ struct SettingsView: View {
     private func addProfile() {
         var profile = ConnectionProfile()
         profile.alias = "Nuevo equipo \(draft.connections.count + 1)"
-        profile.deployment.sourcePath = FileManager.default.currentDirectoryPath
         draft.connections.append(profile)
         selectedID = profile.id
         apiKey = ""
@@ -440,7 +441,7 @@ struct SettingsView: View {
         alert.alertStyle = .warning
         alert.messageText = "¿Desplegar MyDGX en \(profile.alias)?"
         alert.informativeText = """
-        Se sincronizará \(profile.deployment.sourcePath) con \
+        Se sincronizará \(model.deploymentSourceDescription(profile)) con \
         \(profile.deployment.remoteDirectory), excluyendo secretos, datos y dependencias locales. \
         Después se preparará y reiniciará MyDGX.
         """

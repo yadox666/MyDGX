@@ -1,7 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
-# Builds a universal MyDGXTray.app and zips it for a GitHub Release.
+# Builds a universal MyDGXTray.app with the committed project inside and zips
+# it for a GitHub Release.
 # Optional: MYDGX_SIGN_IDENTITY="Developer ID Application: …" signs it, and
 # MYDGX_NOTARY_PROFILE names a profile created with
 # `xcrun notarytool store-credentials`, so no Apple credentials live here.
@@ -9,7 +10,12 @@ set -euo pipefail
 ROOT_DIR="${0:A:h:h}"
 cd "$ROOT_DIR"
 
-MYDGX_UNIVERSAL=1 "$ROOT_DIR/scripts/build-app.sh"
+if [[ -n "$(git -C "$ROOT_DIR" status --porcelain)" && "${MYDGX_ALLOW_DIRTY:-0}" != "1" ]]; then
+    print -u2 "Hay cambios sin commit; la app incluiría un código distinto del que ves. Haz commit o usa MYDGX_ALLOW_DIRTY=1."
+    exit 1
+fi
+
+MYDGX_UNIVERSAL=1 MYDGX_BUNDLE_SOURCE=1 "$ROOT_DIR/scripts/build-app.sh"
 
 APP_DIR="$ROOT_DIR/dist/MyDGXTray.app"
 VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_DIR/Contents/Info.plist")"

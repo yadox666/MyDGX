@@ -201,9 +201,12 @@ WebUI en interfaces externas.
 
 ### Proyecto local
 
-Directorio raíz de este repositorio en el Mac. Debe contener
-`scripts/deploy-from-tray.sh`, el backend y el frontend. Usa **Elegir…** para
-evitar errores de ruta.
+Déjalo vacío para desplegar la versión de MyDGX incluida en la aplicación
+descargada de Releases: se copia a `~/.MyDGX/source` y se despliega desde ahí.
+
+Rellénalo solo si quieres desplegar tu propia copia del repositorio, por ejemplo
+mientras desarrollas. Debe ser la raíz del repositorio y contener `start.sh`.
+Usa **Elegir…** para evitar errores de ruta.
 
 ### Directorio remoto
 
@@ -256,7 +259,8 @@ aprovisionamiento completo descrito en el README principal.
 - Usuario y clave privada: los de la instancia
 - Túnel: activado
 - Puertos remotos: los puertos reales de MyDGX, Open WebUI y Gateway
-- Proyecto local y directorio remoto: necesarios para desplegar
+- Proyecto local: vacío para usar la versión incluida en la aplicación
+- Directorio remoto: necesario para desplegar
 
 ### API publicada mediante HTTPS
 

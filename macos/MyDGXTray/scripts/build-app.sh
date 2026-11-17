@@ -3,6 +3,9 @@ set -euo pipefail
 
 # MYDGX_UNIVERSAL=1 builds arm64 + x86_64 and merges them with lipo.
 # MYDGX_SIGN_IDENTITY selects a codesigning identity; ad hoc ("-") by default.
+# MYDGX_BUNDLE_SOURCE=1 embeds the committed project (git archive HEAD) so the
+# app can deploy without a separate checkout; untracked files such as .env never
+# enter the bundle.
 
 ROOT_DIR="${0:A:h:h}"
 cd "$ROOT_DIR"
@@ -36,6 +39,14 @@ cp "$ROOT_DIR/../../frontend/public/brand/hp-zgx-nano.png" \
     "$APP_DIR/Contents/Resources/HPZGXNano.png"
 cp "$ROOT_DIR/../../frontend/public/brand/lenovo-thinkstation-pgx.png" \
     "$APP_DIR/Contents/Resources/LenovoThinkStationPGX.png"
+
+if [[ "${MYDGX_BUNDLE_SOURCE:-0}" == "1" ]]; then
+    REPO_DIR="$(git -C "$ROOT_DIR" rev-parse --show-toplevel)"
+    SOURCE_DIR="$APP_DIR/Contents/Resources/MyDGX-Dashboard"
+    mkdir -p "$SOURCE_DIR"
+    git -C "$REPO_DIR" archive --format=tar HEAD | tar -x -C "$SOURCE_DIR"
+    git -C "$REPO_DIR" rev-parse HEAD > "$SOURCE_DIR/.mydgx-source-commit"
+fi
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
     codesign --force --deep --sign - "$APP_DIR"

@@ -21,20 +21,14 @@ conexión remota basta con SSH; MyDGXTray crea los túneles necesarios.
 ## 1. Descarga desde GitHub
 
 1. Abre la página **Releases** de este repositorio en GitHub.
-2. Descarga la última versión de **MyDGXTray** y muévela a `Aplicaciones`.
-3. Descarga también **Source code (zip)** y descomprímelo en una carpeta que no
-   vayas a borrar, por ejemplo `Documentos/MyDGX-Dashboard`.
-4. Abre MyDGXTray. Si macOS lo bloquea la primera vez, haz clic derecho sobre la
-   aplicación y elige **Abrir**.
+2. Descarga `MyDGXTray-<versión>-macos-universal.zip`, descomprímelo y mueve
+   **MyDGXTray** a `Aplicaciones`. La aplicación ya incluye MyDGX: no necesitas
+   descargar el código fuente.
+3. Abre MyDGXTray. Si macOS la bloquea la primera vez, ve a **Ajustes del
+   Sistema › Privacidad y seguridad** y pulsa **Abrir igualmente**.
 
-Si todavía no hay una aplicación publicada en Releases, puedes compilarla desde
-el código fuente:
-
-```bash
-cd MyDGX-Dashboard/macos/MyDGXTray
-./scripts/build-app.sh
-open dist/MyDGXTray.app
-```
+Si prefieres compilarla tú, sigue el
+[README de MyDGXTray](../macos/MyDGXTray/README.md).
 
 ## 2. Añade el Spark
 
@@ -61,14 +55,13 @@ limita el origen con el firewall.
 ## 3. Haz el primer despliegue
 
 1. En Preferencias, selecciona el perfil recién creado.
-2. En **Despliegue → Proyecto local**, elige la carpeta descomprimida del
-   repositorio. Debe contener `start.sh`.
-3. Conserva `MyDGX-Dashboard` como **Directorio remoto**.
-4. Pulsa **Primer despliegue completo…**.
-5. Terminal mostrará la huella SSH y puede pedir confirmación. Compárala con la
+2. Deja vacío **Despliegue → Proyecto local** para usar la versión incluida en
+   la aplicación, y conserva `MyDGX-Dashboard` como **Directorio remoto**.
+3. Pulsa **Primer despliegue completo…**.
+4. Terminal mostrará la huella SSH y puede pedir confirmación. Compárala con la
    del Spark antes de aceptar.
-6. Escribe la contraseña administrativa del Spark cuando `sudo` la solicite.
-7. Espera a que aparezca **Primer despliegue terminado**. La instalación inicial
+5. Escribe la contraseña administrativa del Spark cuando `sudo` la solicite.
+6. Espera a que aparezca **Primer despliegue terminado**. La instalación inicial
    puede tardar porque prepara paquetes, CUDA, llama.cpp, Docker y los servicios
    multimedia.
 
@@ -89,7 +82,7 @@ aplicaciones web de los perfiles.
 
 ## Actualizaciones posteriores
 
-Descarga o actualiza el código del repositorio y usa:
+Instala la nueva versión de MyDGXTray desde Releases y usa:
 
 **Preferencias → Despliegue → Guardar y desplegar**
 

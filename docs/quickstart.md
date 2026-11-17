@@ -5,13 +5,26 @@ localizar un DGX Spark, preparar el acceso SSH, desplegar MyDGX y abrir sus
 servicios. Solo tendrás que escribir la contraseña del Spark en Terminal cuando
 macOS la solicite; MyDGXTray no la guarda.
 
+## Resumen
+
+1. Descarga MyDGXTray desde [Releases](https://github.com/yadox666/MyDGX/releases)
+   y muévela a `Aplicaciones`.
+2. En **Preferencias**, pulsa la **varita mágica**, busca el Spark y sigue el
+   asistente. Escribirás una vez la contraseña del usuario del Spark.
+3. Pulsa **Primer despliegue completo…** y escribe la contraseña de `sudo`.
+4. Espera a **Primer despliegue terminado** y pulsa **Abrir Dashboard**.
+
+No necesitas descargar el código fuente, instalar Homebrew ni Node.js: la
+aplicación incluye MyDGX y el Spark compila lo demás.
+
 ## Antes de empezar
 
 Necesitas:
 
-- un Mac con macOS 13 o posterior;
+- un Mac con macOS 13 o posterior, con Apple Silicon o Intel;
 - un DGX Spark con su primer arranque oficial ya completado;
-- el usuario y la contraseña creados en el Spark;
+- el usuario y la contraseña creados en el Spark (el usuario debe poder usar
+  `sudo`);
 - ambos equipos en la misma red, o una dirección SSH remota accesible;
 - conexión a Internet durante la primera instalación.
 
@@ -20,14 +33,21 @@ conexión remota basta con SSH; MyDGXTray crea los túneles necesarios.
 
 ## 1. Descarga desde GitHub
 
-1. Abre la página **Releases** de este repositorio en GitHub.
-2. Descarga `MyDGXTray-<versión>-macos-universal.zip`, descomprímelo y mueve
-   **MyDGXTray** a `Aplicaciones`. La aplicación ya incluye MyDGX: no necesitas
-   descargar el código fuente.
-3. Abre MyDGXTray. Si macOS la bloquea la primera vez, ve a **Ajustes del
+1. Abre [Releases](https://github.com/yadox666/MyDGX/releases) en GitHub.
+2. Descarga `MyDGXTray-<versión>-macos-universal.zip` y, si quieres comprobar la
+   descarga, también su `.sha256`.
+3. Descomprímelo y mueve **MyDGXTray** a `Aplicaciones`. La aplicación ya
+   incluye MyDGX: no necesitas descargar el código fuente.
+4. Abre MyDGXTray. Si macOS la bloquea la primera vez, ve a **Ajustes del
    Sistema › Privacidad y seguridad** y pulsa **Abrir igualmente**.
 
-Si prefieres compilarla tú, sigue el
+Para comprobar la descarga desde Terminal, en la carpeta de Descargas:
+
+```bash
+shasum -a 256 -c MyDGXTray-*-macos-universal.zip.sha256
+```
+
+Debe responder `OK`. Si prefieres compilarla tú, sigue el
 [README de MyDGXTray](../macos/MyDGXTray/README.md).
 
 ## 2. Añade el Spark
@@ -82,9 +102,12 @@ aplicaciones web de los perfiles.
 
 ## Actualizaciones posteriores
 
-Instala la nueva versión de MyDGXTray desde Releases y usa:
+Instala la nueva versión de MyDGXTray desde Releases, sustituyendo la anterior
+en `Aplicaciones`, y usa:
 
 **Preferencias → Despliegue → Guardar y desplegar**
+
+Se desplegará la versión de MyDGX incluida en la nueva aplicación.
 
 Este despliegue es incremental: conserva `.env`, bases de datos, modelos,
 credenciales y cachés del Spark.
@@ -92,11 +115,16 @@ credenciales y cachés del Spark.
 ### Dirección pública estable con DuckDNS
 
 Opcionalmente puedes definir `DUCKDNS_DOMAIN` y `DUCKDNS_TOKEN` directamente en
-el `.env` del Spark y ejecutar:
+el `.env` del Spark y ejecutar en el Mac, desde la copia que MyDGXTray deja en
+`~/.MyDGX/source` tras el primer despliegue:
 
 ```bash
-./start.sh deploy --duckdns --repair --interactive
+cd ~/.MyDGX/source
+./start.sh deploy usuario@spark -p PUERTO_SSH -i RUTA_CLAVE --duckdns --repair --interactive
 ```
+
+Usa el usuario, el host, el puerto y la ruta de la clave privada que aparecen en
+la sección SSH del perfil en Preferencias.
 
 MyDGX instalará un temporizador que actualiza DuckDNS al arrancar y cada hora.
 Después usa `tu-nombre.duckdns.org` como **IP o hostname público** del perfil.

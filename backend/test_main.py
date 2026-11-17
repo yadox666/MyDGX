@@ -1403,8 +1403,35 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue(identity["is_dgx_spark"])
         self.assertEqual(identity["device_variant"], "asus")
         self.assertEqual(identity["device_model"], "ASUS Ascent GX10")
+        settings.device_variant_override = "dell"
+        device_identity.cache_clear()
+        identity = device_identity()
+        self.assertTrue(identity["is_dgx_spark"])
+        self.assertEqual(identity["device_variant"], "dell")
+        self.assertEqual(identity["device_model"], "Dell Pro Max GB10")
         settings.device_variant_override = original
         device_identity.cache_clear()
+
+    def test_device_identity_detects_dell_pro_max_gb10(self) -> None:
+        dmi = {
+            "sys_vendor": "Dell Inc.",
+            "product_name": "Dell Pro Max with GB10 FCM1253",
+        }
+        original = settings.device_variant_override
+        settings.device_variant_override = ""
+        device_identity.cache_clear()
+        try:
+            with patch.object(Path, "is_file", lambda self: self.name in dmi), \
+                    patch.object(Path, "read_text", lambda self, **_: dmi[self.name]), \
+                    patch.object(main_module.shutil, "which", return_value=None):
+                identity = device_identity()
+        finally:
+            settings.device_variant_override = original
+            device_identity.cache_clear()
+        self.assertTrue(identity["is_dgx_spark"])
+        self.assertEqual(identity["device_variant"], "dell")
+        self.assertEqual(identity["device_vendor"], "Dell")
+        self.assertEqual(identity["device_model"], "Dell Pro Max GB10")
 
 
 class BenchmarkTests(unittest.TestCase):

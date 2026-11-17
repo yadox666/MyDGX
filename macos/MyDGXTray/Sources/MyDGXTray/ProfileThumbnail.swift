@@ -9,7 +9,7 @@ struct ProfileThumbnail: View {
     var size: CGFloat = 30
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
                 .fill(brand.background)
                 .overlay {
@@ -18,7 +18,10 @@ struct ProfileThumbnail: View {
                 }
 
             brandMark
-
+                .frame(width: size, height: size)
+        }
+        .frame(width: size, height: size)
+        .overlay(alignment: .bottomTrailing) {
             Image(systemName: kindSymbol)
                 .font(.system(size: max(7, size * 0.27), weight: .semibold))
                 .foregroundStyle(.white)
@@ -28,7 +31,6 @@ struct ProfileThumbnail: View {
                 .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1))
                 .offset(x: size * 0.08, y: size * 0.08)
         }
-        .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
 
@@ -50,27 +52,36 @@ struct ProfileThumbnail: View {
                 .scaledToFit()
                 .padding(size * 0.13)
         case .asus:
-            Text("ASUS")
-                .font(.system(size: size * 0.19, weight: .black, design: .rounded))
-                .foregroundStyle(.black)
-                .minimumScaleFactor(0.5)
-                .padding(size * 0.1)
+            wordmark("ASUS", weight: .black, design: .rounded, color: .black)
         case .hp:
             Text("hp")
-                .font(.system(size: size * 0.32, weight: .bold, design: .rounded))
+                .font(.system(size: size * 0.46, weight: .bold, design: .rounded))
                 .italic()
                 .foregroundStyle(.white)
         case .lenovo:
-            Text("Lenovo")
-                .font(.system(size: size * 0.16, weight: .bold))
-                .foregroundStyle(.white)
-                .minimumScaleFactor(0.5)
-                .padding(size * 0.08)
+            wordmark("Lenovo", weight: .bold, design: .default, color: .white)
+        case .dell:
+            wordmark("DELL", weight: .heavy, design: .default, color: .white)
+        case .axforge:
+            wordmark("AX", weight: .black, design: .rounded, color: .white)
         case .unknown:
             Image(systemName: "server.rack")
-                .font(.system(size: size * 0.46, weight: .medium))
+                .resizable()
+                .scaledToFit()
+                .fontWeight(.medium)
                 .foregroundStyle(.secondary)
+                .padding(size * 0.18)
         }
+    }
+
+    /// Brand name scaled to fill the tile width instead of a fixed point size.
+    private func wordmark(_ text: String, weight: Font.Weight, design: Font.Design, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: size * 0.4, weight: weight, design: design))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.2)
+            .frame(width: size * 0.82)
     }
 
     private var brand: Brand {
@@ -79,12 +90,14 @@ struct ProfileThumbnail: View {
             return .asus
         } else if description.contains("lenovo") || description.contains("pgx") {
             return .lenovo
+        } else if description.contains("dell") || description.contains("pro max") || description.contains("fcm1253") {
+            return .dell
         } else if description.contains("hp") || description.contains("zgx") {
             return .hp
         } else if description.contains("nvidia") || description.contains("dgx spark") {
             return .nvidia
         }
-        return .unknown
+        return kind == .axforge ? .axforge : .unknown
     }
 
     private enum Brand {
@@ -92,6 +105,8 @@ struct ProfileThumbnail: View {
         case asus
         case hp
         case lenovo
+        case dell
+        case axforge
         case unknown
 
         var background: Color {
@@ -99,6 +114,8 @@ struct ProfileThumbnail: View {
             case .nvidia, .asus: return Color.white
             case .hp: return Color(red: 0, green: 0.59, blue: 0.84)
             case .lenovo: return Color(red: 0.9, green: 0, blue: 0.07)
+            case .dell: return Color(red: 0, green: 0.46, blue: 0.81)
+            case .axforge: return Color(red: 0.16, green: 0.18, blue: 0.24)
             case .unknown: return Color(nsColor: .controlBackgroundColor)
             }
         }

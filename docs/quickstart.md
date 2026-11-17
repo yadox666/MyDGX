@@ -68,7 +68,7 @@ Sistema › Privacidad y seguridad › Red local** y pulsa **Buscar otra vez**.
 ### Elegir el Spark
 
 El asistente busca el Spark en tu red durante unos segundos y lo muestra con su
-marca y modelo (NVIDIA, ASUS, Lenovo, HP…), su dirección, el puerto SSH y, si se
+marca y modelo (NVIDIA, ASUS, Lenovo, HP, Dell…), su dirección, el puerto SSH y, si se
 puede saber antes de entrar, el sistema operativo.
 
 - Si aparece, selecciónalo (ya viene marcado si solo hay uno) y pulsa

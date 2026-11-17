@@ -173,6 +173,8 @@ enum SSHBootstrap {
             variant = "asus"
         } else if evidence.contains("lenovo") || evidence.contains("pgx") {
             variant = "lenovo"
+        } else if evidence.contains("dell") || evidence.contains("pro max") || evidence.contains("fcm1253") {
+            variant = "dell"
         } else if evidence.contains("hp") || evidence.contains("zgx") {
             variant = "hp"
         } else if evidence.contains("nvidia") || evidence.contains("dgx spark") {

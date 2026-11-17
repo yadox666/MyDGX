@@ -1733,13 +1733,17 @@ def device_identity() -> dict[str, Any]:
         except (OSError, subprocess.TimeoutExpired):
             pass
     combined = " ".join(evidence).lower()
-    is_gb10_platform = any(marker in combined for marker in ("dgx spark", "gb10", "ascent gx10", "zgx nano", "thinkstation pgx"))
+    is_gb10_platform = any(
+        marker in combined
+        for marker in ("dgx spark", "gb10", "ascent gx10", "zgx nano", "thinkstation pgx", "pro max gb10", "fcm1253")
+    )
     override = settings.device_variant_override.strip().lower()
     override_models = {
         "nvidia": ("NVIDIA", "NVIDIA DGX Spark"),
         "asus": ("ASUS", "ASUS Ascent GX10"),
         "hp": ("HP", "HP ZGX Nano G1n"),
         "lenovo": ("Lenovo", "Lenovo ThinkStation PGX"),
+        "dell": ("Dell", "Dell Pro Max GB10"),
         "generic": ("NVIDIA GB10", "GB10 AI Supercomputer"),
     }
     if override in override_models:
@@ -1752,7 +1756,9 @@ def device_identity() -> dict[str, Any]:
         variant, vendor, model = "hp", "HP", "HP ZGX Nano G1n"
     elif "thinkstation pgx" in combined or "30kl" in combined or ("lenovo" in combined and "pgx" in combined):
         variant, vendor, model = "lenovo", "Lenovo", "Lenovo ThinkStation PGX"
-    elif "dgx spark" in combined and not any(name in combined for name in ("asus", "asustek", "hp", "lenovo")):
+    elif "pro max gb10" in combined or "fcm1253" in combined or ("dell" in combined and "gb10" in combined):
+        variant, vendor, model = "dell", "Dell", "Dell Pro Max GB10"
+    elif "dgx spark" in combined and not any(name in combined for name in ("asus", "asustek", "hp", "lenovo", "dell")):
         variant, vendor, model = "nvidia", "NVIDIA", "NVIDIA DGX Spark"
     elif is_gb10_platform:
         variant, vendor, model = "generic", "NVIDIA GB10", next((item for item in evidence if "gb10" in item.lower()), "GB10 AI Supercomputer")

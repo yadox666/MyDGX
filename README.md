@@ -8,7 +8,7 @@
 
 <p align="center">
   Panel local y open source para monitorizar, configurar y operar equipos NVIDIA GB10:
-  DGX Spark, ASUS Ascent GX10, HP ZGX Nano G1n y Lenovo ThinkStation PGX.
+  DGX Spark, ASUS Ascent GX10, HP ZGX Nano G1n, Lenovo ThinkStation PGX y Dell Pro Max GB10.
 </p>
 
 <p align="center">
@@ -510,7 +510,7 @@ Variables destacadas:
 - `GATEWAY_HOST`, `GATEWAY_PORT`: endpoint OpenAI del perfil activo;
 - `METRICS_INTERVAL_SECONDS`, `METRICS_RETENTION_HOURS`: histórico;
 - `ENABLE_SYSTEM_UPDATES`, `ENABLE_SERVICE_CONTROL`: operaciones privilegiadas;
-- `DEVICE_VARIANT_OVERRIDE`: `nvidia`, `asus`, `hp`, `lenovo` o `generic` cuando
+- `DEVICE_VARIANT_OVERRIDE`: `nvidia`, `asus`, `hp`, `lenovo`, `dell` o `generic` cuando
   la detección automática del chasis no sea suficiente;
 - `TRUSTED_HOSTS`: nombres extra aceptados en `Host` si accedes por un nombre DNS
   propio;
@@ -581,7 +581,7 @@ como tales de forma intencionada.
 
 ## Marcas e imágenes
 
-NVIDIA, DGX, ASUS, HP, Lenovo y sus logotipos son marcas de sus respectivos
+NVIDIA, DGX, ASUS, HP, Lenovo, Dell y sus logotipos son marcas de sus respectivos
 titulares. Las imágenes de producto proceden de páginas oficiales de producto o
 prensa y se utilizan únicamente para identificar el equipo administrado.
 

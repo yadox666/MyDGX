@@ -39,6 +39,11 @@ cp "$ROOT_DIR/../../frontend/public/brand/hp-zgx-nano.png" \
     "$APP_DIR/Contents/Resources/HPZGXNano.png"
 cp "$ROOT_DIR/../../frontend/public/brand/lenovo-thinkstation-pgx.png" \
     "$APP_DIR/Contents/Resources/LenovoThinkStationPGX.png"
+# No freely licensed Dell photo yet; DevicePhoto falls back to a generic icon without it.
+if [[ -f "$ROOT_DIR/../../frontend/public/brand/dell-pro-max-gb10.png" ]]; then
+    cp "$ROOT_DIR/../../frontend/public/brand/dell-pro-max-gb10.png" \
+        "$APP_DIR/Contents/Resources/DellProMaxGB10.png"
+fi
 
 if [[ "${MYDGX_BUNDLE_SOURCE:-0}" == "1" ]]; then
     REPO_DIR="$(git -C "$ROOT_DIR" rev-parse --show-toplevel)"

@@ -244,7 +244,7 @@ herramientas. Ver [Laboratorio IA](laboratorio-ia.md).
 
 ## Sistema
 
-- Identidad del equipo (NVIDIA, ASUS, HP, Lenovo o genérico).
+- Identidad del equipo (NVIDIA, ASUS, HP, Lenovo, Dell o genérico).
 - *Readiness*: requisitos obligatorios, avisos con instrucciones de corrección y
   opcionales.
 - Plataforma, sistema operativo y versiones instaladas: driver, CUDA, kernel y

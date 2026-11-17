@@ -4,6 +4,7 @@ import SwiftUI
 struct DevicePhoto: View {
     let detectedModel: String?
     let detectedVariant: String?
+    var kind: ConnectionKind?
 
     var body: some View {
         VStack(spacing: 4) {
@@ -28,11 +29,15 @@ struct DevicePhoto: View {
 
     private var displayName: String {
         detectedModel?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-            ?? "Modelo pendiente de detectar"
+            ?? (kind == .axforge ? "Instancia AxForge" : "Modelo pendiente de detectar")
     }
 
     private var image: NSImage {
-        Self.image(model: detectedModel, variant: detectedVariant, description: displayName)
+        if kind == .axforge, detectedModel == nil, detectedVariant == nil,
+           let cloud = NSImage(systemSymbolName: "cloud", accessibilityDescription: displayName) {
+            return cloud
+        }
+        return Self.image(model: detectedModel, variant: detectedVariant, description: displayName)
     }
 
     static func image(model: String?, variant: String?, description: String = "DGX Spark") -> NSImage {
@@ -42,6 +47,8 @@ struct DevicePhoto: View {
             resource = "ASUSAscentGX10"
         } else if evidence.contains("lenovo") || evidence.contains("pgx") {
             resource = "LenovoThinkStationPGX"
+        } else if evidence.contains("dell") || evidence.contains("pro max") || evidence.contains("fcm1253") {
+            resource = "DellProMaxGB10"
         } else if evidence.contains("hp") || evidence.contains("zgx") {
             resource = "HPZGXNano"
         } else if evidence.contains("nvidia") || evidence.contains("dgx spark") {

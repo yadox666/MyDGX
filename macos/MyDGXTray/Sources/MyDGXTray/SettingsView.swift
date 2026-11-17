@@ -9,10 +9,13 @@ struct SettingsView: View {
     @State private var apiKey = ""
     @State private var message = ""
     @State private var showNetworkDiscovery = false
+    /// Profile ids last seen in the saved config; only ids outside this set count as new.
+    @State private var savedIDs: Set<String>
 
     init(model: AppModel) {
         self.model = model
         _draft = State(initialValue: model.configuration)
+        _savedIDs = State(initialValue: Set(model.configuration.connections.map(\.id)))
         _selectedID = State(initialValue: model.configuration.activeConnectionID)
     }
 
@@ -119,7 +122,9 @@ struct SettingsView: View {
             }
         }
         .onReceive(model.$configuration) { updated in
-            let known = Set(draft.connections.map(\.id))
+            let previous = savedIDs
+            savedIDs = Set(updated.connections.map(\.id))
+            let known = Set(draft.connections.map(\.id)).union(previous)
             if let added = updated.connections.first(where: { !known.contains($0.id) }) {
                 draft = updated
                 selectedID = added.id
@@ -160,7 +165,8 @@ struct SettingsView: View {
                     detectedVariant: profile.wrappedValue.id == model.configuration.activeConnectionID
                         ? model.overview?.host.deviceVariant
                             ?? profile.wrappedValue.detectedDeviceVariant
-                        : profile.wrappedValue.detectedDeviceVariant
+                        : profile.wrappedValue.detectedDeviceVariant,
+                    kind: profile.wrappedValue.kind
                 )
             }
 
@@ -322,6 +328,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(
                         message == "Configuración guardada"
+                            || message.hasSuffix(" eliminado")
                             || message.hasPrefix("Despliegue iniciado")
                                 ? .green
                                 : .red
@@ -398,7 +405,7 @@ struct SettingsView: View {
         alert.alertStyle = .critical
         alert.messageText = "¿Eliminar \(profile.alias)?"
         alert.informativeText = """
-        El equipo se quitará de MyDGX al guardar la configuración. \
+        El equipo se quitará de MyDGX inmediatamente. \
         No se borrarán claves SSH, copias de seguridad ni datos del equipo remoto.
         """
         let deleteButton = alert.addButton(withTitle: "Eliminar equipo")
@@ -406,12 +413,22 @@ struct SettingsView: View {
         alert.addButton(withTitle: "Cancelar")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        draft.connections.removeAll(where: { $0.id == selectedID })
-        if draft.activeConnectionID == selectedID {
-            draft.activeConnectionID = draft.connections[0].id
+        if model.configuration.connections.contains(where: { $0.id == selectedID }) {
+            do {
+                try model.deleteConnection(id: selectedID)
+            } catch {
+                message = error.localizedDescription
+                return
+            }
         }
-        self.selectedID = draft.connections[0].id
+        draft.connections.removeAll(where: { $0.id == selectedID })
+        if draft.activeConnectionID == selectedID
+            || !draft.connections.contains(where: { $0.id == draft.activeConnectionID }) {
+            draft.activeConnectionID = model.configuration.activeConnectionID
+        }
+        self.selectedID = draft.connections.first?.id
         apiKey = ""
+        message = "\(profile.alias) eliminado"
     }
 
     @discardableResult

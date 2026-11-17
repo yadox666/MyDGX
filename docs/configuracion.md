@@ -26,7 +26,7 @@ documentarla aquí.
 | `DUCKDNS_TOKEN` | vacío | **Secreto.** Token de DuckDNS; se usa únicamente en el DGX. |
 | `TRUSTED_HOSTS` | vacío | Nombres extra aceptados en la cabecera `Host` (por ejemplo `spark.lan`), separados por comas. Loopback y la dirección de escucha ya se aceptan. |
 | `DATABASE_PATH` | `./data/mydgx.db` | Base de datos SQLite. |
-| `DEVICE_VARIANT_OVERRIDE` | vacío | Fuerza la identidad del equipo: `nvidia`, `asus`, `hp`, `lenovo` o `generic`. |
+| `DEVICE_VARIANT_OVERRIDE` | vacío | Fuerza la identidad del equipo: `nvidia`, `asus`, `hp`, `lenovo`, `dell` o `generic`. |
 
 Para instalar el actualizador horario de DuckDNS, configura ambos valores
 directamente en el `.env` del DGX y ejecuta desde una terminal:

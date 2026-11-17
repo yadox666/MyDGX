@@ -154,7 +154,7 @@ servicios Bonjour que usa (`_ssh._tcp`, `_sftp-ssh._tcp`, `_workstation._tcp`).
 1. **Buscar.** Bonjour (`_ssh._tcp`, `_sftp-ssh._tcp`, `_workstation._tcp`) o
    IP/hostname manual. Prueba los puertos 22, 65022 y 2222, lee el banner SSH para
    anticipar el sistema y deduce marca y modelo del nombre (spark, gx10, pgx,
-   zgx…). Incluye la guía oficial de primer arranque y la preparación de un USB
+   zgx, promax…). Incluye la guía oficial de primer arranque y la preparación de un USB
    `OEMDATA` (solo `meta-data` y `user-data`, sin credenciales).
 2. **Conectar.** Guarda la huella del host en `~/.MyDGX/known_hosts` y desde ahí
    usa `StrictHostKeyChecking=yes`. Genera un par Ed25519 en `~/.MyDGX/keys`, lo

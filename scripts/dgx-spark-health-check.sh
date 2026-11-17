@@ -1258,7 +1258,8 @@ assess_spark() {
     *NVIDIA*DGX*Spark*|*Nvidia*DGX*Spark*|*nvidia*DGX*Spark*|\
     *ASUSTeK*GX10*|*ASUS*GX10*|\
     *HP*ZGX*Nano*|*HP*ZGX*|\
-    *LENOVO*ThinkStation*PGX*|*Lenovo*ThinkStation*PGX*)
+    *LENOVO*ThinkStation*PGX*|*Lenovo*ThinkStation*PGX*|\
+    *Dell*Pro*Max*GB10*|*Dell*FCM1253*)
       ;;
     ' ')
       hardware_warn "DMI manufacturer/model are unavailable; the GB10 system model cannot be verified."

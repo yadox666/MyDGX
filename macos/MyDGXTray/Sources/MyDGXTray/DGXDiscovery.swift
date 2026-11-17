@@ -114,7 +114,7 @@ extension DGXDiscovery: NetServiceBrowserDelegate, NetServiceDelegate {
 
     private static func looksLikeDGX(serviceName: String, hostname: String) -> Bool {
         let value = "\(serviceName) \(hostname)".lowercased()
-        return ["dgx", "spark", "nvidia", "gb10", "gx10", "ascent", "pgx", "zgx"]
+        return ["dgx", "spark", "nvidia", "gb10", "gx10", "ascent", "pgx", "zgx", "promax", "pro-max", "fcm1253"]
             .contains { value.contains($0) }
     }
 

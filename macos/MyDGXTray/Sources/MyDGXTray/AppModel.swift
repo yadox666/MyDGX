@@ -638,6 +638,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Removes a profile and writes the config at once, so a restart or a later save cannot bring it back.
+    func deleteConnection(id: String) throws {
+        var updated = configuration
+        guard updated.connections.count > 1,
+              updated.connections.contains(where: { $0.id == id }) else {
+            throw ConfigurationError.profileNotFound
+        }
+        let wasActive = updated.activeConnectionID == id
+        updated.connections.removeAll { $0.id == id }
+        if wasActive {
+            stopManagedTunnel()
+            updated.activeConnectionID = updated.connections[0].id
+        }
+        try ConfigurationStore.save(updated)
+        configuration = updated
+        if wasActive {
+            overview = nil
+            profiles = []
+            runtime = nil
+            apiReachable = false
+            lastConnectionState = nil
+            tunnelStateKnown = false
+            requestRefresh()
+        }
+    }
+
     func startConnection() {
         guard !operationInProgress else { return }
         operationInProgress = true

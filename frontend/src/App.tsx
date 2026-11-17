@@ -140,7 +140,7 @@ type Overview = {
     dgx_release: string;
     kernel: string;
     is_dgx_spark: boolean;
-    device_variant: "nvidia" | "asus" | "hp" | "lenovo" | "generic" | "other";
+    device_variant: "nvidia" | "asus" | "hp" | "lenovo" | "dell" | "generic" | "other";
     device_vendor: string;
     device_model: string;
     gpu_name: string;
@@ -1370,6 +1370,7 @@ function deviceBranding(host: Overview["host"]) {
     asus: { logo: "/brand/asus-logo.png", product: "/brand/asus-ascent-gx10.png", label: "ASUS ASCENT GX10", subtitle: "DESKTOP AI SUPERCOMPUTER" },
     hp: { logo: "/brand/hp-logo.svg", product: "/brand/hp-zgx-nano.png", label: "HP ZGX NANO G1N", subtitle: "AI STATION" },
     lenovo: { logo: "/brand/lenovo-logo.svg", product: "/brand/lenovo-thinkstation-pgx.png", label: "LENOVO THINKSTATION PGX", subtitle: "AI DEVELOPMENT WORKSTATION" },
+    dell: { logo: "/brand/dell-logo.svg", product: "", label: "DELL PRO MAX GB10", subtitle: "AI DEVELOPER DESKTOP" },
     generic: { logo: "/brand/nvidia.svg", product: "", label: host.device_model, subtitle: "NVIDIA GB10 PLATFORM" },
     other: { logo: "", product: "", label: host.device_model, subtitle: "AI SYSTEM" },
   }[host.device_variant] ?? { logo: "", product: "", label: host.device_model, subtitle: "NVIDIA GB10 PLATFORM" });

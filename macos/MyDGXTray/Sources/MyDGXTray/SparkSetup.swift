@@ -107,8 +107,8 @@ enum SparkSetup {
         if value.contains("zgx") || value.range(of: #"\bhp\b"#, options: .regularExpression) != nil {
             return DeviceGuess(brand: "HP", model: "ZGX Nano", variant: "hp")
         }
-        if value.contains("dell") || value.contains("pro max") {
-            return DeviceGuess(brand: "Dell", model: "Pro Max GB10", variant: "other")
+        if value.contains("dell") || value.contains("pro max") || value.contains("promax") || value.contains("fcm1253") {
+            return DeviceGuess(brand: "Dell", model: "Pro Max GB10", variant: "dell")
         }
         if value.contains("msi") || value.contains("edgexpert") {
             return DeviceGuess(brand: "MSI", model: "EdgeXpert", variant: "other")

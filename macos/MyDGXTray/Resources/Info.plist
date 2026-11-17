@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.0</string>
+	<string>0.3.0</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>3</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
@@ -25,10 +25,12 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_ssh._tcp</string>
+		<string>_sftp-ssh._tcp</string>
+		<string>_workstation._tcp</string>
 	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>MyDGX</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>MyDGX busca equipos DGX Spark con SSH en la red local.</string>
+	<string>MyDGX necesita acceder a tu red local para encontrar tu DGX Spark, conectarse a él por SSH y abrir el túnel seguro hacia el Dashboard.</string>
 </dict>
 </plist>

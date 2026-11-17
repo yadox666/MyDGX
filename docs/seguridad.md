@@ -91,7 +91,15 @@ procesos completo.
   `MYDGX_SSH_HOST_FINGERPRINT=SHA256:...`. `MYDGX_SSH_ACCEPT_NEW=1` acepta claves
   nuevas, nunca cambiadas, y es solo para equipos efímeros. El
   chequeo de salud solo sustituye una clave cambiada si coincide con la huella
-  esperada.
+  esperada. El asistente de instalación de MyDGXTray guarda la huella con
+  `ssh-keyscan` antes de enviar ninguna contraseña (confianza en el primer uso,
+  con la huella visible) y no sustituye nunca una huella existente.
+- **Contraseña de sudo sin Terminal.** `--sudo-password-stdin` lee una línea de
+  la entrada estándar, cierra esa entrada para el resto del proceso y reenvía la
+  línea solo por la entrada estándar del SSH final. En el Spark, `sudo -A` la lee
+  mediante un askpass 0700 desde un archivo 0600 en `/dev/shm` (o `$TMPDIR`),
+  que se borra al terminar o al fallar. No se combina con `--interactive` ni pasa
+  por argumentos, variables de entorno o registros.
 - **Instaladores verificados.** Ollama se comprueba por SHA-256 y versión fija.
   Node.js llega del repositorio APT firmado de NodeSource, con la huella de su
   clave verificada. hashcat se comprueba por SHA-256. El instalador nativo de

@@ -14,7 +14,8 @@ La columna izquierda ofrece estas acciones:
 - **Duplicar**: copia el perfil seleccionado, pero crea identificadores nuevos
   para el perfil y su archivo de credencial.
 - **−**: elimina el perfil seleccionado. Debe permanecer al menos uno.
-- **Varita**: abre el asistente para un DGX Spark nuevo.
+- **Varita**: abre el Asistente de instalación Spark (buscar, conectar, instalar y
+  listo) para añadir otro Spark.
 - **Usar este equipo**: convierte el perfil en el equipo activo. La telemetría,
   enlaces, perfiles de inferencia y acciones remotas usarán este equipo.
 

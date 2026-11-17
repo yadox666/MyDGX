@@ -5,6 +5,32 @@ struct MenuContentView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
+        if model.needsSetup {
+            setupMenu
+        } else {
+            fullMenu
+        }
+    }
+
+    @ViewBuilder
+    private var setupMenu: some View {
+        Text("MyDGX · ningún Spark configurado")
+        Button {
+            model.openSetupWizard()
+        } label: {
+            Label("Asistente de instalación Spark…", systemImage: "wand.and.stars")
+        }
+        Divider()
+        Button {
+            NSApp.terminate(nil)
+        } label: {
+            Label("Salir de MyDGX", systemImage: "xmark.circle")
+        }
+        .keyboardShortcut("q")
+    }
+
+    @ViewBuilder
+    private var fullMenu: some View {
         Text(
             "\(model.configuration.activeConnection.alias) · "
                 + (

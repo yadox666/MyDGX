@@ -19,12 +19,13 @@ final class DGXDiscovery: NSObject, ObservableObject {
     @Published private(set) var devices: [DiscoveredDGX] = []
     @Published private(set) var searching = false
 
-    private let browser = NetServiceBrowser()
+    private static let serviceTypes = ["_ssh._tcp.", "_sftp-ssh._tcp.", "_workstation._tcp."]
+    private let browsers = serviceTypes.map { _ in NetServiceBrowser() }
     private var services: [String: NetService] = [:]
 
     override init() {
         super.init()
-        browser.delegate = self
+        browsers.forEach { $0.delegate = self }
     }
 
     func start() {
@@ -32,11 +33,13 @@ final class DGXDiscovery: NSObject, ObservableObject {
         devices = []
         services = [:]
         searching = true
-        browser.searchForServices(ofType: "_ssh._tcp.", inDomain: "local.")
+        for (browser, type) in zip(browsers, Self.serviceTypes) {
+            browser.searchForServices(ofType: type, inDomain: "local.")
+        }
     }
 
     func stop() {
-        browser.stop()
+        browsers.forEach { $0.stop() }
         searching = false
     }
 }
@@ -76,7 +79,8 @@ extension DGXDiscovery: NetServiceBrowserDelegate, NetServiceDelegate {
             let addresses = Self.numericAddresses(sender.addresses)
             let ipAddress = addresses.first(where: { !$0.contains(":") }) ?? addresses.first
             let target = ipAddress ?? hostname
-            let advertisedPort = sender.port > 0 ? sender.port : 22
+            let advertisesSSH = sender.type.contains("ssh")
+            let advertisedPort = advertisesSSH && sender.port > 0 ? sender.port : 22
             async let advertisedAvailable = ProfileReachability.sshAvailable(
                 host: target,
                 port: advertisedPort
@@ -110,7 +114,8 @@ extension DGXDiscovery: NetServiceBrowserDelegate, NetServiceDelegate {
 
     private static func looksLikeDGX(serviceName: String, hostname: String) -> Bool {
         let value = "\(serviceName) \(hostname)".lowercased()
-        return ["dgx", "spark", "nvidia"].contains { value.contains($0) }
+        return ["dgx", "spark", "nvidia", "gb10", "gx10", "ascent", "pgx", "zgx"]
+            .contains { value.contains($0) }
     }
 
     private static func numericAddresses(_ addresses: [Data]?) -> [String] {

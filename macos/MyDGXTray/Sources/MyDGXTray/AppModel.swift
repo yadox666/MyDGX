@@ -6,7 +6,37 @@ import SwiftUI
 
 private final class SettingsWindow: NSWindow {
     override func cancelOperation(_ sender: Any?) {
-        close()
+        performClose(sender)
+    }
+}
+
+@MainActor
+private final class SetupWindowDelegate: NSObject, NSWindowDelegate {
+    private let wizard: SparkSetupWizard
+    private let onClose: () -> Void
+
+    init(wizard: SparkSetupWizard, onClose: @escaping () -> Void) {
+        self.wizard = wizard
+        self.onClose = onClose
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard wizard.installing else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "¿Detener la instalación?"
+        alert.informativeText = "El Spark conservará lo que ya esté instalado y podrás continuar más tarde."
+        alert.addButton(withTitle: "Seguir instalando")
+        alert.addButton(withTitle: "Detener y cerrar")
+        guard alert.runModal() == .alertSecondButtonReturn else { return false }
+        wizard.cancelInstall()
+        return true
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        wizard.cancelInstall()
+        wizard.forgetSecrets()
+        onClose()
     }
 }
 
@@ -63,6 +93,11 @@ final class AppModel: ObservableObject {
     private var tunnelProcess: Process?
     private var tunnelLog: FileHandle?
     private var settingsWindowController: NSWindowController?
+    private var setupWindowController: NSWindowController?
+    private var setupWindowDelegate: SetupWindowDelegate?
+    let launchedWithoutConfiguration = !FileManager.default.fileExists(
+        atPath: ConfigurationStore.fileURL.path
+    )
     private var lastConnectionState: ConnectionState?
     private var lastProfileJobPhase: ProfileJobPhase?
     private var observedProfileJobID: String?
@@ -254,6 +289,15 @@ final class AppModel: ObservableObject {
 
     var canUseAPI: Bool {
         overview != nil
+    }
+
+    /// No Spark has been configured yet: the menu only offers the setup assistant.
+    var needsSetup: Bool {
+        !apiReachable && configuration.connections.allSatisfy(Self.isUnconfigured)
+    }
+
+    private static func isUnconfigured(_ profile: ConnectionProfile) -> Bool {
+        profile.kind != .axforge && profile.ssh.host.isEmpty
     }
 
     var canOpenDashboard: Bool {
@@ -752,6 +796,64 @@ final class AppModel: ObservableObject {
         window.center()
         settingsWindowController = NSWindowController(window: window)
         presentSettingsWindow(window)
+    }
+
+    func openSetupWizard() {
+        if let window = setupWindowController?.window {
+            presentSettingsWindow(window)
+            return
+        }
+        let wizard = SparkSetupWizard(model: self)
+        let controller = NSHostingController(rootView: SparkSetupWizardView(wizard: wizard))
+        let window = SettingsWindow(contentViewController: controller)
+        window.title = "Asistente de instalación Spark"
+        window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        window.hidesOnDeactivate = false
+        let delegate = SetupWindowDelegate(wizard: wizard) { [weak self] in
+            self?.setupWindowController = nil
+            self?.setupWindowDelegate = nil
+        }
+        window.delegate = delegate
+        window.center()
+        setupWindowDelegate = delegate
+        setupWindowController = NSWindowController(window: window)
+        presentSettingsWindow(window)
+    }
+
+    func closeSetupWizard() {
+        setupWindowController?.window?.close()
+    }
+
+    /// Saves the profile created by the assistant, replacing the empty first-run placeholder.
+    func completeSetup(with profile: ConnectionProfile) throws {
+        var updated = configuration
+        updated.connections.removeAll { Self.isUnconfigured($0) && $0.id != profile.id }
+        if let index = updated.connections.firstIndex(where: { $0.id == profile.id }) {
+            updated.connections[index] = profile
+        } else {
+            updated.connections.append(profile)
+        }
+        updated.activeConnectionID = profile.id
+        if managedTunnelRunning {
+            stopManagedTunnel()
+        }
+        try save(configuration: updated, apiKey: nil)
+        overview = nil
+        profiles = []
+        runtime = nil
+        apiReachable = false
+        lastConnectionState = nil
+    }
+
+    func setupDeploymentSource(for profile: ConnectionProfile) throws -> String {
+        if SupportLayout.bundledSource != nil {
+            return try deploymentSource(profile)
+        }
+        return try deploymentSource(configuration.activeConnection)
     }
 
     private func presentSettingsWindow(_ window: NSWindow) {

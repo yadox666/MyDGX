@@ -32,29 +32,26 @@ struct DevicePhoto: View {
     }
 
     private var image: NSImage {
-        let variant = detectedVariant?.lowercased() ?? ""
-        let description = "\(variant) \(detectedModel ?? "")".lowercased()
+        Self.image(model: detectedModel, variant: detectedVariant, description: displayName)
+    }
+
+    static func image(model: String?, variant: String?, description: String = "DGX Spark") -> NSImage {
+        let evidence = "\(variant?.lowercased() ?? "") \(model ?? "")".lowercased()
         let resource: String
-        if description.contains("asus") || description.contains("gx10") {
+        if evidence.contains("asus") || evidence.contains("gx10") {
             resource = "ASUSAscentGX10"
-        } else if description.contains("lenovo") || description.contains("pgx") {
+        } else if evidence.contains("lenovo") || evidence.contains("pgx") {
             resource = "LenovoThinkStationPGX"
-        } else if description.contains("hp") || description.contains("zgx") {
+        } else if evidence.contains("hp") || evidence.contains("zgx") {
             resource = "HPZGXNano"
-        } else if description.contains("nvidia") || description.contains("dgx spark") {
+        } else if evidence.contains("nvidia") || evidence.contains("dgx spark") {
             resource = "NVIDIADGXSpark"
         } else {
-            return NSImage(
-                systemSymbolName: "server.rack",
-                accessibilityDescription: displayName
-            ) ?? NSImage()
+            return NSImage(systemSymbolName: "server.rack", accessibilityDescription: description) ?? NSImage()
         }
         return Bundle.main.url(forResource: resource, withExtension: "png")
             .flatMap(NSImage.init(contentsOf:))
-            ?? NSImage(
-                systemSymbolName: "server.rack",
-                accessibilityDescription: displayName
-            )
+            ?? NSImage(systemSymbolName: "server.rack", accessibilityDescription: description)
             ?? NSImage()
     }
 }

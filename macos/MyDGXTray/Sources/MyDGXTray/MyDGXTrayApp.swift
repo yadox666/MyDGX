@@ -8,11 +8,24 @@ struct MyDGXTrayApp: App {
     init() {
         let model = AppModel()
         _model = StateObject(wrappedValue: model)
+        let arguments = CommandLine.arguments
+        if let flag = arguments.firstIndex(of: "--render-setup-screenshots"),
+           arguments.indices.contains(flag + 1) {
+            let directory = URL(fileURLWithPath: arguments[flag + 1], isDirectory: true)
+            Task { @MainActor in
+                await SetupScreenshots.render(model: model, to: directory)
+                exit(0)
+            }
+            return
+        }
         AppNotifications.requestAuthorization()
         model.startPolling(
             autoConnect: !CommandLine.arguments.contains("--deploy-active")
         )
-        if CommandLine.arguments.contains("--open-preferences")
+        if model.launchedWithoutConfiguration
+            || CommandLine.arguments.contains("--setup-assistant") {
+            Task { @MainActor in model.openSetupWizard() }
+        } else if CommandLine.arguments.contains("--open-preferences")
             || CommandLine.arguments.contains("--deploy-active") {
             Task { @MainActor in
                 model.openSettings()

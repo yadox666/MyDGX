@@ -115,29 +115,50 @@ directamente Ollama, Docker ni otros servicios.
 
 ## Primer acceso a un DGX Spark nuevo
 
-En Preferencias, pulsa el botón con la varita para abrir el asistente:
+Si todavía no hay ningún Spark configurado (primera instalación, sin
+`~/.MyDGX/config`), MyDGXTray abre el **Asistente de instalación Spark** y su menú
+solo ofrece ese asistente y Salir. El mismo asistente se abre desde la varita de
+Preferencias para añadir otros Sparks, o con `--setup-assistant`.
 
-1. Opcionalmente, prepara un volumen FAT32 etiquetado `OEMDATA` para imágenes
-   DGX Spark de octubre de 2026 o posteriores. MyDGX solo escribe `meta-data` y
-   `user-data`, conserva el OOBE y no guarda credenciales.
-2. Completa el primer arranque oficial con pantalla y teclado, o mediante el
-   hotspot y portal cautivo indicados en la guía rápida de NVIDIA.
-3. Crea el usuario, conecta el Spark a una red estable y espera a que terminen las
-   actualizaciones sin apagarlo.
-4. Busca el Spark mediante mDNS/Bonjour (`_ssh._tcp`) o introduce su hostname/IP.
-5. Genera un par Ed25519 dedicado en `~/.MyDGX/keys`.
-6. Instala la clave pública. Terminal solicitará una sola vez la contraseña creada
-   en el primer arranque; la aplicación nunca la recibe ni la guarda.
-7. Verifica el acceso sin contraseña. Solo después se habilita la creación del
-   perfil.
+Las capturas de `docs/quickstart.md` se generan sin red ni permisos de pantalla,
+con datos de ejemplo y un `HOME` aislado:
 
-El asistente registra la clave del host en `~/.MyDGX/known_hosts`. Tras crear el
-perfil, selecciona el proyecto local. En un Spark nuevo usa **Primer despliegue
-completo…**: el Tray abre Terminal para confirmar la huella y solicitar `sudo`
-directamente, sin recibir ni guardar la contraseña. Esta operación prepara las
-dependencias, CUDA, llama.cpp, Docker y los servicios. Para actualizaciones
-posteriores usa **Guardar y desplegar**, que trabaja sin interacción mediante
-las reglas `sudoers` limitadas instaladas durante el primer despliegue.
+```bash
+mkdir -p .build/screenshot-home
+HOME="$PWD/.build/screenshot-home" CFFIXED_USER_HOME="$PWD/.build/screenshot-home" \
+  ./dist/MyDGXTray.app/Contents/MacOS/MyDGXTray --render-setup-screenshots ../../docs/images
+```
+
+Desde macOS 15 la app necesita el permiso **Red local** (Bonjour y conexiones SSH
+a la LAN). El asistente lo explica antes de que aparezca el aviso, detecta si se
+deniega y abre el panel de Ajustes correspondiente. `Info.plist` declara los
+servicios Bonjour que usa (`_ssh._tcp`, `_sftp-ssh._tcp`, `_workstation._tcp`).
+
+1. **Buscar.** Bonjour (`_ssh._tcp`, `_sftp-ssh._tcp`, `_workstation._tcp`) o
+   IP/hostname manual. Prueba los puertos 22, 65022 y 2222, lee el banner SSH para
+   anticipar el sistema y deduce marca y modelo del nombre (spark, gx10, pgx,
+   zgx…). Incluye la guía oficial de primer arranque y la preparación de un USB
+   `OEMDATA` (solo `meta-data` y `user-data`, sin credenciales).
+2. **Conectar.** Guarda la huella del host en `~/.MyDGX/known_hosts` y desde ahí
+   usa `StrictHostKeyChecking=yes`. Genera un par Ed25519 en `~/.MyDGX/keys`, lo
+   autoriza con la contraseña sin abrir Terminal (`SSH_ASKPASS` servido por una
+   FIFO 0600 de un solo uso), verifica el acceso por clave y lee DMI,
+   `/etc/os-release` y `/etc/dgx-release` para identificar el modelo y DGX OS
+   o Ubuntu. También comprueba `sudo`. Admite una clave SSH existente.
+3. **Instalar.** Ejecuta `start.sh deploy … --repair --sudo-password-stdin` desde
+   la fuente incluida, con barra de progreso por fases (incluido el porcentaje de
+   compilación de llama.cpp), registro en `~/.MyDGX/logs/setup-*.log` y sin
+   reposo del Mac. Si MyDGX ya funciona, ofrece Conectar o Reinstalar.
+4. **Listo.** Guarda el perfil (sustituye el perfil vacío inicial), abre el túnel,
+   importa la clave API y comprueba la API antes de mostrar el resumen.
+
+`--sudo-password-stdin` lee la contraseña de la entrada estándar, la reenvía por
+la entrada estándar de SSH y en el Spark la sirve a `sudo -A` desde un archivo
+0600 en `/dev/shm` que se borra al terminar. Nunca usa argumentos, variables de
+entorno ni el registro. **Primer despliegue completo…** sigue disponible como
+alternativa con Terminal (`--interactive`). Para actualizaciones posteriores usa
+**Guardar y desplegar**, que trabaja sin interacción mediante las reglas `sudoers`
+limitadas instaladas durante el primer despliegue.
 
 La guía completa para usuarios nuevos está en
 [`docs/quickstart.md`](../../docs/quickstart.md).

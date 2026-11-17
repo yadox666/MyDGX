@@ -44,8 +44,21 @@ if [[ "${MYDGX_BUNDLE_SOURCE:-0}" == "1" ]]; then
     REPO_DIR="$(git -C "$ROOT_DIR" rev-parse --show-toplevel)"
     SOURCE_DIR="$APP_DIR/Contents/Resources/MyDGX-Dashboard"
     mkdir -p "$SOURCE_DIR"
-    git -C "$REPO_DIR" archive --format=tar HEAD | tar -x -C "$SOURCE_DIR"
-    git -C "$REPO_DIR" rev-parse HEAD > "$SOURCE_DIR/.mydgx-source-commit"
+    if [[ "${MYDGX_BUNDLE_WORKTREE:-0}" == "1" ]]; then
+        # Local testing only: uncommitted changes, still without ignored files (.env).
+        (
+            cd "$REPO_DIR"
+            git ls-files -z --cached --others --exclude-standard |
+                while IFS= read -r -d '' file; do
+                    [[ -f "$file" ]] && printf '%s\0' "$file"
+                done |
+                tar --null -cf - -T - | tar -x -C "$SOURCE_DIR"
+        )
+        print "worktree-$(git -C "$REPO_DIR" rev-parse --short HEAD)-dirty" > "$SOURCE_DIR/.mydgx-source-commit"
+    else
+        git -C "$REPO_DIR" archive --format=tar HEAD | tar -x -C "$SOURCE_DIR"
+        git -C "$REPO_DIR" rev-parse HEAD > "$SOURCE_DIR/.mydgx-source-commit"
+    fi
 fi
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then

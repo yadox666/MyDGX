@@ -31,6 +31,7 @@ CLI_SSH_PORT=""
 CLI_SSH_USER=""
 CLI_SSH_IDENTITY=""
 INTERACTIVE=0
+SUDO_PASSWORD_STDIN=0
 INSTALL_DUCKDNS=0
 DEPLOY_MODE="incremental"
 
@@ -86,12 +87,16 @@ while (($#)); do
       INTERACTIVE=1
       shift
       ;;
+    --sudo-password-stdin)
+      SUDO_PASSWORD_STDIN=1
+      shift
+      ;;
     --duckdns)
       INSTALL_DUCKDNS=1
       shift
       ;;
     -h|--help)
-      echo "Uso: ./start.sh deploy [USUARIO@HOST [-p PUERTO] [-i RUTA_CLAVE] [--interactive]] [--database RUTA] [--duckdns] [--frontend|--full|--repair]"
+      echo "Uso: ./start.sh deploy [USUARIO@HOST [-p PUERTO] [-i RUTA_CLAVE] [--interactive|--sudo-password-stdin]] [--database RUTA] [--duckdns] [--frontend|--full|--repair]"
       exit 0
       ;;
     *@*)
@@ -111,6 +116,17 @@ done
 
 if [[ "$DEPLOY_MODE" == "frontend" && -n "$DATABASE_RESTORE" ]]; then
   die "--frontend no se puede combinar con --database."
+fi
+
+sudo_password=""
+if [[ "$SUDO_PASSWORD_STDIN" == "1" ]]; then
+  [[ "$INTERACTIVE" != "1" ]] ||
+    die "--sudo-password-stdin no se puede combinar con --interactive."
+  [[ ! -t 0 ]] || die "--sudo-password-stdin espera la contraseña por una tubería."
+  IFS= read -r sudo_password || [[ -n "$sudo_password" ]] ||
+    die "No se recibió la contraseña de sudo."
+  # SSH and rsync below would otherwise consume the rest of stdin.
+  exec </dev/null
 fi
 
 command -v python3 >/dev/null 2>&1 || die "Falta python3."
@@ -605,6 +621,7 @@ openwebui_public_url="${23}"
 comfyui_public_url="${24}"
 [[ "$comfyui_public_url" == "__MYDGX_EMPTY__" ]] && comfyui_public_url=""
 install_duckdns="${25}"
+sudo_password_stdin="${26:-0}"
 if [[ "$install_duckdns" == "0" &&
       -f /etc/systemd/system/mydgx-duckdns.timer ]]; then
   install_duckdns=1
@@ -636,7 +653,8 @@ valid_switch "$force_llama_build" &&
   valid_switch "$install_whisper" &&
   valid_switch "$install_duckdns" &&
   valid_switch "$restore_database" &&
-  valid_switch "$interactive_mode" ||
+  valid_switch "$interactive_mode" &&
+  valid_switch "$sudo_password_stdin" ||
   { echo "Los interruptores de despliegue deben valer 0 o 1." >&2; exit 1; }
 [[ -z "$default_profile_id" || "$default_profile_id" =~ ^[A-Za-z0-9._-]{1,100}$ ]] ||
   { echo "DEFAULT_PROFILE_ID remoto no es válido." >&2; exit 1; }
@@ -675,13 +693,43 @@ if [[ "$install_duckdns" == "1" &&
   echo "La primera instalación de DuckDNS requiere --repair --interactive." >&2
   exit 1
 fi
+sudo_secret_dir=""
 stop_sudo_keepalive() {
   if [[ -n "$sudo_keepalive_pid" ]]; then
     kill "$sudo_keepalive_pid" 2>/dev/null || true
     wait "$sudo_keepalive_pid" 2>/dev/null || true
     sudo_keepalive_pid=""
   fi
+  if [[ -n "$sudo_secret_dir" ]]; then
+    rm -rf -- "$sudo_secret_dir"
+    sudo_secret_dir=""
+  fi
 }
+if [[ "$sudo_password_stdin" == "1" ]]; then
+  IFS= read -r sudo_password || [[ -n "$sudo_password" ]] ||
+    { echo "No se recibió la contraseña de sudo." >&2; exit 1; }
+  if [[ "$privileged_deploy" == "1" ]] && ! sudo -n true 2>/dev/null; then
+    secret_parent=/dev/shm
+    [[ -d "$secret_parent" && -w "$secret_parent" ]] || secret_parent="${TMPDIR:-/tmp}"
+    sudo_secret_dir="$(mktemp -d "$secret_parent/mydgx-sudo.XXXXXX")"
+    trap stop_sudo_keepalive EXIT
+    printf '%s\n' "$sudo_password" >"$sudo_secret_dir/secret"
+    printf '#!/bin/sh\nexec cat %q\n' "$sudo_secret_dir/secret" >"$sudo_secret_dir/askpass"
+    chmod 0600 "$sudo_secret_dir/secret"
+    chmod 0700 "$sudo_secret_dir/askpass"
+    export SUDO_ASKPASS="$sudo_secret_dir/askpass"
+    # Without a TTY sudo caches credentials per parent process, so pipelines and
+    # child scripts would miss the cache; every call reads the private askpass instead.
+    sudo() {
+      [[ "${1:-}" == "-n" ]] && shift
+      command sudo -A "$@"
+    }
+    export -f sudo
+    command sudo -A -v 2>/dev/null ||
+      { echo "La contraseña de sudo no es correcta." >&2; exit 1; }
+  fi
+  unset sudo_password
+fi
 if [[ "$privileged_deploy" == "1" && "$interactive_mode" == "1" ]]; then
   sudo -v ||
     { echo "No se pudo validar sudo de forma interactiva." >&2; exit 1; }
@@ -694,7 +742,7 @@ if [[ "$privileged_deploy" == "1" && "$interactive_mode" == "1" ]]; then
   sudo_keepalive_pid=$!
 elif [[ "$privileged_deploy" == "1" ]]; then
   sudo -n true 2>/dev/null ||
-    { echo "Este --full/--repair necesita sudo: usa también --interactive." >&2; exit 1; }
+    { echo "Este --full/--repair necesita sudo: usa también --interactive o --sudo-password-stdin." >&2; exit 1; }
 else
   log "Deploy incremental sin privilegios de instalación"
 fi
@@ -1749,30 +1797,37 @@ rm -rf -- "$backup_root" "$stage_root"
 stop_sudo_keepalive
 trap - EXIT
 REMOTE
-ssh "${remote_ssh_args[@]}" "$ssh_user@$host" \
-  bash "$remote_runtime" \
-    "$REMOTE_DIR" \
-    "$REMOTE_STAGE" \
-    "$LLAMA_CPP_REF" \
-    "$FORCE_LLAMA_BUILD" \
-    "$INSTALL_OLLAMA" \
-    "$ollama_version_arg" \
-    "$INSTALL_CONTAINERS" \
-    "$INSTALL_OPENWEBUI" \
-    "${OPENWEBUI_VERSION:-__MYDGX_EMPTY__}" \
-    "$INSTALL_SEARXNG" \
-    "$SEARXNG_IMAGE" \
-    "$INSTALL_COMFYUI" \
-    "$COMFYUI_REF" \
-    "$INSTALL_COMFYUI_MODELS" \
-    "$INSTALL_HASHCAT" \
-    "$INSTALL_WHISPER" \
-    "$WHISPER_BASE_IMAGE" \
-    "$WHISPER_MODEL" \
-    "$restore_database" \
-    "${DEFAULT_PROFILE_ID:-__MYDGX_EMPTY__}" \
-    "$DEPLOY_MODE" \
-    "$INTERACTIVE" \
-    "${OPENWEBUI_PUBLIC_URL:-__MYDGX_EMPTY__}" \
-    "${COMFYUI_PUBLIC_URL:-__MYDGX_EMPTY__}" \
-    "$INSTALL_DUCKDNS"
+remote_args=(
+  "$REMOTE_DIR"
+  "$REMOTE_STAGE"
+  "$LLAMA_CPP_REF"
+  "$FORCE_LLAMA_BUILD"
+  "$INSTALL_OLLAMA"
+  "$ollama_version_arg"
+  "$INSTALL_CONTAINERS"
+  "$INSTALL_OPENWEBUI"
+  "${OPENWEBUI_VERSION:-__MYDGX_EMPTY__}"
+  "$INSTALL_SEARXNG"
+  "$SEARXNG_IMAGE"
+  "$INSTALL_COMFYUI"
+  "$COMFYUI_REF"
+  "$INSTALL_COMFYUI_MODELS"
+  "$INSTALL_HASHCAT"
+  "$INSTALL_WHISPER"
+  "$WHISPER_BASE_IMAGE"
+  "$WHISPER_MODEL"
+  "$restore_database"
+  "${DEFAULT_PROFILE_ID:-__MYDGX_EMPTY__}"
+  "$DEPLOY_MODE"
+  "$INTERACTIVE"
+  "${OPENWEBUI_PUBLIC_URL:-__MYDGX_EMPTY__}"
+  "${COMFYUI_PUBLIC_URL:-__MYDGX_EMPTY__}"
+  "$INSTALL_DUCKDNS"
+  "$SUDO_PASSWORD_STDIN"
+)
+if [[ "$SUDO_PASSWORD_STDIN" == "1" ]]; then
+  printf '%s\n' "$sudo_password" |
+    ssh "${remote_ssh_args[@]}" "$ssh_user@$host" bash "$remote_runtime" "${remote_args[@]}"
+else
+  ssh "${remote_ssh_args[@]}" "$ssh_user@$host" bash "$remote_runtime" "${remote_args[@]}"
+fi

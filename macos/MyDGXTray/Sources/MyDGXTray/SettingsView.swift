@@ -7,7 +7,6 @@ struct SettingsView: View {
     @State private var selectedID: String?
     @State private var apiKey = ""
     @State private var message = ""
-    @State private var showFirstRunSetup = false
     @State private var showNetworkDiscovery = false
 
     init(model: AppModel) {
@@ -69,12 +68,12 @@ struct SettingsView: View {
                     .disabled(draft.connections.count <= 1 || selectedProfile == nil)
                     .help("Eliminar perfil")
                     Button {
-                        showFirstRunSetup = true
+                        model.openSetupWizard()
                     } label: {
                         Image(systemName: "wand.and.stars")
                             .frame(width: 24, height: 14)
                     }
-                    .help("Configurar un DGX Spark recién instalado")
+                    .help("Asistente de instalación Spark: añadir e instalar otro Spark")
                     Spacer()
                 }
                 .padding(8)
@@ -111,18 +110,6 @@ struct SettingsView: View {
             }
         }
         .frame(width: 820, height: 760)
-        .sheet(isPresented: $showFirstRunSetup) {
-            FirstRunSetupView(existingProfiles: draft.connections) { profile in
-                draft.connections.append(profile)
-                selectedID = profile.id
-                do {
-                    try model.save(configuration: draft, apiKey: nil)
-                    message = "Perfil \(profile.alias) creado"
-                } catch {
-                    message = error.localizedDescription
-                }
-            }
-        }
         .sheet(isPresented: $showNetworkDiscovery) {
             NetworkDiscoveryView(configuration: draft) { updated in
                 try model.save(configuration: updated, apiKey: nil)
@@ -131,6 +118,13 @@ struct SettingsView: View {
             }
         }
         .onReceive(model.$configuration) { updated in
+            let known = Set(draft.connections.map(\.id))
+            if let added = updated.connections.first(where: { !known.contains($0.id) }) {
+                draft = updated
+                selectedID = added.id
+                message = "Perfil \(added.alias) creado por el asistente"
+                return
+            }
             for detected in updated.connections {
                 guard let index = draft.connections.firstIndex(where: { $0.id == detected.id }) else {
                     continue

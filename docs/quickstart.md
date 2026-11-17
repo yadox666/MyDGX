@@ -1,18 +1,17 @@
 # Inicio rápido: instalar MyDGX desde macOS
 
-Esta guía está pensada para usuarios sin experiencia técnica. MyDGXTray permite
-localizar un DGX Spark, preparar el acceso SSH, desplegar MyDGX y abrir sus
-servicios. Solo tendrás que escribir la contraseña del Spark en Terminal cuando
-macOS la solicite; MyDGXTray no la guarda.
+Esta guía está pensada para usuarios sin experiencia técnica. La primera vez que
+abres MyDGXTray se abre solo el **Asistente de instalación Spark**: encuentra el
+Spark, lo conecta, instala MyDGX y te deja listo para usarlo, sin abrir Terminal.
 
 ## Resumen
 
 1. Descarga MyDGXTray desde [Releases](https://github.com/yadox666/MyDGX/releases)
    y muévela a `Aplicaciones`.
-2. En **Preferencias**, pulsa la **varita mágica**, busca el Spark y sigue el
-   asistente. Escribirás una vez la contraseña del usuario del Spark.
-3. Pulsa **Primer despliegue completo…** y escribe la contraseña de `sudo`.
-4. Espera a **Primer despliegue terminado** y pulsa **Abrir Dashboard**.
+2. Ábrela. El asistente aparece automáticamente y en el menú solo verás
+   **Asistente de instalación Spark…** hasta terminarlo.
+3. Sigue sus cuatro pasos: **Buscar**, **Conectar**, **Instalar** y **Listo**.
+4. Pulsa **Abrir Dashboard**.
 
 No necesitas descargar el código fuente, instalar Homebrew ni Node.js: la
 aplicación incluye MyDGX y el Spark compila lo demás.
@@ -50,55 +49,95 @@ shasum -a 256 -c MyDGXTray-*-macos-universal.zip.sha256
 Debe responder `OK`. Si prefieres compilarla tú, sigue el
 [README de MyDGXTray](../macos/MyDGXTray/README.md).
 
-## 2. Añade el Spark
+## 2. Paso 1 · Buscar
 
-1. Abre **Preferencias** desde el icono de MyDGXTray.
-2. Pulsa la **varita mágica**.
-3. Marca **Primer arranque completado**.
-4. Pulsa **Buscar en la red local**.
-   - Si aparece un solo Spark, sus datos se rellenan automáticamente.
-   - Si no aparece, escribe su IP o nombre de red, el usuario y el puerto SSH.
-5. Pulsa **Generar par Ed25519**.
-6. Pulsa **Instalar clave pública**. Se abrirá Terminal y pedirá una sola vez la
-   contraseña del usuario del Spark.
-7. Regresa al asistente y pulsa **Verificar acceso**.
-8. Cuando aparezca la confirmación verde, pulsa **Crear perfil**.
+### Permiso de red local
 
-Para un servidor remoto sigue los mismos pasos, pero usa su dominio o IP pública
-y su puerto SSH. Después puedes conservar la dirección LAN en el campo interno y
-añadir una **IP o hostname público** con el **puerto público/NAT** en Preferencias.
-El Tray prueba primero LAN y cambia automáticamente a Internet si no responde.
-Es preferible acceder mediante VPN. Si publicas SSH directamente, usa
+La primera vez, el asistente explica que macOS va a pedir permiso y espera a que
+pulses **Buscar mi Spark**. Entonces aparece el aviso del sistema:
+
+> «MyDGX Tray» quiere buscar dispositivos en tus redes locales.
+
+Pulsa **Permitir**. Desde macOS 15 este permiso es obligatorio para cualquier app
+que busque o conecte con equipos de tu red, incluidos los `ssh` que lanza
+MyDGXTray, y solo se pregunta una vez. Sin él, la app no puede encontrar el Spark
+ni conectarse a él por la red local. Si lo denegaste, el asistente lo detecta y
+ofrece **Abrir Ajustes de Red local**: activa **MyDGX Tray** en **Ajustes del
+Sistema › Privacidad y seguridad › Red local** y pulsa **Buscar otra vez**.
+
+![Paso 1: explicación del permiso de red local](images/setup-permission.png)
+
+### Elegir el Spark
+
+El asistente busca el Spark en tu red durante unos segundos y lo muestra con su
+marca y modelo (NVIDIA, ASUS, Lenovo, HP…), su dirección, el puerto SSH y, si se
+puede saber antes de entrar, el sistema operativo.
+
+- Si aparece, selecciónalo (ya viene marcado si solo hay uno) y pulsa
+  **Continuar**.
+- Si no aparece, escribe su IP o su nombre de red (viene en la etiqueta, por
+  ejemplo `spark-1a2b.local`) y pulsa **Comprobar**. Deja el puerto en «auto»
+  salvo que sepas que es otro: se prueban 22, 65022 y 2222.
+- ¿Spark nuevo sin encender? Despliega **¿Tu Spark es nuevo…?** para abrir la
+  guía oficial de NVIDIA o preparar un USB OEMDATA.
+
+![Paso 1: equipos encontrados en la red](images/setup-find.png)
+
+## 3. Paso 2 · Conectar
+
+Escribe el usuario y la contraseña que creaste en el primer arranque del Spark y
+pulsa **Conectar**. Una lista con barra de progreso muestra cada comprobación:
+
+1. Guarda la identidad del Spark (su huella SSH) en `~/.MyDGX/known_hosts`.
+2. Crea una clave Ed25519 solo para este Mac en `~/.MyDGX/keys`.
+3. Autoriza esa clave en el Spark usando la contraseña una única vez.
+4. Entra ya sin contraseña.
+5. Detecta la marca, el modelo y el sistema operativo (DGX OS o Ubuntu).
+6. Comprueba que el usuario puede administrar el equipo (`sudo`).
+
+Si ya tienes una clave SSH autorizada, marca **Ya tengo una clave SSH** y elígela;
+la contraseña pasa a ser opcional. El nombre del equipo se rellena con el modelo
+detectado y puedes cambiarlo.
+
+![Paso 2: inicio de sesión y comprobaciones](images/setup-connect.png)
+
+## 4. Paso 3 · Instalar
+
+Pulsa **Instalar MyDGX**. La barra de progreso muestra el porcentaje, la fase
+actual (copiar MyDGX, preparar el sistema, compilar el motor de IA, instalar apps
+y servicios, arrancar y comprobar) y el tiempo transcurrido. La primera vez tarda
+entre 20 y 40 minutos; el Mac no entra en reposo mientras tanto.
+
+Al terminar, el asistente guarda el perfil, abre el túnel SSH, importa la clave
+API del dashboard y comprueba que todo responde. Si MyDGX ya estaba instalado y
+funcionando, verás **Conectar** (y **Reinstalar** para actualizarlo).
+
+Si algo falla, pulsa **Ver registro detallado** o **Reintentar**: lo ya instalado
+se conserva.
+
+![Paso 3: instalación con progreso por fases](images/setup-install.png)
+
+## 5. Paso 4 · Listo
+
+El asistente muestra un resumen del equipo. Pulsa **Abrir Dashboard** o
+**Terminar**; el menú de MyDGXTray ya aparece completo.
+
+![Paso 4: Spark listo](images/setup-done.png)
+ Desde él puedes abrir Open
+WebUI, ComfyUI, Terminal SSH y las aplicaciones web de los perfiles.
+
+Si el administrador activó una contraseña web, introdúcela en la pantalla de
+inicio de sesión del dashboard.
+
+### Otro Spark o un servidor remoto
+
+Abre **Preferencias** y pulsa la **varita mágica**: es el mismo asistente. Para un
+servidor remoto escribe en el paso 1 su dominio o IP pública y su puerto SSH.
+Después puedes añadir una **IP o hostname público** con el **puerto público/NAT**
+en Preferencias; el Tray prueba primero la LAN y cambia a Internet si no
+responde. Es preferible acceder mediante VPN. Si publicas SSH directamente, usa
 autenticación por clave, desactiva contraseñas después de verificar el acceso y
 limita el origen con el firewall.
-
-## 3. Haz el primer despliegue
-
-1. En Preferencias, selecciona el perfil recién creado.
-2. Deja vacío **Despliegue → Proyecto local** para usar la versión incluida en
-   la aplicación, y conserva `MyDGX-Dashboard` como **Directorio remoto**.
-3. Pulsa **Primer despliegue completo…**.
-4. Terminal mostrará la huella SSH y puede pedir confirmación. Compárala con la
-   del Spark antes de aceptar.
-5. Escribe la contraseña administrativa del Spark cuando `sudo` la solicite.
-6. Espera a que aparezca **Primer despliegue terminado**. La instalación inicial
-   puede tardar porque prepara paquetes, CUDA, llama.cpp, Docker y los servicios
-   multimedia.
-
-El despliegue genera una clave API privada en el Spark. MyDGXTray la importa
-automáticamente por SSH y la guarda en `~/.MyDGX/credentials` con permisos
-`0600`; nunca se imprime ni se guarda en el archivo de configuración del Tray.
-
-## 4. Conecta y abre el dashboard
-
-1. MyDGXTray intentará conectar automáticamente al terminar.
-2. Si no lo hace, abre su menú y pulsa **Iniciar conexión**.
-3. Pulsa **Abrir Dashboard**.
-4. Si el administrador activó una contraseña web, introdúcela en la pantalla de
-   inicio de sesión.
-
-Desde el mismo menú puedes abrir Open WebUI, ComfyUI, Terminal SSH y las
-aplicaciones web de los perfiles.
 
 ## Actualizaciones posteriores
 
@@ -131,14 +170,18 @@ Después usa `tu-nombre.duckdns.org` como **IP o hostname público** del perfil.
 
 ## Si algo falla
 
-- **No encuentra el Spark:** introduce manualmente la IP; comprueba que SSH esté
-  activo y que ambos equipos puedan comunicarse.
-- **Verificar acceso falla:** termina primero la ventana de Terminal usada para
-  instalar la clave pública.
-- **Undeployed:** selecciona **Primer despliegue completo…**.
+- **No encuentra el Spark:** comprueba el permiso de **Red local** (ver Paso 1),
+  introduce manualmente la IP y verifica que SSH esté activo y que ambos equipos
+  puedan comunicarse.
+- **«El Spark no acepta contraseña por SSH»:** usa **Ya tengo una clave SSH**.
+- **«La identidad del Spark no coincide»:** si lo reinstalaste, borra su línea de
+  `~/.MyDGX/known_hosts` y vuelve a conectar.
+- **Undeployed:** abre el asistente desde Preferencias o usa
+  **Primer despliegue completo…**.
 - **Autenticación requerida:** espera unos segundos; el Tray sincroniza su clave
   API mediante SSH. El dashboard web puede pedir una contraseña independiente.
-- **El despliegue falla:** pulsa **Abrir log** en la tarjeta de progreso.
+- **El despliegue falla:** pulsa **Ver registro detallado** en el asistente o
+  **Abrir log** en la tarjeta de progreso de Preferencias.
 - **El túnel no conecta:** verifica host, puerto, usuario y clave SSH en
   Preferencias.
 
@@ -146,6 +189,12 @@ Después usa `tu-nombre.duckdns.org` como **IP o hostname público** del perfil.
 
 - No copies contraseñas, tokens ni claves privadas dentro del repositorio.
 - No publiques directamente los puertos 8088, 3000, 4000 u 8188 en Internet.
-- Verifica siempre la huella SSH en el primer acceso.
+- El asistente guarda la huella SSH del Spark la primera vez y la exige después;
+  en redes no confiables compárala con `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`
+  ejecutado en el propio Spark.
+- La contraseña del Spark solo vive en memoria mientras el asistente la usa. En el
+  Mac llega a `ssh` por una FIFO privada; al Spark viaja por la entrada estándar de
+  SSH y `sudo` la lee de un archivo 0600 en `/dev/shm` (RAM) que se borra al
+  terminar o fallar. Nunca va en argumentos, variables de entorno ni registros.
 - MyDGXTray guarda las API keys en `~/.MyDGX/credentials` y las claves SSH en
   `~/.MyDGX/keys`, con permisos restrictivos.

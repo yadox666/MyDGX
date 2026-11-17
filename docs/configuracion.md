@@ -79,7 +79,7 @@ ejecuta al arrancar y después aproximadamente cada hora.
 | Variable | Por defecto | Descripción |
 |---|---|---|
 | `LLAMA_CPP_SERVER_PATH` | `llama-server` | Ejecutable principal. |
-| `LLAMA_CPP_B10679_PATH` | vacío | Build fijada b10679 (la instala `system-repair.sh`), usada por los modelos que la requieren. |
+| `LLAMA_CPP_B10679_PATH` | vacío | Build b10679 anterior, usada por los modelos que la requieren. Al actualizar a v1.0.0 se conserva en `/usr/local/lib/mydgx/llama-b10679/llama-server`. |
 | `LLAMA_CPP_B11429_PATH` | vacío | Build fijada b11429 (ARTIFEX), usada por los modelos que la requieren. |
 
 ## Perfiles y apps

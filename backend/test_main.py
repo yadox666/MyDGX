@@ -4917,6 +4917,13 @@ class ProfileApiTests(unittest.TestCase):
             self.assertEqual(qwen["context_size"], 262144)
             self.assertEqual(qwen["presence_penalty"], 1.5)
             self.assertEqual(qwen["active"], 0)
+            self.assertEqual({item["runtime_requirement"] for item in profiles}, {main_module.LLAMA_CPP_RUNTIME})
+
+            db.execute("UPDATE profiles SET runtime_requirement=? WHERE id='artifex-v7'", ("llama.cpp b10679 · CUDA 13 · sm_121 · tool calling",))
+            db.execute("UPDATE profiles SET runtime_requirement=? WHERE id='artifex-gpt-oss'", ("Requiere llama.cpp b11429",))
+            seed_artifex_profiles()
+            self.assertEqual(db.rows("SELECT runtime_requirement FROM profiles WHERE id='artifex-v7'")[0]["runtime_requirement"], "llama.cpp v1.0.0 · CUDA 13 · sm_121 · tool calling")
+            self.assertEqual(db.rows("SELECT runtime_requirement FROM profiles WHERE id='artifex-gpt-oss'")[0]["runtime_requirement"], "Requiere llama.cpp b11429")
         db.path = original_path
 
     def test_recovered_default_profiles_are_seeded_once_without_overwriting(self) -> None:

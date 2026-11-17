@@ -1990,6 +1990,10 @@ def persist_model_metrics(samples: list[dict[str, Any]]) -> None:
         connection.commit()
 
 
+LLAMA_CPP_RUNTIME = "llama.cpp v1.0.0 · CUDA 13 · sm_121"
+# Labels written by earlier releases, when profiles were tied to a specific build.
+LEGACY_LLAMA_CPP_LABELS = ("llama.cpp b10679", "llama.cpp b11429")
+
 ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
     {
         "id": "artifex-tiel-q5", "name": "ARTIFEX · Cyber-Tiel Q5", "model_ref": "bughunter-tiel",
@@ -1998,7 +2002,7 @@ ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
         "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
         "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0,
         "cache_k": "q8_0", "cache_v": "q8_0", "memory": 40960,
-        "runtime": "llama.cpp b10679 · CUDA 13 · sm_121",
+        "runtime": LLAMA_CPP_RUNTIME,
     },
     {
         "id": "artifex-tiel-q6", "name": "ARTIFEX · Cyber-Tiel Q6", "model_ref": "bughunter-tiel",
@@ -2007,7 +2011,7 @@ ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
         "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
         "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0,
         "cache_k": "q8_0", "cache_v": "q8_0", "memory": 49152,
-        "runtime": "llama.cpp b10679 · CUDA 13 · sm_121",
+        "runtime": LLAMA_CPP_RUNTIME,
     },
     {
         "id": "artifex-v7", "name": "ARTIFEX · BugHunter v7", "model_ref": "bughunter-v7",
@@ -2016,7 +2020,7 @@ ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
         "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
         "temperature": 0.1, "top_p": 0.9, "top_k": 0, "min_p": 0,
         "cache_k": "", "cache_v": "", "memory": 40960,
-        "runtime": "llama.cpp b10679 · CUDA 13 · sm_121",
+        "runtime": LLAMA_CPP_RUNTIME,
     },
     {
         "id": "artifex-v8", "name": "ARTIFEX · BugHunter v8", "model_ref": "bughunter-v8",
@@ -2025,7 +2029,7 @@ ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
         "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
         "temperature": 0.1, "top_p": 0.9, "top_k": 0, "min_p": 0,
         "cache_k": "", "cache_v": "", "memory": 30720,
-        "runtime": "llama.cpp b10679 · CUDA 13 · sm_121",
+        "runtime": LLAMA_CPP_RUNTIME,
     },
     {
         "id": "artifex-gpt-oss", "name": "ARTIFEX · GPT-OSS 120B", "model_ref": "bughunter-gpt-oss",
@@ -2034,7 +2038,7 @@ ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
         "temperature": 1.0, "top_p": 1.0, "top_k": 0, "min_p": 0,
         "cache_k": "", "cache_v": "", "memory": 81920, "reasoning_off": 0,
         "reasoning_effort": "medium", "kv_unified": 0,
-        "runtime": "llama.cpp b11429 · CUDA 13 · sm_121",
+        "runtime": LLAMA_CPP_RUNTIME,
     },
     {
         "id": "artifex-qwen-flash", "name": "ARTIFEX · Qwen Flash", "model_ref": "bughunter-qwen-flash",
@@ -2047,7 +2051,7 @@ ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
         "port": 18080, "context": 262144, "parallel": 1, "batch": 2048, "ubatch": 2048,
         "temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0,
         "presence": 1.5, "cache_k": "", "cache_v": "", "memory": 102400,
-        "kv_unified": 0, "runtime": "llama.cpp b11429 · CUDA 13 · sm_121",
+        "kv_unified": 0, "runtime": LLAMA_CPP_RUNTIME,
     },
 )
 
@@ -2076,6 +2080,12 @@ def seed_artifex_profiles() -> None:
                 preset.get("kv_unified", 1), 1, preset["memory"],
                 "ARTIFEX gpu/remote/start_server.sh", preset["runtime"], 0, now, now,
             ),
+        )
+    for legacy in LEGACY_LLAMA_CPP_LABELS:
+        db.execute(
+            "UPDATE profiles SET runtime_requirement=replace(runtime_requirement, ?, ?), updated_at=? "
+            "WHERE runtime_requirement LIKE ?",
+            (legacy, "llama.cpp v1.0.0", now, f"{legacy}%"),
         )
 
 

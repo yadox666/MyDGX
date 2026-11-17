@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="${1:-}"
 SERVICE_USER="${2:-}"
-LLAMA_REF="${3:-b10679}"
+LLAMA_REF="${3:-v1.0.0}"
 ENABLE_SEARXNG="${4:-1}"
 ENABLE_COMFYUI="${5:-1}"
 ENABLE_DUCKDNS="${6:-0}"

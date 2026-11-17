@@ -97,7 +97,7 @@ procesos completo.
   clave verificada. hashcat se comprueba por SHA-256. El instalador nativo de
   Claude Code exige `MYDGX_CLAUDE_INSTALLER_SHA256`.
 - **Versiones fijadas.** Open WebUI por versión, SearXNG por digest de imagen,
-  ComfyUI por commit y llama.cpp b10679 por commit verificado.
+  ComfyUI por commit y llama.cpp v1.0.0 por commit verificado.
 
 ## Servicios multimodales
 

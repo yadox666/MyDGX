@@ -209,12 +209,95 @@ enum SparkSetup {
         try handle.write(contentsOf: Data(keys.utf8))
     }
 
+    struct PrivateKeyInfo: Equatable {
+        let fingerprint: String
+        let encrypted: Bool
+    }
+
+    /// Rejects public keys and non-key files before any connection is attempted.
+    static func inspectPrivateKey(at path: String) async throws -> PrivateKeyInfo {
+        let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 64 * 1024,
+              let head = try? String(contentsOf: url, encoding: .utf8) else {
+            throw SetupError.notPrivateKey
+        }
+        let text = head.trimmingCharacters(in: .whitespacesAndNewlines)
+        if url.pathExtension == "pub" || text.hasPrefix("ssh-") || text.hasPrefix("ecdsa-") || text.hasPrefix("sk-") {
+            throw SetupError.publicKeyChosen
+        }
+        guard text.hasPrefix("-----BEGIN"), text.contains("PRIVATE KEY-----") else {
+            throw SetupError.notPrivateKey
+        }
+        let listed = try await run("/usr/bin/ssh-keygen", ["-l", "-f", url.path], timeout: 10)
+        guard listed.status == 0,
+              let fingerprint = fingerprintSet([listed.output]).first else {
+            throw SetupError.notPrivateKey
+        }
+        let unlocked = try await run("/usr/bin/ssh-keygen", ["-y", "-P", "", "-f", url.path], timeout: 10)
+        return PrivateKeyInfo(fingerprint: fingerprint, encrypted: unlocked.status != 0)
+    }
+
+    static func agentHasKey(_ fingerprint: String) async -> Bool {
+        guard let listed = try? await run("/usr/bin/ssh-add", ["-l"], timeout: 10) else { return false }
+        return listed.output.contains(fingerprint)
+    }
+
+    /// Unlocks a passphrase-protected key into ssh-agent and stores the passphrase in the macOS Keychain.
+    static func addKeyToAgent(path: String, passphrase: String) async throws {
+        let askpass = try AskpassSecret(passphrase)
+        defer { askpass.remove() }
+        let result = try await run(
+            "/usr/bin/ssh-add",
+            ["--apple-use-keychain", NSString(string: path).expandingTildeInPath],
+            environment: askpass.environment,
+            timeout: 20
+        )
+        guard result.status == 0 else { throw SetupError.wrongPassphrase }
+    }
+
+    /// Keys whose passphrase lives in the Keychain are not in ssh-agent after a restart.
+    static func loadKeychainKeys(for profiles: [ConnectionProfile]) async {
+        for profile in profiles where !profile.ssh.identityFile.isEmpty {
+            guard let info = try? await inspectPrivateKey(at: profile.ssh.identityFile), info.encrypted else {
+                continue
+            }
+            if await agentHasKey(info.fingerprint) { continue }
+            _ = try? await run("/usr/bin/ssh-add", ["--apple-load-keychain", "-q"], timeout: 15)
+            return
+        }
+    }
+
+    /// Public half of a private key: its .pub, the key itself if unencrypted, or ssh-agent.
+    static func publicKey(forPrivateKey path: String, info: PrivateKeyInfo) async throws -> String {
+        let expanded = NSString(string: path).expandingTildeInPath
+        if let pub = try? String(contentsOfFile: expanded + ".pub", encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           pub.hasPrefix("ssh-") || pub.hasPrefix("ecdsa-") || pub.hasPrefix("sk-") {
+            return pub
+        }
+        if !info.encrypted {
+            let derived = try await run("/usr/bin/ssh-keygen", ["-y", "-P", "", "-f", expanded], timeout: 10)
+            if derived.status == 0 { return derived.output.trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
+        let listed = try await run("/usr/bin/ssh-add", ["-L"], timeout: 10)
+        for line in listed.output.split(whereSeparator: \.isNewline).map(String.init)
+        where (try? await fingerprintLines(line))?.first?.contains(info.fingerprint) == true {
+            return line
+        }
+        throw BootstrapError.missingKeyPair
+    }
+
     /// Installs the profile's public key using the account password, without opening Terminal.
-    static func installPublicKey(profile: ConnectionProfile, password: String) async throws {
-        let publicKey = URL(fileURLWithPath: expandedIdentity(profile) + ".pub")
-        let key = try String(contentsOf: publicKey, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard key.hasPrefix("ssh-") else { throw BootstrapError.missingKeyPair }
+    static func installPublicKey(profile: ConnectionProfile, password: String, publicKey: String? = nil) async throws {
+        let key: String
+        if let publicKey {
+            key = publicKey
+        } else {
+            key = try String(contentsOf: URL(fileURLWithPath: expandedIdentity(profile) + ".pub"), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard key.hasPrefix("ssh-") || key.hasPrefix("ecdsa-") || key.hasPrefix("sk-"),
+              !key.contains("\n") else { throw BootstrapError.missingKeyPair }
         let askpass = try AskpassSecret(password)
         defer { askpass.remove() }
         let result = try await run(
@@ -544,6 +627,11 @@ enum SetupError: LocalizedError {
     case wrongSudoPassword
     case sshFailed
     case deployFailed(String)
+    case notPrivateKey
+    case publicKeyChosen
+    case passphraseRequired
+    case wrongPassphrase
+    case ownKeyNotAuthorized
 
     var errorDescription: String? {
         switch self {
@@ -566,6 +654,17 @@ enum SetupError: LocalizedError {
             return "No se pudo completar la conexión SSH."
         case .deployFailed(let detail):
             return detail
+        case .notPrivateKey:
+            return "Ese archivo no es una clave SSH privada. Elige, por ejemplo, ~/.ssh/id_ed25519."
+        case .publicKeyChosen:
+            return "Has elegido la clave pública (.pub). Elige el archivo sin extensión, que es la clave privada."
+        case .passphraseRequired:
+            return "Tu clave está protegida con una frase de paso. Escríbela para desbloquearla; "
+                + "se guardará en el Llavero de macOS."
+        case .wrongPassphrase:
+            return "La frase de paso de la clave no es correcta."
+        case .ownKeyNotAuthorized:
+            return "El Spark aún no acepta tu clave. Escribe la contraseña del Spark para autorizarla."
         }
     }
 }

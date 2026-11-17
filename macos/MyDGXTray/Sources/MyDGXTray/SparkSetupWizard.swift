@@ -95,6 +95,10 @@ final class SparkSetupWizard: ObservableObject {
     @Published var password = ""
     @Published var useExistingKey = false
     @Published var existingKeyPath = ""
+    @Published var keyPassphrase = ""
+    @Published private(set) var existingKeyInfo: SparkSetup.PrivateKeyInfo?
+    @Published private(set) var existingKeyUnlocked = false
+    @Published private(set) var existingKeyError: String?
     @Published var alias = ""
     @Published private(set) var connectChecklist: [ChecklistItem] = []
     @Published private(set) var connecting = false
@@ -158,6 +162,10 @@ final class SparkSetupWizard: ObservableObject {
 
     var detectedVariant: String {
         facts?.device.variant ?? selected?.guess.variant ?? "nvidia"
+    }
+
+    var needsKeyPassphrase: Bool {
+        useExistingKey && existingKeyInfo?.encrypted == true && !existingKeyUnlocked
     }
 
     var needsSudoPassword: Bool {
@@ -316,6 +324,10 @@ final class SparkSetupWizard: ObservableObject {
             errorMessage = "Elige el archivo de tu clave SSH privada."
             return
         }
+        if useExistingKey, let existingKeyError {
+            errorMessage = existingKeyError
+            return
+        }
         user = trimmedUser
         errorMessage = nil
         connecting = true
@@ -341,8 +353,18 @@ final class SparkSetupWizard: ObservableObject {
 
                 current = "key"
                 mark("key", .running)
+                var ownKey: SparkSetup.PrivateKeyInfo?
                 if useExistingKey {
                     profile.ssh.identityFile = existingKeyPath
+                    let info = try await SparkSetup.inspectPrivateKey(at: existingKeyPath)
+                    existingKeyInfo = info
+                    ownKey = info
+                    if info.encrypted, !(await SparkSetup.agentHasKey(info.fingerprint)) {
+                        guard !keyPassphrase.isEmpty else { throw SetupError.passphraseRequired }
+                        try await SparkSetup.addKeyToAgent(path: existingKeyPath, passphrase: keyPassphrase)
+                    }
+                    existingKeyUnlocked = info.encrypted
+                    keyPassphrase = ""
                 } else {
                     profile.ssh.identityFile = try SSHBootstrap.generateKeyPair(
                         profileID: profileID,
@@ -355,10 +377,12 @@ final class SparkSetupWizard: ObservableObject {
                 mark("authorize", .running)
                 if (try? await SparkSetup.verifyKeyAccess(profile: profile)) != nil {
                     mark("authorize", .skipped)
-                } else if useExistingKey {
-                    throw SetupError.keyRejected
                 } else if password.isEmpty {
-                    throw SetupError.passwordRequired
+                    throw useExistingKey ? SetupError.ownKeyNotAuthorized : SetupError.passwordRequired
+                } else if let ownKey {
+                    let publicKey = try await SparkSetup.publicKey(forPrivateKey: existingKeyPath, info: ownKey)
+                    try await SparkSetup.installPublicKey(profile: profile, password: password, publicKey: publicKey)
+                    mark("authorize", .done)
                 } else {
                     try await SparkSetup.installPublicKey(profile: profile, password: password)
                     mark("authorize", .done)
@@ -746,14 +770,29 @@ final class SparkSetupWizard: ObservableObject {
         panel.showsHiddenFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            existingKeyPath = url.path
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        existingKeyPath = url.path
+        existingKeyInfo = nil
+        existingKeyUnlocked = false
+        existingKeyError = nil
+        keyPassphrase = ""
+        Task {
+            do {
+                let info = try await SparkSetup.inspectPrivateKey(at: url.path)
+                guard existingKeyPath == url.path else { return }
+                existingKeyInfo = info
+                existingKeyUnlocked = info.encrypted ? await SparkSetup.agentHasKey(info.fingerprint) : false
+            } catch {
+                guard existingKeyPath == url.path else { return }
+                existingKeyError = error.localizedDescription
+            }
         }
     }
 
     func forgetSecrets() {
         password = ""
         sudoPassword = ""
+        keyPassphrase = ""
     }
 
     func goBack() {

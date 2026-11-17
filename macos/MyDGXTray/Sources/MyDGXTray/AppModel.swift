@@ -322,6 +322,7 @@ final class AppModel: ObservableObject {
     func startPolling(autoConnect: Bool = true) {
         guard pollingTask == nil else { return }
         pollingTask = Task {
+            await SparkSetup.loadKeychainKeys(for: configuration.connections.filter { $0.kind != .axforge })
             if autoConnect {
                 await connectOnLaunch()
             }

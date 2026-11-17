@@ -389,7 +389,7 @@ private struct ConnectStepView: View {
                         Text("Contraseña")
                             .foregroundStyle(.secondary)
                         SecureField(
-                            wizard.useExistingKey ? "Opcional" : "Contraseña del Spark",
+                            wizard.useExistingKey ? "Solo si el Spark aún no acepta tu clave" : "Contraseña del Spark",
                             text: $wizard.password
                         )
                         .textFieldStyle(.roundedBorder)
@@ -411,6 +411,35 @@ private struct ConnectStepView: View {
                                     .truncationMode(.middle)
                                 Spacer()
                                 Button("Elegir…") { wizard.chooseExistingKey() }
+                            }
+                        }
+                        if let error = wizard.existingKeyError {
+                            GridRow {
+                                Color.clear.frame(width: 1, height: 1)
+                                Label(error, systemImage: "exclamationmark.triangle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                        } else if wizard.needsKeyPassphrase {
+                            GridRow {
+                                Text("Frase de paso")
+                                    .foregroundStyle(.secondary)
+                                SecureField("Frase de paso de tu clave", text: $wizard.keyPassphrase)
+                                    .textFieldStyle(.roundedBorder)
+                                    .onSubmit { wizard.connect() }
+                            }
+                            GridRow {
+                                Color.clear.frame(width: 1, height: 1)
+                                Text("Se guarda en el Llavero de macOS para que el túnel se reconecte solo.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if wizard.existingKeyInfo?.encrypted == true {
+                            GridRow {
+                                Color.clear.frame(width: 1, height: 1)
+                                Label("Clave desbloqueada en el agente SSH", systemImage: "lock.open")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }

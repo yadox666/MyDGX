@@ -93,8 +93,17 @@ pulsa **Conectar**. Una lista con barra de progreso muestra cada comprobación:
 5. Detecta la marca, el modelo y el sistema operativo (DGX OS o Ubuntu).
 6. Comprueba que el usuario puede administrar el equipo (`sudo`).
 
-Si ya tienes una clave SSH autorizada, marca **Ya tengo una clave SSH** y elígela;
-la contraseña pasa a ser opcional. El nombre del equipo se rellena con el modelo
+Si ya tienes una clave SSH, marca **Ya tengo una clave SSH** y elige el archivo
+privado (sin `.pub`). El asistente no deja seguir si eliges la pública o un
+archivo que no es una clave.
+- Si el Spark ya acepta tu clave, la contraseña es opcional.
+- Si aún no la acepta, escribe la contraseña y el asistente la autoriza.
+- Si tu clave tiene frase de paso, el asistente te la pide una vez. La guarda en
+  el Llavero de macOS (`ssh-add --apple-use-keychain`), y MyDGXTray la carga al
+  arrancar para que el túnel se reconecte solo.
+
+Si el usuario necesita contraseña para `sudo` y no la escribiste aquí, el paso 3
+te la pide antes de instalar. El nombre del equipo se rellena con el modelo
 detectado y puedes cambiarlo.
 
 ![Paso 2: usuario y contraseña del Spark](images/setup-connect.png)

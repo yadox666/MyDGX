@@ -1351,17 +1351,19 @@ final class AppModel: ObservableObject {
     }
 
     /// Git checkout used for "Actualizar desde GitHub"; nil for the bundled source.
-    var gitHubUpdateSource: String? {
-        let path = Self.configuredSourcePath(configuration.activeConnection)
+    func gitHubUpdateSource(_ profile: ConnectionProfile) -> String? {
+        let path = Self.configuredSourcePath(profile)
         guard !path.isEmpty, SupportLayout.isDeploySource(path),
               FileManager.default.fileExists(atPath: "\(path)/.git") else { return nil }
         return path
     }
 
-    func openGitHubDeployment(ref: String = "main") {
+    func openGitHubDeployment(for profileID: String, ref: String = "main") {
         do {
-            let profile = configuration.activeConnection
-            guard let source = gitHubUpdateSource else {
+            guard let profile = configuration.connections.first(where: { $0.id == profileID }) else {
+                throw ConfigurationError.profileNotFound
+            }
+            guard let source = gitHubUpdateSource(profile) else {
                 throw RemoteActionError.gitHubSourceUnavailable
             }
             try openTerminalDeployment(

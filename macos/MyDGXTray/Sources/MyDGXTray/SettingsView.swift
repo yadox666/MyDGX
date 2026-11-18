@@ -302,6 +302,22 @@ struct SettingsView: View {
                         || !model.canDeploy(profile.wrappedValue)
                         || profile.wrappedValue.ssh.host.isEmpty
                 )
+                Button {
+                    confirmGitHubDeploy(profile.wrappedValue)
+                } label: {
+                    Label("Actualizar desde GitHub (main)…", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(
+                    model.operationInProgress
+                        || model.gitHubUpdateSource(profile.wrappedValue) == nil
+                        || !model.canDeploy(profile.wrappedValue)
+                        || profile.wrappedValue.ssh.host.isEmpty
+                )
+                .help(
+                    model.gitHubUpdateSource(profile.wrappedValue) == nil
+                        ? "Indica en Proyecto local un clon git de MyDGX"
+                        : "Despliega en Terminal el último commit de origin/main, con copia de seguridad y vuelta atrás"
+                )
                 if let deployment = model.deploymentStatus {
                     DeploymentProgressView(status: deployment) {
                         model.openDeploymentLog()
@@ -469,6 +485,21 @@ struct SettingsView: View {
         guard alert.runModal() == .alertFirstButtonReturn, save() else { return }
         message = "Despliegue iniciado; consulta el progreso en esta sección."
         model.deployConnection(id: profile.id)
+    }
+
+    private func confirmGitHubDeploy(_ profile: ConnectionProfile) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "¿Actualizar \(profile.alias) desde GitHub?"
+        alert.informativeText = """
+        Se desplegará el último commit de main en origin, no los cambios locales sin publicar. \
+        Se hace copia de seguridad, se reinician los servicios y, si algo falla, se restaura la versión anterior.
+        """
+        alert.addButton(withTitle: "Guardar y actualizar")
+        alert.addButton(withTitle: "Cancelar")
+        guard alert.runModal() == .alertFirstButtonReturn, save() else { return }
+        message = "Actualización abierta en Terminal."
+        model.openGitHubDeployment(for: profile.id)
     }
 }
 

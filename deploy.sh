@@ -46,6 +46,74 @@ set_deploy_mode() {
   DEPLOY_MODE="$1"
 }
 
+# --github [RAMA|TAG]: deploy a pushed commit instead of this working tree. The commit is
+# exported with `git archive` (no uncommitted or ignored files, so no .env) to a temporary
+# directory and this same script runs from there; the DGX never needs GitHub access.
+deploy_from_github() {
+  local ref="$1"
+  shift
+  command -v git >/dev/null 2>&1 || die "Falta git."
+  git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 ||
+    die "--github necesita ejecutarse desde el repositorio git de MyDGX."
+  [[ "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ && "$ref" != *..* ]] ||
+    die "Rama o tag no válido: $ref"
+  local origin
+  origin="$(git -C "$ROOT" remote get-url origin 2>/dev/null)" ||
+    die "El repositorio no tiene remoto origin."
+  printf 'Descargando %s desde %s…\n' "$ref" "$origin"
+  git -C "$ROOT" fetch --quiet --prune --tags origin ||
+    die "No se pudo descargar origin."
+  local commit kind
+  if commit="$(git -C "$ROOT" rev-parse --verify --quiet "refs/tags/$ref^{commit}")"; then
+    kind="tag"
+    if [[ "${MYDGX_REQUIRE_SIGNED_TAG:-0}" == "1" ]]; then
+      git -C "$ROOT" verify-tag "$ref" >/dev/null 2>&1 ||
+        die "El tag $ref no tiene una firma válida."
+    fi
+  elif commit="$(git -C "$ROOT" rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}")"; then
+    kind="rama"
+    [[ "${MYDGX_REQUIRE_SIGNED_TAG:-0}" != "1" ]] ||
+      die "MYDGX_REQUIRE_SIGNED_TAG=1 solo admite tags firmados."
+  else
+    die "No existe la rama o el tag $ref en origin."
+  fi
+  local stage status
+  stage="$(mktemp -d "${TMPDIR:-/tmp}/mydgx-github.XXXXXX")"
+  trap 'rm -rf "$stage"' EXIT
+  git -C "$ROOT" archive --format=tar "$commit" | tar -x -C "$stage"
+  printf '%s\n' "$commit" > "$stage/.mydgx-source-commit"
+  printf 'Desplegando %s %s · commit %s\n' "$kind" "$ref" "${commit:0:12}"
+  set +e
+  MYDGX_GITHUB_STAGED=1 \
+    MYDGX_DEPLOY_ENV_FILE="$ROOT/.env" \
+    ARTIFEX_ROOT="$ARTIFEX_ROOT" \
+    MYDGX_AXFORGE_ENV="$AXFORGE_ENV" \
+    bash "$stage/deploy.sh" "$@"
+  status=$?
+  set -e
+  ((status == 0)) && printf 'Desplegado %s %s · commit %s\n' "$kind" "$ref" "${commit:0:12}"
+  exit "$status"
+}
+
+if [[ "${MYDGX_GITHUB_STAGED:-0}" != "1" ]]; then
+  github_ref=""
+  passthrough=()
+  while (($#)); do
+    if [[ "$1" == "--github" ]]; then
+      github_ref="main"
+      if (($# >= 2)) && [[ "$2" != -* && "$2" != *@* ]]; then
+        github_ref="$2"
+        shift
+      fi
+    else
+      passthrough+=("$1")
+    fi
+    shift
+  done
+  set -- ${passthrough[@]+"${passthrough[@]}"}
+  [[ -z "$github_ref" ]] || deploy_from_github "$github_ref" "$@"
+fi
+
 while (($#)); do
   case "$1" in
     -p)
@@ -96,7 +164,7 @@ while (($#)); do
       shift
       ;;
     -h|--help)
-      echo "Uso: ./start.sh deploy [USUARIO@HOST [-p PUERTO] [-i RUTA_CLAVE] [--interactive|--sudo-password-stdin]] [--database RUTA] [--duckdns] [--frontend|--full|--repair]"
+      echo "Uso: ./start.sh deploy [USUARIO@HOST [-p PUERTO] [-i RUTA_CLAVE] [--interactive|--sudo-password-stdin]] [--database RUTA] [--duckdns] [--frontend|--full|--repair] [--github [RAMA|TAG]]"
       exit 0
       ;;
     *@*)
@@ -132,9 +200,10 @@ fi
 command -v python3 >/dev/null 2>&1 || die "Falta python3."
 command -v rsync >/dev/null 2>&1 || die "Falta rsync."
 
-if [[ -f "$ROOT/.env" && ! -L "$ROOT/.env" ]]; then
+local_env="${MYDGX_DEPLOY_ENV_FILE:-$ROOT/.env}"
+if [[ -f "$local_env" && ! -L "$local_env" ]]; then
   DEFAULT_PROFILE_ID="$(
-    python3 - "$ROOT/.env" <<'PY'
+    python3 - "$local_env" <<'PY'
 import pathlib
 import sys
 

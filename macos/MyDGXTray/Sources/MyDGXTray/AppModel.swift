@@ -1336,42 +1336,82 @@ final class AppModel: ObservableObject {
             guard let profile = configuration.connections.first(where: { $0.id == profileID }) else {
                 throw ConfigurationError.profileNotFound
             }
-            try profile.validate()
-            try validateSSHCredentials(profile)
-            let source = try deploymentSource(profile)
-            try SupportLayout.install()
-            let launcher = SupportLayout.bin.appendingPathComponent(
-                "mydgx-first-deploy-\(profile.id).command"
+            try openTerminalDeployment(
+                profile,
+                source: try deploymentSource(profile),
+                arguments: ["--repair", "--interactive"],
+                launcherName: "mydgx-first-deploy-\(profile.id).command",
+                completion: "Primer despliegue terminado. MyDGXTray importará la clave API y conectará automáticamente."
             )
-            let command = [
-                "\(source)/start.sh", "deploy",
-                remoteTarget(profile),
-                "-p", String(selectedSSHEndpoints[profile.id]?.port ?? profile.ssh.port),
-                "-i", NSString(string: profile.ssh.identityFile).expandingTildeInPath,
-                "--repair", "--interactive",
-            ].map(shellQuote).joined(separator: " ")
-            let script = """
-            #!/bin/zsh
-            set -euo pipefail
-            cd \(shellQuote(source))
-            \(command)
-            print
-            print "Primer despliegue terminado. MyDGXTray importará la clave API y conectará automáticamente."
-            print -n "Pulsa una tecla para cerrar…"
-            read -k 1
-            print
-            """
-            try Data(script.utf8).write(to: launcher, options: .atomic)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o700],
-                ofItemAtPath: launcher.path
-            )
-            NSWorkspace.shared.open(launcher)
             statusMessage = "Primer despliegue abierto en Terminal"
             lastError = nil
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    /// Git checkout used for "Actualizar desde GitHub"; nil for the bundled source.
+    var gitHubUpdateSource: String? {
+        let path = Self.configuredSourcePath(configuration.activeConnection)
+        guard !path.isEmpty, SupportLayout.isDeploySource(path),
+              FileManager.default.fileExists(atPath: "\(path)/.git") else { return nil }
+        return path
+    }
+
+    func openGitHubDeployment(ref: String = "main") {
+        do {
+            let profile = configuration.activeConnection
+            guard let source = gitHubUpdateSource else {
+                throw RemoteActionError.gitHubSourceUnavailable
+            }
+            try openTerminalDeployment(
+                profile,
+                source: source,
+                arguments: ["--github", ref, "--interactive"],
+                launcherName: "mydgx-github-deploy-\(profile.id).command",
+                completion: "Actualización desde GitHub terminada."
+            )
+            statusMessage = "Actualización desde GitHub abierta en Terminal"
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func openTerminalDeployment(
+        _ profile: ConnectionProfile,
+        source: String,
+        arguments: [String],
+        launcherName: String,
+        completion: String
+    ) throws {
+        try profile.validate()
+        try validateSSHCredentials(profile)
+        try SupportLayout.install()
+        let launcher = SupportLayout.bin.appendingPathComponent(launcherName)
+        let command = ([
+            "\(source)/start.sh", "deploy",
+            remoteTarget(profile),
+            "-p", String(selectedSSHEndpoints[profile.id]?.port ?? profile.ssh.port),
+            "-i", NSString(string: profile.ssh.identityFile).expandingTildeInPath,
+        ] + arguments).map(shellQuote).joined(separator: " ")
+        let script = """
+        #!/bin/zsh
+        set -euo pipefail
+        cd \(shellQuote(source))
+        \(command)
+        print
+        print \(shellQuote(completion))
+        print -n "Pulsa una tecla para cerrar…"
+        read -k 1
+        print
+        """
+        try Data(script.utf8).write(to: launcher, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: launcher.path
+        )
+        NSWorkspace.shared.open(launcher)
     }
 
     func activateAndStart(_ profile: InferenceProfile) async {
@@ -2482,6 +2522,7 @@ enum RemoteActionError: LocalizedError {
     case invalidBackup
     case tunnelFailed
     case invalidDeploySource
+    case gitHubSourceUnavailable
     case deployFailed(Int32)
     case profilePreflightFailed(String)
     case profileJobFailed(String)
@@ -2503,6 +2544,8 @@ enum RemoteActionError: LocalizedError {
             return "El túnel SSH no pudo iniciarse. Revisa el log del perfil en ~/.MyDGX/logs."
         case .invalidDeploySource:
             return "Selecciona en Proyecto local una carpeta de MyDGX que contenga start.sh."
+        case .gitHubSourceUnavailable:
+            return "Para actualizar desde GitHub, indica en Proyecto local un clon git de MyDGX."
         case let .deployFailed(code):
             return "El despliegue falló (código \(code)). Revisa ~/.MyDGX/logs."
         case let .profilePreflightFailed(message):

@@ -208,6 +208,12 @@ La guía completa para usuarios nuevos está en
   WebUI en el usuario remoto, configura sus URLs locales, reinicia MyDGX y el
   gateway y espera hasta cinco minutos a que Open WebUI responda. No sustituye al
   aprovisionamiento completo del sistema operativo.
+- **Actualizar DGX desde GitHub (main)…** pide confirmación y abre Terminal con
+  `start.sh deploy --github main --interactive` sobre la conexión activa.
+  Despliega el último commit publicado en `origin/main`, no los cambios locales,
+  con copia de seguridad y vuelta atrás si falla. Requiere que *Proyecto local*
+  apunte a un clon git de MyDGX; con el código incluido en la app queda
+  desactivado.
 - **Copia de Seguridad DGX** crea en `~/.MyDGX/backups/<alias>/<fecha>/` una
   instantánea consistente de `mydgx.db` y de los datos de Open WebUI. No copia
   `.env`, claves SSH, modelos ni cachés.

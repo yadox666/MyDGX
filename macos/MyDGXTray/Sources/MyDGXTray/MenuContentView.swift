@@ -286,6 +286,22 @@ struct MenuContentView: View {
         Divider()
 
         Button {
+            confirmGitHubDeployment()
+        } label: {
+            Label(
+                model.gitHubUpdateSource == nil
+                    ? "Actualizar DGX desde GitHub · sin clon git"
+                    : "Actualizar DGX desde GitHub (main)…",
+                systemImage: "arrow.triangle.2.circlepath"
+            )
+        }
+        .disabled(
+            model.gitHubUpdateSource == nil
+                || model.operationInProgress
+                || !model.canDeploy(model.configuration.activeConnection)
+        )
+
+        Button {
             model.openSettings()
         } label: {
             Label("Preferencias…", systemImage: "gearshape")
@@ -320,6 +336,20 @@ struct MenuContentView: View {
         alert.addButton(withTitle: "Cancelar")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { await model.stopProfile(profile) }
+    }
+
+    private func confirmGitHubDeployment() {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "¿Actualizar \(model.configuration.activeConnection.alias) desde GitHub?"
+        alert.informativeText = """
+        Se desplegará el último commit de main en origin, no los cambios locales sin publicar. \
+        Se hace copia de seguridad, se reinician los servicios y, si algo falla, se restaura la versión anterior.
+        """
+        alert.addButton(withTitle: "Actualizar")
+        alert.addButton(withTitle: "Cancelar")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        model.openGitHubDeployment()
     }
 
     private func confirmStopQuickModel(_ quickModel: ProfileModelSummary) {

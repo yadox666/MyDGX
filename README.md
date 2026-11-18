@@ -446,6 +446,23 @@ Este modo compila React localmente, transfiere solo `frontend/dist`, activa la
 nueva versión de forma atómica y conserva la anterior como respaldo. Si no se
 indica `USUARIO@HOST`, utiliza primero la conexión activa de MyDGXTray.
 
+Para desplegar exactamente lo publicado en GitHub, en lugar de la copia de
+trabajo local:
+
+```bash
+./start.sh deploy --github            # último commit de main en origin
+./start.sh deploy --github v1.2.0     # una rama o un tag concretos
+```
+
+Se ejecuta en el Mac, desde el clon git: descarga `origin`, extrae el commit
+con `git archive` a una carpeta temporal (sin cambios sin confirmar, archivos
+ignorados ni `.env`) y despliega desde ahí con las mismas copias de seguridad y
+la misma vuelta atrás. El DGX no necesita acceso a GitHub ni credenciales. El
+commit desplegado queda en `.mydgx-source-commit`. Con
+`MYDGX_REQUIRE_SIGNED_TAG=1` solo se aceptan tags con firma válida
+(`git verify-tag`). Se combina con los demás modos, por ejemplo
+`--github main --frontend`.
+
 El despliegue:
 
 - instala las dependencias del panel y herramientas de diagnóstico;

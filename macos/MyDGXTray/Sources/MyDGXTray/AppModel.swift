@@ -82,6 +82,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var machineActivity: String?
     @Published private(set) var pendingProfileName: String?
     @Published private(set) var deploymentStatus: DeploymentStatus?
+    /// Why Claude Code and OpenCode can't open now; nil when a suitable model is loaded.
+    @Published private(set) var codingAgentBlockReason: String? = "Comprobando modelos del gateway…"
     @Published var statusMessage = "No conectado"
     @Published var lastError: String?
 
@@ -106,6 +108,10 @@ final class AppModel: ObservableObject {
     private var nextAutomaticReconnectAt = Date.distantPast
     /// A profile the user just picked is not swapped out automatically before this date.
     private var manualSelectionUntil = Date.distantPast
+    /// Open menus (the tray menu and its submenus). Any `@Published` write rebuilds the
+    /// MenuBarExtra menu and closes an open submenu, so polling holds its writes meanwhile.
+    private var openMenus = 0
+    private var menuTrackingObservers: [NSObjectProtocol] = []
 
     init() {
         do {
@@ -117,6 +123,7 @@ final class AppModel: ObservableObject {
         try? SupportLayout.install()
         refreshLaunchAtLoginStatus()
         observeWorkspacePowerEvents()
+        observeMenuTracking()
         for profile in configuration.connections where profile.kind == .axforge {
             try? FileManager.default.removeItem(
                 at: SupportLayout.sessionKnownHosts(profileID: profile.id)
@@ -138,6 +145,29 @@ final class AppModel: ObservableObject {
                 Task { @MainActor in self?.reconnectAfterSystemWake() }
             }
             .store(in: &workspaceCancellables)
+    }
+
+    /// Observed synchronously: Combine's `receive(on: RunLoop.main)` would not deliver while
+    /// the menu keeps the run loop in event-tracking mode.
+    private func observeMenuTracking() {
+        let center = NotificationCenter.default
+        menuTrackingObservers = [
+            center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated { self?.openMenus += 1 }
+            },
+            center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.openMenus = max(0, self.openMenus - 1)
+                }
+            },
+        ]
+    }
+
+    private func waitWhileMenuIsOpen() async {
+        while openMenus > 0, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
     }
 
     private func prepareForSystemSleep() {
@@ -329,6 +359,7 @@ final class AppModel: ObservableObject {
                 await connectOnLaunch()
             }
             while !Task.isCancelled {
+                await waitWhileMenuIsOpen()
                 await refresh()
                 await refreshConnectionAvailability()
                 await preferLANIfAvailable()
@@ -480,9 +511,11 @@ final class AppModel: ObservableObject {
 
     func refresh() async {
         guard !isRefreshing else { return }
+        await waitWhileMenuIsOpen()
         isRefreshing = true
         defer { isRefreshing = false }
         let tunnelState = await detectTunnel()
+        await waitWhileMenuIsOpen()
         tunnelRunning = tunnelState.available || tunnelState.managed
         managedTunnelRunning = tunnelState.managed
         tunnelStateKnown = true
@@ -491,6 +524,7 @@ final class AppModel: ObservableObject {
             async let overviewRequest = client.overview()
             async let profilesRequest = client.profiles()
             let (newOverview, profileResponse) = try await (overviewRequest, profilesRequest)
+            await waitWhileMenuIsOpen()
             apiReachable = true
             overview = newOverview
             cacheDetectedDevice(newOverview.host)
@@ -525,10 +559,13 @@ final class AppModel: ObservableObject {
             lastError = nil
             notifyConnectionState(.connected)
             await ensureWebAppForwards(newOverview.webApps ?? [])
+            await updateCodingAgentReadiness()
         } catch {
+            await waitWhileMenuIsOpen()
             overview = nil
             profiles = []
             runtime = nil
+            setCodingAgentBlockReason("MyDGX no está conectado.")
             let healthAvailable: Bool
             if let client = try? MyDGXClient(configuration: configuration),
                (try? await client.health()) != nil {
@@ -628,6 +665,7 @@ final class AppModel: ObservableObject {
                 endpoints[id] = endpoint
             }
         }
+        await waitWhileMenuIsOpen()
         selectedSSHEndpoints = endpoints
         if overview != nil {
             latest[configuration.activeConnectionID] = true
@@ -1094,6 +1132,150 @@ final class AppModel: ObservableObject {
         try? handle.write(contentsOf: Data("\(Date()) \(message)\n".utf8))
     }
 
+    enum CodingAgent: String, CaseIterable, Identifiable {
+        case claude
+        case opencode
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .claude: return "Claude Code"
+            case .opencode: return "OpenCode"
+            }
+        }
+
+        /// Workspace the agent's script switches to when launched from the MyDGX directory.
+        var workspace: String {
+            switch self {
+            case .claude: return "~/claude-code"
+            case .opencode: return "~/opencode"
+            }
+        }
+    }
+
+    /// Mirrors the launchers' minimum (MYDGX_AGENT_MIN_CONTEXT): system prompt plus tools take
+    /// about 16k tokens before the first message.
+    static let codingAgentMinContext = 32_768
+
+    private struct GatewayModelList: Decodable {
+        struct Item: Decodable {
+            struct Capabilities: Decodable {
+                let tools: Bool?
+            }
+
+            let id: String
+            let task: String?
+            let contextLength: Int?
+            let capabilities: Capabilities?
+
+            enum CodingKeys: String, CodingKey {
+                case id, task, capabilities
+                case contextLength = "context_length"
+            }
+        }
+
+        let data: [Item]
+    }
+
+    private func setCodingAgentBlockReason(_ reason: String?) {
+        if codingAgentBlockReason != reason {
+            codingAgentBlockReason = reason
+        }
+    }
+
+    /// Returns an empty string when the gateway publishes a chat or vision model with tool
+    /// calling and enough context for the agents; otherwise an explanation for the user.
+    private func codingAgentReadinessProblem() async -> String {
+        let port = configuration.activeConnection.tunnel.localGatewayPort
+        guard let url = URL(string: "http://127.0.0.1:\(port)/v1/models") else {
+            return "El puerto local del gateway no es válido."
+        }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
+        request.timeoutInterval = 4
+        let list: GatewayModelList
+        do {
+            let (data, response) = try await Self.probeSession.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                return "El gateway no publica modelos: no hay ningún perfil cargado."
+            }
+            list = try JSONDecoder().decode(GatewayModelList.self, from: data)
+        } catch {
+            return "El gateway de MyDGX no responde por el túnel."
+        }
+        let minimum = Self.codingAgentMinContext
+        let text = list.data.filter { ["chat", "vision"].contains($0.task ?? "chat") }
+        if text.isEmpty {
+            return "No hay ningún modelo de texto cargado. Carga un perfil con un modelo de chat."
+        }
+        let roomy = text.filter { ($0.contextLength ?? 0) >= minimum }
+        if roomy.isEmpty {
+            let loaded = text
+                .map { "\($0.id) (\(($0.contextLength ?? 0) / 1024)k)" }
+                .joined(separator: ", ")
+            return "Ningún modelo de texto llega a \(minimum / 1024)k de contexto (cargados: \(loaded)). "
+                + "Sube el contexto del perfil o carga otro modelo."
+        }
+        if !roomy.contains(where: { $0.capabilities?.tools ?? true }) {
+            return "Los modelos con contexto suficiente no admiten tool calling (llama.cpp sin --jinja)."
+        }
+        return ""
+    }
+
+    private func updateCodingAgentReadiness() async {
+        let problem = await codingAgentReadinessProblem()
+        await waitWhileMenuIsOpen()
+        setCodingAgentBlockReason(problem.isEmpty ? nil : problem)
+    }
+
+    /// Opens Terminal on this Mac and runs `start.sh claude|opencode` from the local MyDGX project.
+    /// The script switches to its workspace (~/claude-code, ~/opencode) and reaches the Spark's
+    /// gateway through this tray's tunnel (`localGatewayPort` of the active profile).
+    func openCodingAgent(_ agent: CodingAgent, active: Bool) {
+        Task {
+            let problem = await codingAgentReadinessProblem()
+            setCodingAgentBlockReason(problem.isEmpty ? nil : problem)
+            guard problem.isEmpty else {
+                lastError = "\(agent.title) no se puede abrir: \(problem)"
+                return
+            }
+            launchCodingAgent(agent, active: active)
+        }
+    }
+
+    private func launchCodingAgent(_ agent: CodingAgent, active: Bool) {
+        do {
+            let profile = configuration.activeConnection
+            let source = try deploymentSource(profile)
+            try SupportLayout.install()
+            let mode = active ? " --active" : ""
+            let scriptURL = SupportLayout.bin.appendingPathComponent("\(agent.rawValue).command")
+            // Without COLORTERM the agents' TUIs fall back to a reduced palette.
+            let script = """
+            #!/bin/zsh
+            export COLORTERM=truecolor
+            cd \(shellQuote(source)) && exec ./start.sh \(agent.rawValue)\(mode)
+
+            """
+            try Data(script.utf8).write(to: scriptURL, options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: scriptURL.path
+            )
+            if let iTerm = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.googlecode.iterm2") {
+                NSWorkspace.shared.open(
+                    [scriptURL],
+                    withApplicationAt: iTerm,
+                    configuration: NSWorkspace.OpenConfiguration()
+                )
+            } else {
+                NSWorkspace.shared.open(scriptURL)
+            }
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     func openSSH() {
         do {
             let profile = configuration.activeConnection
@@ -1221,6 +1403,7 @@ final class AppModel: ObservableObject {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                     continue
                 }
+                await waitWhileMenuIsOpen()
                 updateProfileJob(job, profile: profile)
                 if job.status == "completed" {
                     lastError = nil

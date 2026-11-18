@@ -254,6 +254,35 @@ struct MenuContentView: View {
         }
         .disabled(!model.canUseSSH)
 
+        Menu {
+            if let reason = model.codingAgentBlockReason {
+                Text(reason)
+                Divider()
+            }
+            ForEach(AppModel.CodingAgent.allCases) { agent in
+                Button {
+                    model.openCodingAgent(agent, active: false)
+                } label: {
+                    Text("\(agent.title) · plan, solo lectura")
+                }
+                .disabled(model.codingAgentBlockReason != nil)
+                Button {
+                    model.openCodingAgent(agent, active: true)
+                } label: {
+                    Text("\(agent.title) · edición (--active)")
+                }
+                .disabled(model.codingAgentBlockReason != nil)
+            }
+        } label: {
+            Label(
+                model.codingAgentBlockReason == nil
+                    ? "Agentes de código"
+                    : "Agentes de código · sin modelo adecuado",
+                systemImage: "chevron.left.forwardslash.chevron.right"
+            )
+        }
+        .disabled(!model.canUseAPI || !model.canDeploy(model.configuration.activeConnection))
+
         Divider()
 
         Button {

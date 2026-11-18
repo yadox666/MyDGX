@@ -183,6 +183,13 @@ La guía completa para usuarios nuevos está en
 ## Acciones remotas
 
 - **Cambiar equipo** selecciona el perfil activo por alias.
+- **Agentes de código** abre Terminal con SSH al perfil activo y ejecuta
+  `start.sh claude` u `start.sh opencode` desde el directorio remoto de MyDGX.
+  Cada script cambia a su workspace (`~/claude-code` u `~/opencode`) e instala el
+  CLI si falta. Hay dos modos: plan, de solo lectura, y edición con `--active`.
+  Solo se pueden abrir si el gateway publica un modelo de chat o visión con tool
+  calling y al menos 32k de contexto. Si no lo hay, el submenú explica qué falta
+  y deja las opciones deshabilitadas. La comprobación se repite al pulsar.
 - **Selección automática:** al arrancar, y cuando el perfil activo deja de responder,
   la app comprueba el SSH de todos los perfiles. Usa primero un equipo encendido en
   la red local y, si no hay ninguno, uno accesible por internet (host público).

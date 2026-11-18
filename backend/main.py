@@ -33,7 +33,7 @@ from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Iterable, Literal
 from urllib.parse import quote, urlparse
 
 # huggingface_hub 1.x sustituye hf_transfer por el cliente Xet. Esta variable
@@ -2370,6 +2370,7 @@ def profile_models(profile: dict[str, Any]) -> list[dict[str, Any]]:
 
 def model_weight_mb(model: dict[str, Any]) -> int:
     paths: list[Path] = []
+    split_paths: set[Path] = set()
     configured = model.get("model_file", "")
     if configured:
         path = Path(configured).expanduser()
@@ -2386,6 +2387,8 @@ def model_weight_mb(model: dict[str, Any]) -> int:
                 path = Path(cached)
                 if path.is_file() and path not in paths:
                     paths.append(path)
+                    if GGUF_SHARD_PATTERN.match(str(filename)):
+                        split_paths.add(path)
             except Exception:
                 continue
     mmproj_file = model.get("mmproj_file", "")
@@ -2405,8 +2408,25 @@ def model_weight_mb(model: dict[str, Any]) -> int:
             pass
     if model.get("spec_type") and (draft := resolve_draft_file(model)):
         paths.append(draft)
+    shared_engram_blobs: set[Path] = set()
+    if repo and split_paths:
+        folder = huggingface_cache_dir() / f"models--{repo.replace('/', '--')}"
+        for candidate in folder.glob("snapshots/*/**/*.gguf"):
+            try:
+                relative = str(Path(*candidate.relative_to(folder).parts[2:]))
+            except ValueError:
+                relative = candidate.name
+            if not GGUF_SHARD_PATTERN.match(relative) and GGUF_SHARED_ENGRAM_PATTERN.search(relative):
+                try:
+                    shared_engram_blobs.add(candidate.resolve())
+                except OSError:
+                    continue
     # A local path and its Hub snapshot entry are often the same blob behind a symlink.
-    unique = {path.resolve(): path for path in paths}
+    unique = {
+        path.resolve(): path
+        for path in paths
+        if not (path in split_paths and path.resolve() in shared_engram_blobs)
+    }
     return sum(path.stat().st_size for path in unique.values()) // (1024 * 1024)
 
 
@@ -4206,6 +4226,7 @@ async def lifespan(_: FastAPI):
     memory_mode_task = asyncio.create_task(reapply_memory_mode())
     watchdog_task = asyncio.create_task(profile_watchdog())
     description_task = asyncio.create_task(backfill_hf_model_descriptions())
+    inventory_task = asyncio.create_task(warm_benchmark_inventory())
     yield
     db.log(
         "info",
@@ -4217,9 +4238,9 @@ async def lifespan(_: FastAPI):
     )
     sampler.cancel()
     description_task.cancel()
-    for task in (restore_task, memory_mode_task, watchdog_task):
+    for task in (restore_task, memory_mode_task, watchdog_task, inventory_task):
         task.cancel()
-    await asyncio.gather(restore_task, memory_mode_task, watchdog_task, return_exceptions=True)
+    await asyncio.gather(restore_task, memory_mode_task, watchdog_task, inventory_task, return_exceptions=True)
     for task in list(_benchmark_background_tasks):
         task.cancel()
     if _benchmark_background_tasks:
@@ -6006,6 +6027,9 @@ def hf_recommended_engines(tasks: list[str], formats: list[str]) -> list[str]:
 
 
 GGUF_AUXILIARY_PATTERN = re.compile(r"(?i)(?:^|/)(mtp|dspark|dflash|draft|eagle3?|speculative)[-_/]")
+GGUF_SHARD_PATTERN = re.compile(r"(.+)-(\d{5})-of-(\d{5})\.gguf$", re.IGNORECASE)
+GGUF_SHARED_ENGRAM_PATTERN = re.compile(r"(?i)(?:^|[/_.-])engram(?:[/_.-]|$)")
+HF_UNSUPPORTED_REAP_PATTERN = re.compile(r"(?i)(?:^|[/_.-])reap(?:[-_.]?\d+)?(?:$|[/_.-])")
 SPEC_TYPES = ("draft-mtp", "draft-dflash", "draft-dspark", "draft-eagle3", "draft-simple")
 SPEC_TYPE_BY_PREFIX = {
     "mtp": "draft-mtp", "dspark": "draft-dspark", "dflash": "draft-dflash",
@@ -6014,6 +6038,11 @@ SPEC_TYPE_BY_PREFIX = {
 GGUF_DRAFTER_ARCHITECTURES = {"dflash": "draft-dflash", "dspark": "draft-dspark", "eagle3": "draft-eagle3"}
 # Every quantization of a model has the same tensors; a drafter carries a small fraction of them.
 DRAFTER_TENSOR_RATIO = 0.25
+
+
+def hf_requires_unsupported_reap_runtime(repo_id: str, filenames: Iterable[str] = ()) -> bool:
+    """REAP GGUFs require a non-standard llama.cpp branch that MyDGX does not install."""
+    return any(HF_UNSUPPORTED_REAP_PATTERN.search(value) for value in (repo_id, *filenames))
 
 
 def gguf_tensor_count(metadata: dict[str, Any]) -> int:
@@ -6060,8 +6089,9 @@ GGUF_FILE_TYPES = {
 
 
 def hf_gguf_groups(siblings: list[Any], auxiliary: bool = False) -> list[dict[str, Any]]:
-    """GGUF weights grouped by shard set; projectors never, and named drafters only with `auxiliary`."""
+    """GGUF weights grouped by shard set; shared Engram files can supply a specially named final shard."""
     groups: dict[str, dict[str, Any]] = {}
+    shared_engrams: list[tuple[str, int]] = []
     for sibling in siblings:
         filename = str(getattr(sibling, "rfilename", "") or "")
         if (
@@ -6071,7 +6101,10 @@ def hf_gguf_groups(siblings: list[Any], auxiliary: bool = False) -> list[dict[st
         ):
             continue
         size = integer_value(getattr(sibling, "size", None)) or 0
-        shard = re.match(r"(.+)-(\d{5})-of-(\d{5})\.gguf$", filename, re.IGNORECASE)
+        shard = GGUF_SHARD_PATTERN.match(filename)
+        if not shard and not auxiliary and GGUF_SHARED_ENGRAM_PATTERN.search(filename):
+            shared_engrams.append((filename, size))
+            continue
         group_key = shard.group(1) if shard else filename
         quant_match = QUANTIZATION_PATTERN.search(filename)
         quantization = quant_match.group(1).upper() if quant_match else "GGUF"
@@ -6079,15 +6112,76 @@ def hf_gguf_groups(siblings: list[Any], auxiliary: bool = False) -> list[dict[st
             "name": group_key,
             "files": [],
             "size": 0,
+            "resident_size": 0,
             "quantization": quantization,
             "expected_shards": int(shard.group(3)) if shard else 1,
         })
         group["files"].append(filename)
         group["size"] += size
+        group["resident_size"] += size
+    if shared_engrams and not auxiliary:
+        split_groups = [group for group in groups.values() if group["expected_shards"] > 1]
+        if split_groups:
+            shared_name, shared_size = shared_engrams[0]
+            for group in split_groups:
+                if len(group["files"]) == group["expected_shards"] - 1:
+                    group["files"].append(shared_name)
+                    group["size"] += shared_size
+                elif len(group["files"]) == group["expected_shards"]:
+                    # A locally materialized final-shard alias points to this same
+                    # Engram file. It is mmap-backed on NVMe, not resident weights.
+                    group["resident_size"] = max(0, group["resident_size"] - shared_size)
+        else:
+            for filename, size in shared_engrams:
+                groups[filename] = {
+                    "name": filename,
+                    "files": [filename],
+                    "size": size,
+                    "resident_size": size,
+                    "quantization": (
+                        match.group(1).upper()
+                        if (match := QUANTIZATION_PATTERN.search(filename))
+                        else "GGUF"
+                    ),
+                    "expected_shards": 1,
+                }
     for group in groups.values():
-        group["files"].sort()
+        group["files"].sort(key=lambda filename: (
+            bool(GGUF_SHARED_ENGRAM_PATTERN.search(filename) and not GGUF_SHARD_PATTERN.match(filename)),
+            filename,
+        ))
         group["complete"] = len(group["files"]) == group["expected_shards"]
     return sorted(groups.values(), key=lambda item: (not item["complete"], item["size"] or sys.maxsize))
+
+
+def materialize_hf_shared_engram_aliases(downloaded: dict[str, Path]) -> list[str]:
+    """Link a separately named shared Engram GGUF into each split set that expects it as its final shard."""
+    shared = [
+        (name, path)
+        for name, path in downloaded.items()
+        if GGUF_SHARED_ENGRAM_PATTERN.search(name) and not GGUF_SHARD_PATTERN.match(name)
+    ]
+    if not shared:
+        return []
+    split_groups: dict[tuple[str, int], dict[int, Path]] = {}
+    for name, path in downloaded.items():
+        match = GGUF_SHARD_PATTERN.match(name)
+        if match:
+            split_groups.setdefault((match.group(1), int(match.group(3))), {})[int(match.group(2))] = path
+    created = []
+    for (base, expected), shards in split_groups.items():
+        missing = sorted(set(range(1, expected + 1)) - set(shards))
+        if len(missing) != 1:
+            continue
+        index = missing[0]
+        source = shared[0][1]
+        alias_name = f"{base}-{index:05d}-of-{expected:05d}.gguf"
+        alias = shards[min(shards)].parent / Path(alias_name).name
+        if alias.exists() or alias.is_symlink():
+            continue
+        alias.symlink_to(os.path.relpath(source, alias.parent))
+        created.append(alias_name)
+    return created
 
 
 MODEL_OVERRIDES_KEY = "models.overrides"
@@ -6311,7 +6405,7 @@ def persistent_model_config_with_origins(
         "mmproj_repo": model_id if mmproj_name else "",
         "mmproj_filename": mmproj_name,
         "runtime_requirement": "llama.cpp CUDA · GB10 sm_121",
-        "estimated_memory_mb": math.ceil(selected["size"] / (1024 * 1024) * 1.12) + 1024,
+        "estimated_memory_mb": math.ceil(selected["resident_size"] / (1024 * 1024) * 1.12) + 1024,
     })
     if task == "vision" and not mmproj_name and origins.get("mmproj_filename") == "manual":
         base.update({"task": "chat", "input_modalities": ["text"]})
@@ -6565,6 +6659,29 @@ def parse_gguf_header(handle: Any, partial: bool = False) -> dict[str, Any]:
         if handle.seek(size, os.SEEK_CUR) != position + size:
             raise ValueError("GGUF truncado")
 
+    def skip_strings(count: int) -> None:
+        # Tokenizer vocabularies hold hundreds of thousands of strings; walk them in memory.
+        data = b""
+        base = handle.tell()
+        offset = 0
+        for _ in range(count):
+            while len(data) - offset < 8:
+                more = handle.read(1 << 20)
+                if not more:
+                    raise ValueError("GGUF truncado")
+                base += offset
+                data, offset = data[offset:] + more, 0
+            end = offset + 8 + struct.unpack_from("<Q", data, offset)[0]
+            while end > len(data):
+                more = handle.read(max(1 << 20, end - len(data)))
+                if not more:
+                    raise ValueError("GGUF truncado")
+                base += offset
+                end -= offset
+                data, offset = data[offset:] + more, 0
+            offset = end
+        handle.seek(base + offset)
+
     def value(kind: int, keep: bool) -> Any:
         if kind in _GGUF_SCALAR_FORMATS:
             fmt = _GGUF_SCALAR_FORMATS[kind]
@@ -6582,6 +6699,9 @@ def parse_gguf_header(handle: Any, partial: bool = False) -> dict[str, Any]:
                 if keep and count <= 4096:
                     return list(struct.unpack(fmt, read(struct.calcsize(fmt))))
                 skip(struct.calcsize(_GGUF_SCALAR_FORMATS[item_kind]) * count)
+                return None
+            if item_kind == 8:
+                skip_strings(count)
                 return None
             for _ in range(count):
                 value(item_kind, False)
@@ -6952,6 +7072,12 @@ def quick_context_size(config: dict[str, Any], requested: int | None = None) -> 
     requested = requested or int(model_overrides(f"huggingface:{config.get('model_repo')}").get("context_size") or 0)
     if requested:
         return min(maximum, max(minimum, requested // 1024 * 1024))
+    minimum_memory = gguf_model_memory_mb({**config, "context_size": minimum})
+    total_memory = psutil.virtual_memory().total // (1024 * 1024)
+    if minimum_memory and minimum_memory >= total_memory // 2:
+        # Large models need headroom for the OS, mapped tensors and agents. Keep
+        # their automatic launch practical while retaining the native slider max.
+        return minimum
     if ceiling <= minimum:
         # A card `-c` below what the agents need is a launch example (or a validated floor), not a ceiling.
         return minimum
@@ -7359,6 +7485,10 @@ def hf_spark_recommendation(
         None,
     )
     siblings = list(getattr(info, "siblings", None) or [])
+    unsupported_reap = hf_requires_unsupported_reap_runtime(
+        repo_id,
+        [*tags, *(str(getattr(sibling, "rfilename", "") or "") for sibling in siblings)],
+    )
     formats = hf_model_formats(siblings)
     mmproj_files = hf_mmproj_files(siblings)
     groups = hf_gguf_groups(siblings)
@@ -7380,11 +7510,12 @@ def hf_spark_recommendation(
     quality = {"Q8_0": 8, "Q6_K": 7, "Q6_K_L": 7, "Q5_K_M": 6, "Q5_K_L": 6, "Q4_K_M": 5, "Q4_K_L": 5}
     fitting = [
         group for group in groups
-        if group["complete"] and group["size"] > 0 and group["size"] / (1024 * 1024) <= weight_cap_mb
+        if group["complete"] and group["resident_size"] > 0
+        and group["resident_size"] / (1024 * 1024) <= weight_cap_mb
     ]
     fitting.sort(key=lambda item: (quality.get(item["quantization"], 3), item["size"]), reverse=True)
     selected = None if runtime == "external" else (fitting[0] if fitting else (groups[0] if groups else None))
-    architecture = hf_architecture_profile(info, selected["size"] if selected else 0)
+    architecture = hf_architecture_profile(info, selected["resident_size"] if selected else 0)
     target_context = 32_768 if task in {"code", "reasoning", "any"} else 16_384
     if task in {"embedding", "vision"}:
         target_context = 8192
@@ -7398,7 +7529,7 @@ def hf_spark_recommendation(
     target_context = max(8192, target_context)
     slots = 1
     estimate = hf_memory_estimate(
-        selected["size"] if selected else 0,
+        selected["resident_size"] if selected else 0,
         target_context,
         speculative_memory_mb=architecture["speculative_memory_mb"],
     )
@@ -7423,7 +7554,7 @@ def hf_spark_recommendation(
     while target_context > 8192 and estimate["total_mb"] > budget_mb:
         target_context //= 2
         estimate = hf_memory_estimate(
-            selected["size"] if selected else 0,
+            selected["resident_size"] if selected else 0,
             target_context,
             speculative_memory_mb=architecture["speculative_memory_mb"],
         )
@@ -7445,7 +7576,7 @@ def hf_spark_recommendation(
         )
         for candidate_slots in range(2, slot_cap + 1):
             candidate = hf_memory_estimate(
-                selected["size"],
+                selected["resident_size"],
                 target_context,
                 candidate_slots,
                 architecture["speculative_memory_mb"],
@@ -7491,7 +7622,7 @@ def hf_spark_recommendation(
             and (not mmproj_required or mmproj)
         )
     )
-    if unsupported_platform:
+    if unsupported_platform or unsupported_reap:
         fits = False
     needs_gguf = (
         not groups
@@ -7558,6 +7689,8 @@ def hf_spark_recommendation(
             else "llama.cpp CUDA · GB10 sm_121"
         )
     )
+    if unsupported_reap:
+        runtime_requirement = "No compatible · REAP requiere una rama especial de llama.cpp"
     verified = next((item for item in ARTIFEX_PROFILES if item["repo"].casefold() == repo_id.casefold()), None)
     if verified:
         runtime_requirement = verified["runtime"]
@@ -7595,12 +7728,14 @@ def hf_spark_recommendation(
         warnings.append("El conjunto de shards GGUF parece incompleto")
     if needs_gguf:
         warnings.insert(0, "Sin GGUF: llama.cpp no puede ejecutarlo y no hay vLLM ni SGLang instalados; busca su versión GGUF")
-    elif not fits and not unsupported_platform:
+    elif not fits and not unsupported_platform and not unsupported_reap:
         warnings.append("No cabe en la capacidad segura del equipo")
     elif fits and not fits_now:
         warnings.append("Cabe por capacidad, pero requiere liberar memoria o descargar modelos activos")
     if unsupported_platform:
         warnings.append(f"Formato {unsupported_platform} no compatible con Linux GB10")
+    if unsupported_reap:
+        warnings.insert(0, "REAP no compatible: requiere una rama especial de llama.cpp que MyDGX no instala")
     if external_task:
         warnings.append("Requiere un motor local con API OpenAI compatible")
     if mmproj_required and not mmproj:
@@ -7669,7 +7804,7 @@ def hf_spark_recommendation(
         "runtime_requirement": runtime_requirement,
         "fits": fits,
         "fits_now": fits_now,
-        "platform_supported": unsupported_platform is None,
+        "platform_supported": unsupported_platform is None and not unsupported_reap,
         "reasons": reasons[:4],
         "warnings": warnings[:4],
         "gguf_search": f"{repo_id.rpartition('/')[2]} GGUF" if needs_gguf else "",
@@ -8301,6 +8436,10 @@ async def inspect_hf_model(repo_id: str, revision: str = Query(default="main", m
             getattr(info, "pipeline_tag", None),
             tags,
         )
+        unsupported_reap = hf_requires_unsupported_reap_runtime(
+            repo_id,
+            [*tags, *(str(getattr(sibling, "rfilename", "") or "") for sibling in siblings)],
+        )
         return {
             "revision": resolved_revision,
             "gated": bool(getattr(info, "gated", False)),
@@ -8312,6 +8451,11 @@ async def inspect_hf_model(repo_id: str, revision: str = Query(default="main", m
             "output_modalities": capabilities["output_modalities"],
             "formats": hf_model_formats(siblings),
             "recommended_engines": hf_recommended_engines(capabilities["tasks"], hf_model_formats(siblings)),
+            "download_supported": not unsupported_reap,
+            "download_block_reason": (
+                "REAP no es compatible con el runtime de MyDGX: requiere una rama especial de llama.cpp."
+                if unsupported_reap else ""
+            ),
             "downloads": getattr(info, "downloads", 0) or 0,
             "files": files,
         }
@@ -8397,6 +8541,17 @@ async def validate_hf_download(
                 f"Archivo no encontrado en Hugging Face: {missing[0]}",
                 status_code=404,
             )
+        if hf_requires_unsupported_reap_runtime(
+            repo_id,
+            [*requested, *(str(tag) for tag in (getattr(info, "tags", None) or []))],
+        ):
+            raise ModelDownloadValidationError(
+                (
+                    "Descarga bloqueada: los modelos REAP requieren una rama especial de llama.cpp "
+                    "que MyDGX no instala. Elige una variante GSQ/RCO, GGUF estándar u otra alternativa compatible."
+                ),
+                status_code=409,
+            )
         unknown = [
             filename
             for filename in requested
@@ -8412,7 +8567,19 @@ async def validate_hf_download(
                 status_code=409,
             )
         total = sum(int(getattr(siblings[filename], "size")) for filename in requested)
-        ensure_model_download_size(total, repo_id)
+        selected_siblings = [siblings[filename] for filename in requested]
+        groups = hf_gguf_groups(selected_siblings)
+        shared_engrams = {
+            filename
+            for filename in requested
+            if GGUF_SHARED_ENGRAM_PATTERN.search(filename) and not GGUF_SHARD_PATTERN.match(filename)
+        }
+        mmap_bytes = sum(
+            int(getattr(siblings[filename], "size"))
+            for filename in shared_engrams
+            if any(group["complete"] and filename in group["files"] for group in groups)
+        )
+        ensure_model_download_size(total - mmap_bytes, repo_id)
         return str(getattr(info, "sha", None) or revision), total
 
     try:
@@ -8560,6 +8727,7 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
     ))
     try:
         downloaded = []
+        downloaded_paths: dict[str, Path] = {}
         workers = min(huggingface_download_workers(), len(payload.files))
         for offset in range(0, len(payload.files), workers):
             if db.job_cancel_requested(job_id):
@@ -8593,6 +8761,10 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
                 )
                 for filename in batch
             ])
+            downloaded_paths.update({
+                filename: Path(path)
+                for filename, path in zip(batch, paths, strict=True)
+            })
             downloaded.extend(str(Path(path).name) for path in paths)
             if not total_bytes:
                 db.update_job(
@@ -8601,6 +8773,7 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
                     len(downloaded) / len(payload.files) * 100,
                     f"Preparados {len(downloaded)}/{len(payload.files)}",
                 )
+        shared_aliases = await asyncio.to_thread(materialize_hf_shared_engram_aliases, downloaded_paths)
         await stop_hf_progress(stop, monitor)
         if db.job_cancel_requested(job_id):
             db.update_job(job_id, "cancelled", 99, "Descarga cancelada · los archivos ya bajados quedan en la caché")
@@ -8628,7 +8801,11 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
             "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
             (job_id, json.dumps({"files": downloaded}), utc_now()),
         )
-        await asyncio.to_thread(queue_downloaded_gguf_benchmark, payload.repo_id, payload.files)
+        await asyncio.to_thread(
+            queue_downloaded_gguf_benchmark,
+            payload.repo_id,
+            [*payload.files, *shared_aliases],
+        )
         db.update_job(job_id, "completed", 100, f"{len(downloaded)} archivo(s) preparados")
     except Exception as exc:
         db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: descarga no completada")
@@ -8686,6 +8863,14 @@ PREFLIGHT_CONTEXT = 32_768
 
 def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> dict[str, Any]:
     """What the selected files really are, read from their remote GGUF headers before downloading anything."""
+    if hf_requires_unsupported_reap_runtime(repo_id, filenames):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Descarga bloqueada: REAP requiere una rama especial de llama.cpp que MyDGX no instala. "
+                "Elige una variante GSQ/RCO o un GGUF estándar."
+            ),
+        )
     info = HfApi(token=huggingface_token()).model_info(repo_id, revision=revision, files_metadata=True)
     by_name = {str(sibling.rfilename): sibling for sibling in (info.siblings or [])}
     missing = [name for name in filenames if name not in by_name]
@@ -8718,6 +8903,7 @@ def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> 
             "shards": len(group["files"]),
             "expected_shards": int(metadata.get("split.count") or group["expected_shards"]),
             "size": group["size"],
+            "resident_size": group["resident_size"],
             "role": role,
             "architecture": architecture,
             "quantization": quantization,
@@ -8731,7 +8917,7 @@ def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> 
             context = min(PREFLIGHT_CONTEXT, native) if native else PREFLIGHT_CONTEXT
             kv_mb = gguf_kv_cache_mb(metadata, context)
             if kv_mb is not None:
-                entry["memory_mb"] = math.ceil(group["size"] / (1024 * 1024) * 1.12) + 1024 + kv_mb
+                entry["memory_mb"] = math.ceil(group["resident_size"] / (1024 * 1024) * 1.12) + 1024 + kv_mb
                 entry["memory_context"] = context
         files.append(entry)
         name = Path(group["files"][0]).name
@@ -10458,12 +10644,41 @@ def managed_flux_checkpoint() -> Path:
     )
 
 
+FILE_DIGESTS_KEY = "benchmark.file_digests"
+
+
 @lru_cache(maxsize=8)
 def sha256_file_identity(path: str, size: int, modified_ns: int) -> str:
+    """SHA-256 of a large weight file, kept across restarts while path, size and mtime match."""
+    identity = f"{size}:{modified_ns}"
+    try:
+        stored = json.loads(preference_value(FILE_DIGESTS_KEY) or "{}")
+    except json.JSONDecodeError:
+        stored = {}
+    stored = stored if isinstance(stored, dict) else {}
+    entry = stored.get(path)
+    if isinstance(entry, dict) and entry.get("identity") == identity and re.fullmatch(
+        r"[0-9a-f]{64}", str(entry.get("sha256") or "")
+    ):
+        return str(entry["sha256"])
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
         for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
             digest.update(chunk)
+    stored = {
+        key: value for key, value in stored.items() if Path(key).exists()
+    }
+    stored[path] = {"identity": identity, "sha256": digest.hexdigest()}
+    try:
+        db.execute(
+            """
+            INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+            """,
+            (FILE_DIGESTS_KEY, json.dumps(stored), utc_now()),
+        )
+    except sqlite3.Error:
+        pass
     return digest.hexdigest()
 
 
@@ -12825,6 +13040,15 @@ def configured_local_profile_artifact(
             "path": parsed.path.rstrip("/"),
         },
     }), size
+
+
+async def warm_benchmark_inventory(delay_seconds: float = 90) -> None:
+    """Fill the GGUF header and weight digest caches after boot so Benchmarks opens quickly."""
+    await asyncio.sleep(delay_seconds)
+    try:
+        await benchmark_suite_candidates(include_measured=True)
+    except Exception as exc:
+        db.log("warning", "benchmark", "benchmark.inventory.warm_failed", redact_log_text(str(exc), 300))
 
 
 async def benchmark_suite_candidates(include_measured: bool = False) -> list[dict[str, Any]]:

@@ -4,6 +4,8 @@ import io
 import json
 import math
 import sqlite3
+import hashlib
+import os
 import struct
 import tempfile
 import time
@@ -960,6 +962,24 @@ class CollectorTests(unittest.TestCase):
         ])
         self.assertEqual(groups[0]["size"], 21)
         self.assertTrue(groups[0]["complete"])
+        shared_engram = hf_gguf_groups([
+            *[
+                SimpleNamespace(
+                    rfilename=f"IQ2_XXS/DeepSeek-Coder-IQ2_XXS-0000{index}-of-00006.gguf",
+                    size=10,
+                )
+                for index in range(1, 6)
+            ],
+            SimpleNamespace(rfilename="DeepSeek-Engram-IQ4_NL.gguf", size=50),
+        ])
+        self.assertEqual(len(shared_engram), 1)
+        self.assertTrue(shared_engram[0]["complete"])
+        self.assertEqual(shared_engram[0]["expected_shards"], 6)
+        self.assertEqual(len(shared_engram[0]["files"]), 6)
+        self.assertEqual(shared_engram[0]["size"], 100)
+        self.assertEqual(shared_engram[0]["resident_size"], 50)
+        self.assertTrue(shared_engram[0]["files"][0].endswith("-00001-of-00006.gguf"))
+        self.assertIn("DeepSeek-Engram-IQ4_NL.gguf", shared_engram[0]["files"])
         main_groups = hf_gguf_groups([
             SimpleNamespace(rfilename="dspark-DeepSeek-V4.1-Flash-Q8_0.gguf", size=7),
             SimpleNamespace(rfilename="MTP/mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf", size=2),
@@ -973,6 +993,48 @@ class CollectorTests(unittest.TestCase):
             SimpleNamespace(rfilename="model.safetensors"),
             SimpleNamespace(rfilename="model.onnx"),
         ]), ["onnx", "safetensors"])
+
+    def test_reap_detection_is_strict_and_download_validation_blocks_it(self) -> None:
+        self.assertTrue(main_module.hf_requires_unsupported_reap_runtime("org/DeepSeek-REAP192-GGUF"))
+        self.assertTrue(main_module.hf_requires_unsupported_reap_runtime("org/model", ["weights-REAP-192-Q4.gguf"]))
+        self.assertFalse(main_module.hf_requires_unsupported_reap_runtime("org/Reaper-Instruct-GGUF"))
+        info = SimpleNamespace(
+            sha="abc",
+            tags=["gguf"],
+            siblings=[SimpleNamespace(rfilename="DeepSeek-REAP192-Q4.gguf", size=1024)],
+        )
+        api = SimpleNamespace(model_info=lambda *_args, **_kwargs: info)
+        with patch.object(main_module, "HfApi", return_value=api), \
+                self.assertRaises(main_module.ModelDownloadValidationError) as caught:
+            asyncio.run(main_module.validate_hf_download(
+                "org/DeepSeek-REAP192-GGUF", "main", ["DeepSeek-REAP192-Q4.gguf"],
+            ))
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertIn("REAP", caught.exception.detail)
+
+    def test_shared_engram_is_linked_as_missing_final_shard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = Path(directory)
+            split_dir = snapshot / "IQ2_XXS"
+            split_dir.mkdir()
+            downloaded: dict[str, Path] = {}
+            for index in range(1, 6):
+                name = f"IQ2_XXS/DeepSeek-Coder-IQ2_XXS-{index:05d}-of-00006.gguf"
+                path = snapshot / name
+                path.write_bytes(str(index).encode())
+                downloaded[name] = path
+            engram_name = "DeepSeek-Engram-IQ4_NL.gguf"
+            engram = snapshot / engram_name
+            engram.write_bytes(b"engram")
+            downloaded[engram_name] = engram
+
+            aliases = main_module.materialize_hf_shared_engram_aliases(downloaded)
+
+            alias_name = "IQ2_XXS/DeepSeek-Coder-IQ2_XXS-00006-of-00006.gguf"
+            alias = snapshot / alias_name
+            self.assertEqual(aliases, [alias_name])
+            self.assertTrue(alias.is_symlink())
+            self.assertEqual(alias.resolve(), engram.resolve())
 
     def test_hft_uncensored_catalog_feeds_abliterated_search(self) -> None:
         page = """
@@ -1513,6 +1575,55 @@ class SpeculativeDecodingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             main_module.parse_gguf_header(io.BytesIO(cut))
 
+    def test_large_tokenizer_is_skipped_across_read_blocks(self) -> None:
+        def text(value: Any) -> bytes:
+            raw = value.encode() if isinstance(value, str) else value
+            return struct.pack("<Q", len(raw)) + raw
+
+        tokens = [f"token-{index}".encode() for index in range(150_000)]
+        tokens.insert(70_000, b"x" * (3 << 20))
+        header = (
+            text("general.architecture") + struct.pack("<I", 8) + text("llama")
+            + text("tokenizer.ggml.tokens") + struct.pack("<IIQ", 9, 8, len(tokens))
+            + b"".join(text(token) for token in tokens)
+            + text("llama.context_length") + struct.pack("<II", 4, 131_072)
+        )
+        data = b"GGUF" + struct.pack("<IQQ", 3, 7, 3) + header
+        metadata = main_module.parse_gguf_header(io.BytesIO(data))
+        self.assertEqual(metadata["llama.context_length"], 131_072)
+        self.assertEqual(metadata["gguf.tensor_count"], 7)
+        self.assertNotIn("tokenizer.ggml.tokens", metadata)
+        cut = main_module.parse_gguf_header(io.BytesIO(data[: len(data) // 2]), partial=True)
+        self.assertEqual(cut["general.architecture"], "llama")
+        self.assertNotIn("llama.context_length", cut)
+
+    def test_weight_digest_survives_a_restart_until_the_file_changes(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "digests.db"
+                db.initialize()
+                weights = Path(directory) / "flux.safetensors"
+                weights.write_bytes(b"a" * 64)
+                stat = weights.stat()
+                expected = hashlib.sha256(b"a" * 64).hexdigest()
+                identity = (str(weights), stat.st_size, stat.st_mtime_ns)
+                self.assertEqual(main_module.sha256_file_identity(*identity), expected)
+                main_module.sha256_file_identity.cache_clear()
+                weights.write_bytes(b"b" * 64)
+                os.utime(weights, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+                self.assertEqual(main_module.sha256_file_identity(*identity), expected)
+                main_module.sha256_file_identity.cache_clear()
+                changed = weights.stat().st_mtime_ns + 1
+                os.utime(weights, ns=(changed, changed))
+                self.assertEqual(
+                    main_module.sha256_file_identity(str(weights), 64, changed),
+                    hashlib.sha256(b"b" * 64).hexdigest(),
+                )
+        finally:
+            main_module.sha256_file_identity.cache_clear()
+            db.path = original_path
+
     def test_card_setup_wins_when_its_drafter_is_local(self) -> None:
         card = "```bash\nllama-server -m Model-Q4_K_M.gguf --spec-type draft-mtp --spec-draft-n-max 3\n```"
         candidates = [
@@ -1652,6 +1763,17 @@ class QuickContextTests(unittest.TestCase):
             config = self.quick_config(Path(directory), 131_072)
         self.assertEqual(config["context_size"], 81_920)
 
+    def test_large_model_defaults_to_minimum_but_keeps_native_slider_max(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(main_module, "gguf_model_memory_mb", return_value=80_000), \
+                patch.object(main_module.psutil, "virtual_memory", return_value=SimpleNamespace(total=122 * 1024**3)):
+            home = Path(directory)
+            config = self.quick_config(home, 1_048_576)
+            with patch.object(main_module.settings, "hf_home", str(home)):
+                context = main_module.quick_context_range(config)
+        self.assertEqual(config["context_size"], 32_768)
+        self.assertEqual(context["context_max"], 1_048_576)
+
     def test_quick_never_exceeds_native_context(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = self.quick_config(Path(directory), 16_384, "```\nllama-server -m x.gguf --ctx-size 262144\n```\n")
@@ -1720,6 +1842,29 @@ class QuickContextTests(unittest.TestCase):
             with patch.object(main_module, "cached_hf_file", return_value=blob):
                 weight = main_module.model_weight_mb({"model_file": str(link), "model_repo": "a/b", "model_filename": "model.gguf"})
         self.assertEqual(weight, 3)
+
+    def test_weight_excludes_nvme_mapped_shared_engram_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            snapshot = home / "hub" / "models--author--DeepSeek-GGUF" / "snapshots" / "abc"
+            split = snapshot / "IQ2_XXS"
+            split.mkdir(parents=True)
+            names = []
+            for index in range(1, 6):
+                name = f"IQ2_XXS/DeepSeek-IQ2_XXS-{index:05d}-of-00006.gguf"
+                (snapshot / name).write_bytes(b"\0" * (2 * 1024 * 1024))
+                names.append(name)
+            engram = snapshot / "DeepSeek-Engram-IQ4_NL.gguf"
+            engram.write_bytes(b"\0" * (5 * 1024 * 1024))
+            alias_name = "IQ2_XXS/DeepSeek-IQ2_XXS-00006-of-00006.gguf"
+            (snapshot / alias_name).symlink_to("../DeepSeek-Engram-IQ4_NL.gguf")
+            names.append(alias_name)
+            with patch.object(main_module.settings, "hf_home", str(home)), \
+                    patch.object(main_module, "cached_hf_file", side_effect=lambda _repo, filename: snapshot / filename):
+                weight = main_module.model_weight_mb({
+                    "model_repo": "author/DeepSeek-GGUF", "model_filename": names[0], "model_files": names,
+                })
+        self.assertEqual(weight, 10)
 
     def test_card_without_server_command_keeps_defaults(self) -> None:
         self.assertEqual(self.card_settings("Use temperature 0.6 and top_k 20."), {})
@@ -4622,6 +4767,34 @@ class ProfileApiTests(unittest.TestCase):
                 })
             self.assertEqual(response.status_code, 200)
             self.assertEqual(download.await_args.args[1].revision, "resolved-sha")
+        db.path = original_path
+
+    def test_huggingface_shared_engram_is_excluded_from_resident_limit(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            db.path = Path(directory) / "hf-engram-download.db"
+            files = [
+                SimpleNamespace(
+                    rfilename=f"IQ2_XXS/DeepSeek-Coder-{index:05d}-of-00006.gguf",
+                    size=10,
+                )
+                for index in range(1, 6)
+            ]
+            files.append(SimpleNamespace(rfilename="DeepSeek-Engram-IQ4_NL.gguf", size=80))
+            info = SimpleNamespace(sha="resolved-sha", siblings=files)
+            selected = [item.rfilename for item in files]
+            with (
+                patch("backend.main.HfApi") as api,
+                patch("backend.main.model_download_memory_limit_bytes", return_value=100),
+                patch("backend.main.download_hf_files", new=AsyncMock()),
+                TestClient(app) as client,
+            ):
+                api.return_value.model_info.return_value = info
+                response = client.post("/api/models/huggingface/files/download", json={
+                    "repo_id": "org/deepseek-coder-GGUF",
+                    "files": selected,
+                })
+            self.assertEqual(response.status_code, 200)
         db.path = original_path
 
     def test_huggingface_file_download_reuses_active_job(self) -> None:

@@ -16,6 +16,7 @@ import {
   Gauge,
   Globe,
   HardDrive,
+  History,
   Image as ImageIcon,
   Info,
   Layers,
@@ -386,6 +387,19 @@ function searchCountLabel(text: string, resultCount: number | null) {
   return `${resultCount} ${resultCount === 1 ? "resultado" : "resultados"}`;
 }
 
+const HF_RECENT_SEARCHES_KEY = "mydgx-hf-recent-searches";
+
+function storedHfSearches() {
+  try {
+    const values: unknown = JSON.parse(localStorage.getItem(HF_RECENT_SEARCHES_KEY) || "[]");
+    return Array.isArray(values)
+      ? values.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).slice(0, 8)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 const UNCENSORED_PATTERN = /uncensored|abliterat|\bablit|heretic|derestrict|unrestrict|unleashed|unfiltered|nsfw|dolphin/i;
 
 function UncensoredBadge({ name, flagged = false }: { name: string; flagged?: boolean }) {
@@ -408,11 +422,17 @@ const MODEL_GLOSSARY: ModelGlossaryEntry[] = [
   { id: "q6-q8", term: "Q6 / Q8", summary: "Más fidelidad y mayor consumo. Q8 conserva mucha calidad, pero no siempre mejora lo suficiente para justificar su tamaño.", category: "Tamaño y precisión", patterns: [/\bq[678](?:_[a-z0-9]+)?\b/i, /\bint8\b/i] },
   { id: "k-variants", term: "K_S / K_M / K_L", summary: "Variantes de una cuantización GGUF. S prioriza tamaño, M equilibrio y L algo más de calidad.", category: "Tamaño y precisión", patterns: [/\bq\d+_k_[sml]\b/i, /\bk_[sml]\b/i] },
   { id: "iq", term: "IQ", summary: "Cuantización inteligente de llama.cpp. Busca conservar más calidad con muy pocos bits.", category: "Tamaño y precisión", patterns: [/\biq\d/i] },
+  { id: "bpw", term: "BPW · bits por peso", summary: "Promedio de bits usados por cada peso. Menos BPW reduce memoria y descarga, pero puede degradar la calidad.", category: "Tamaño y precisión", patterns: [/\bbpw\b/i, /bits?.per.weight/i, /bits?.por.peso/i] },
+  { id: "imatrix", term: "Importance matrix · imatrix", summary: "Muestra de activaciones usada para decidir qué pesos necesitan más precisión durante la cuantización.", category: "Tamaño y precisión", patterns: [/\bimatrix\b/i, /importance.matrix/i] },
   { id: "fp-bf", term: "FP16 / BF16 / FP32", summary: "Pesos con alta precisión. Son fieles, pero ocupan bastante más memoria que una cuantización.", category: "Tamaño y precisión", patterns: [/\bfp(?:16|32)\b/i, /\bbf16\b/i, /float(?:16|32)/i] },
   { id: "fp8-mxfp4", term: "FP8 / MXFP4 / INT4", summary: "Formatos compactos usados por motores GPU. MXFP4 es especialmente interesante para GPT-OSS en el Spark.", category: "Tamaño y precisión", patterns: [/\bfp8\b/i, /\bmxfp4\b/i, /\bint4\b/i] },
   { id: "dense", term: "Dense · Denso", summary: "Activa casi todos sus parámetros en cada token. Es sencillo, pero los modelos grandes pueden ser lentos por el ancho de banda.", category: "Arquitectura y velocidad", patterns: [/\bdense\b/i, /\bdenso\b/i] },
   { id: "moe", term: "MoE · Mixture of Experts", summary: "Tiene muchos parámetros totales, pero usa solo algunos expertos por token. Suele encajar muy bien con DGX Spark.", category: "Arquitectura y velocidad", patterns: [/\bmoe\b/i, /mixture.of.experts/i, /\bexperts?\b/i] },
   { id: "active-parameters", term: "Parámetros activos", summary: "Parte del modelo MoE utilizada para cada token. Explica por qué un modelo enorme puede responder con rapidez.", category: "Arquitectura y velocidad", patterns: [/active.parameters/i, /parámetros activos/i, /\b\d+(?:\.\d+)?b activos\b/i] },
+  { id: "expert-pruning", term: "Expert pruning · poda de expertos", summary: "Elimina expertos de un MoE para reducir memoria. Puede conservar bien una especialidad y perder calidad en otros usos.", category: "Arquitectura y velocidad", patterns: [/expert.prun/i, /pruned.expert/i, /poda.de.expert/i] },
+  { id: "reap", term: "REAP", summary: "Método que puntúa y poda expertos según su contribución. Reduce mucho el modelo, pero la calidad depende de los datos usados para calibrarlo.", category: "Arquitectura y velocidad", patterns: [/\breap(?:\d+)?\b/i] },
+  { id: "gsq-rco", term: "GSQ / RCO", summary: "Técnicas de cuantización y selección de expertos. GSQ comprime pesos; RCO elige qué expertos conservar bajo un límite exacto.", category: "Arquitectura y velocidad", patterns: [/\bgsq\b/i, /\brco\b/i] },
+  { id: "engram", term: "Engram", summary: "Grandes tablas de memoria consultadas por token. Pueden permanecer en un NVMe rápido mediante mmap y no ocupar toda la RAM.", category: "Arquitectura y velocidad", patterns: [/\bengram\b/i, /\.v41rows\b/i] },
   { id: "mtp", term: "MTP", summary: "Predice varios tokens futuros para acelerar la generación. Necesita soporte del modelo y del motor.", category: "Arquitectura y velocidad", patterns: [/\bmtp\b/i, /multi.token prediction/i] },
   { id: "speculative", term: "Speculative decoding", summary: "Un modelo pequeño propone tokens y el principal los valida. Puede aumentar bastante la velocidad.", category: "Arquitectura y velocidad", patterns: [/speculative/i, /\bdraft model\b/i, /\bdspark\b/i, /\bdflash\b/i] },
   { id: "gqa", term: "GQA / MQA", summary: "Reduce el coste de atención y de la caché KV. Ayuda especialmente con contextos largos.", category: "Arquitectura y velocidad", patterns: [/\bgqa\b/i, /\bmqa\b/i, /grouped.query/i] },
@@ -422,16 +442,30 @@ const MODEL_GLOSSARY: ModelGlossaryEntry[] = [
   { id: "slots", term: "Slots / concurrencia", summary: "Peticiones que el servidor puede atender a la vez. Cada slot añade caché y consumo de memoria.", category: "Uso", patterns: [/\bslots?\b/i, /concurren/i, /parallel/i] },
   { id: "instruct-base", term: "Base / Instruct / Chat", summary: "Base es el modelo sin adaptar; Instruct o Chat está preparado para seguir órdenes y conversar.", category: "Uso", patterns: [/\bbase\b/i, /\binstruct\b/i, /-it\b/i, /\bchat\b/i] },
   { id: "reasoning", term: "Reasoning / Thinking", summary: "Optimizado para resolver problemas paso a paso. Puede ser más capaz, pero también más lento y verboso.", category: "Uso", patterns: [/reasoning/i, /thinking/i, /\breasoner\b/i] },
+  { id: "rag", term: "RAG", summary: "Busca información en tus documentos y la añade al prompt antes de responder. No reentrena el modelo.", category: "Uso", patterns: [/\brag\b/i, /retrieval.augmented/i] },
+  { id: "agents-tools", term: "Agentes / tool calling", summary: "El modelo puede elegir y llamar herramientas, APIs o funciones. Requiere una plantilla y un runtime compatibles.", category: "Uso", patterns: [/\bagents?\b/i, /tool.call/i, /function.call/i, /computer.use/i] },
   { id: "embeddings-reranker", term: "Embeddings / Reranker", summary: "Embeddings convierten texto en vectores; un reranker reordena resultados. No son modelos de chat.", category: "Uso", patterns: [/embedding/i, /rerank/i] },
-  { id: "asr-tts", term: "ASR / TTS", summary: "ASR transcribe voz a texto. TTS convierte texto en voz.", category: "Uso", patterns: [/\basr\b/i, /\btts\b/i, /whisper/i, /text.to.speech/i, /speech.to.text/i] },
+  { id: "asr-tts", term: "ASR / STT / TTS", summary: "ASR o STT transcribe voz a texto. TTS convierte texto en voz.", category: "Uso", patterns: [/\basr\b/i, /\bstt\b/i, /\btts\b/i, /whisper/i, /text.to.speech/i, /speech.to.text/i] },
+  { id: "voice-cloning", term: "Voice cloning / speaker embedding", summary: "Imita una voz usando una muestra o una representación del hablante. Usa solo voces con permiso.", category: "Uso", patterns: [/voice.clon/i, /speaker.embedding/i, /reference.audio/i, /zero.shot.voice/i] },
+  { id: "vocoder-codec", term: "Vocoder / audio codec", summary: "Un vocoder convierte representaciones acústicas en audio. Un codec comprime audio en tokens que otro modelo puede procesar.", category: "Uso", patterns: [/\bvocoder\b/i, /\bvocos\b/i, /audio.codec/i, /codec.model/i] },
+  { id: "vad-diarization", term: "VAD / diarización", summary: "VAD detecta cuándo hay voz; la diarización separa quién habla en una grabación.", category: "Uso", patterns: [/\bvad\b/i, /diari[sz]/i, /speaker.separation/i] },
   { id: "vision-mmproj", term: "Vision / mmproj", summary: "mmproj es el proyector que permite a ciertos GGUF entender imágenes. Debe descargarse junto al modelo.", category: "Uso", patterns: [/mmproj/i, /vision/i, /image.text/i, /multimodal/i] },
   { id: "diffusion", term: "Diffusion / checkpoint", summary: "Familia habitual para generar imagen o vídeo. ComfyUI carga sus checkpoints; no funciona como un chat GGUF.", category: "Uso", patterns: [/diffusion/i, /checkpoint/i, /\bflux\b/i, /wan(?:2|\b)/i] },
+  { id: "vae-clip", term: "VAE / CLIP / text encoder", summary: "CLIP o el text encoder entiende el prompt; el VAE transforma entre imagen y espacio latente. Suelen acompañar al checkpoint.", category: "Uso", patterns: [/\bvae\b/i, /\bclip\b/i, /text.encoder/i] },
+  { id: "controlnet-upscaler", term: "ControlNet / Upscaler", summary: "ControlNet guía composición, pose o bordes. Un upscaler aumenta resolución y detalle después de generar.", category: "Uso", patterns: [/\bcontrolnet\b/i, /\bupscal/i, /\bsuper.resolution\b/i] },
+  { id: "t2v-i2v", term: "T2V / I2V / V2V", summary: "Texto a vídeo, imagen a vídeo o vídeo a vídeo. Más duración, resolución y FPS requieren mucha más memoria y tiempo.", category: "Uso", patterns: [/\bt2v\b/i, /\bi2v\b/i, /\bv2v\b/i, /text.to.video/i, /image.to.video/i] },
+  { id: "fps-frames", term: "FPS / frames", summary: "Fotogramas por segundo y número total de imágenes del vídeo. Duplicarlos suele acercarse a duplicar el trabajo.", category: "Uso", patterns: [/\bfps\b/i, /\bframes?\b/i, /fotogram/i] },
   { id: "gguf", term: "GGUF", summary: "Formato preparado para llama.cpp. Es la opción más directa para ejecutar LLM cuantizados localmente.", category: "Formato y runtime", patterns: [/\bgguf\b/i] },
   { id: "safetensors", term: "Safetensors", summary: "Formato seguro de pesos, habitual en Hugging Face. Necesita un runtime compatible como vLLM, ComfyUI o Transformers.", category: "Formato y runtime", patterns: [/safetensors/i] },
   { id: "shards", term: "Shards · partes 00001-of-00004", summary: "Un modelo dividido en varios archivos. Hay que descargar todas las partes de la misma cuantización.", category: "Formato y runtime", patterns: [/shard/i, /\d{5}-of-\d{5}/i] },
-  { id: "lora", term: "LoRA / Adapter", summary: "Adaptación pequeña aplicada sobre un modelo base. Por sí sola normalmente no contiene el modelo completo.", category: "Formato y runtime", patterns: [/\blora\b/i, /\badapter\b/i] },
-  { id: "awq-gptq", term: "AWQ / GPTQ / EXL2", summary: "Cuantizaciones para runtimes GPU específicos. No son GGUF y requieren un motor compatible.", category: "Formato y runtime", patterns: [/\bawq\b/i, /\bgptq\b/i, /\bexl2\b/i] },
+  { id: "lora", term: "LoRA / Adapter", summary: "Adaptación pequeña aplicada sobre un modelo base. Puede cambiar estilo, voz o capacidad, pero normalmente no incluye el modelo completo.", category: "Formato y runtime", patterns: [/\blora\b/i, /\badapter\b/i, /\bpeft\b/i] },
+  { id: "mlx", term: "MLX", summary: "Runtime y formato optimizados para Apple Silicon. No es la opción nativa para un DGX Spark con CUDA.", category: "Formato y runtime", patterns: [/\bmlx\b/i, /mlx.community/i] },
+  { id: "pytorch-transformers", term: "PyTorch / Transformers", summary: "Ecosistema general para cargar modelos originales y safetensors. Flexible, aunque suele consumir más recursos que un runtime optimizado.", category: "Formato y runtime", patterns: [/\bpytorch\b/i, /\btransformers\b/i, /\btorch\b/i] },
+  { id: "onnx", term: "ONNX", summary: "Formato portable para inferencia. Necesita ONNX Runtime, TensorRT u otro motor compatible.", category: "Formato y runtime", patterns: [/\bonnx\b/i] },
+  { id: "awq-gptq", term: "AWQ / GPTQ / EXL2 / EXL3", summary: "Cuantizaciones para runtimes GPU específicos. No son GGUF y requieren un motor compatible.", category: "Formato y runtime", patterns: [/\bawq\b/i, /\bgptq\b/i, /\bexl[23]\b/i] },
+  { id: "mmap-offload", term: "mmap / offload", summary: "mmap lee pesos desde disco bajo demanda; offload reparte trabajo entre GPU, RAM o NVMe. Ahorra memoria, pero puede ser más lento.", category: "Formato y runtime", patterns: [/\bmmap\b/i, /\boffload/i, /lazy.mode/i] },
   { id: "runtimes", term: "llama.cpp / Ollama / vLLM / SGLang / TensorRT-LLM", summary: "Son motores que cargan y sirven el modelo. El formato correcto depende del motor elegido.", category: "Formato y runtime", patterns: [/llama\.?cpp/i, /\bollama\b/i, /\bvllm\b/i, /\bsglang\b/i, /tensorrt/i] },
+  { id: "comfyui", term: "ComfyUI / workflow / node", summary: "Interfaz por nodos para encadenar modelos de imagen, vídeo y audio. Un workflow define el proceso completo.", category: "Formato y runtime", patterns: [/\bcomfyui\b/i, /\bworkflow\b/i, /custom.node/i] },
   { id: "uncensored", term: "Uncensored · Sin censura", summary: "Versión comunitaria ajustada para rechazar menos peticiones. No significa que sea oficial, exacta ni libre de límites.", category: "Alineación y acceso", patterns: [/uncensored/i, /uncensor/i, /sin censura/i] },
   { id: "abliterated", term: "Abliterated", summary: "Modelo modificado para reducir mecanismos de rechazo. Puede cambiar su calidad o comportamiento respecto al original.", category: "Alineación y acceso", patterns: [/abliterat/i, /\bablit\b/i] },
   { id: "heretic", term: "Heretic", summary: "Nombre usado por algunas variantes comunitarias con menos rechazos. Revisa siempre autor, pruebas y modelo base.", category: "Alineación y acceso", patterns: [/\bheretic\b/i] },
@@ -851,6 +885,26 @@ function hfFileGroups(files: HfRemoteFile[]): HfFileGroup[] {
     else group.sizeKnown = false;
     groups.set(id, group);
   }
+  const sharedEngrams = [...groups.values()].filter((group) => (
+    group.kind === "weights"
+    && group.files.length === 1
+    && /(?:^|[/_.-])engram(?:[/_.-]|$)/i.test(group.files[0].name)
+    && !/-\d{5}-of-\d{5}\.gguf$/i.test(group.files[0].name)
+  ));
+  for (const engram of sharedEngrams) {
+    let attached = false;
+    for (const group of groups.values()) {
+      if (group === engram || group.kind !== "weights") continue;
+      const shard = group.files[0]?.name.match(/-\d{5}-of-(\d{5})\.gguf$/i);
+      const expected = shard ? Number(shard[1]) : 1;
+      if (expected <= 1 || group.files.length !== expected - 1) continue;
+      group.files.push(...engram.files);
+      group.size += engram.size;
+      group.sizeKnown = group.sizeKnown && engram.sizeKnown;
+      attached = true;
+    }
+    if (attached) groups.delete(engram.id);
+  }
   const preferred = ["Q4_K_M", "Q5_K_M", "Q6_K", "Q4_K_S", "Q5_K_S", "Q4_0", "IQ4_XS", "IQ4_NL", "Q3_K_M", "Q8_0", "Q3_K_S", "Q2_K"];
   const rank = (group: HfFileGroup) => {
     const exact = preferred.indexOf(group.label.toUpperCase());
@@ -892,12 +946,20 @@ function quantizationHint(label: string) {
   return `${quality}${variant ? ` · ${variant}` : ""}`;
 }
 
+function hfGroupResidentSize(group: HfFileGroup) {
+  const sharedEngram = group.files.find((file) => (
+    /(?:^|[/_.-])engram(?:[/_.-]|$)/i.test(file.name)
+    && !/-\d{5}-of-\d{5}\.gguf$/i.test(file.name)
+  ));
+  return Math.max(0, group.size - (sharedEngram?.size ?? 0));
+}
+
 function recommendedHfFiles(inspection: HfInspection) {
   const groups = hfFileGroups(inspection.remote?.files ?? []);
   const weights = groups.find((group) => (
     group.kind === "weights"
     && group.sizeKnown
-    && group.size <= inspection.download_limit_bytes
+    && hfGroupResidentSize(group) <= inspection.download_limit_bytes
     && group.files.some((file) => !file.downloaded)
   ));
   if (!weights) return [];
@@ -907,7 +969,7 @@ function recommendedHfFiles(inspection: HfInspection) {
       group.kind === "mmproj"
       && group.sizeKnown
       && group.files.some((file) => !file.downloaded)
-      && group.size + weights.size <= inspection.download_limit_bytes
+      && group.size + hfGroupResidentSize(weights) <= inspection.download_limit_bytes
     ));
     if (projector) selected.push(...projector.files.filter((file) => !file.downloaded).map((file) => file.name));
   }
@@ -1468,6 +1530,8 @@ type HfInspection = {
     output_modalities: string[];
     formats: string[];
     recommended_engines: string[];
+    download_supported: boolean;
+    download_block_reason: string;
     files: HfRemoteFile[];
   } | null;
   local?: {
@@ -2789,6 +2853,8 @@ function ModelsView({
   const [localFilter, setLocalFilter] = useState<LocalModelFilter>("all");
   const [localQuery, setLocalQuery] = useState("");
   const [query, setQuery] = useState("");
+  const [recentSearches, setRecentSearches] = useState<string[]>(storedHfSearches);
+  const [searchHistoryOpen, setSearchHistoryOpen] = useState(false);
   const searchFormRef = useRef<HTMLFormElement>(null);
   const [task, setTask] = useState<"any" | "chat" | "code" | "reasoning" | "embedding" | "vision" | "audio-chat" | "video-chat" | "image-generation" | "asr" | "tts" | "video-generation" | "reranking">("any");
   const [size, setSize] = useState<"any" | "compact" | "balanced" | "large">("any");
@@ -2878,8 +2944,32 @@ function ModelsView({
     setTimeout(() => searchFormRef.current?.requestSubmit(), 0);
   }
 
+  function rememberSearch(text: string) {
+    const value = text.trim();
+    if (!value) return;
+    setRecentSearches((current) => {
+      const next = [value, ...current.filter((item) => item.toLocaleLowerCase() !== value.toLocaleLowerCase())].slice(0, 8);
+      localStorage.setItem(HF_RECENT_SEARCHES_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function reuseSearch(text: string) {
+    setQuery(text);
+    setSearchHistoryOpen(false);
+    setTimeout(() => searchFormRef.current?.requestSubmit(), 0);
+  }
+
+  function clearSearchHistory() {
+    localStorage.removeItem(HF_RECENT_SEARCHES_KEY);
+    setRecentSearches([]);
+    setSearchHistoryOpen(false);
+  }
+
   async function search(event: FormEvent) {
     event.preventDefault();
+    rememberSearch(query);
+    setSearchHistoryOpen(false);
     setHasSearched(true);
     setBusy(true);
     try {
@@ -3221,11 +3311,18 @@ function ModelsView({
   const selectedSizeKnown = selectedRemoteFiles.length === selectedFiles.length
     && selectedRemoteFiles.every((file) => typeof file.size === "number");
   const selectedDownloadSize = selectedRemoteFiles.reduce((total, file) => total + (file.size ?? 0), 0);
+  const selectedResidentSize = hfFileGroups(selectedRemoteFiles).reduce(
+    (total, group) => total + (group.kind === "weights" ? hfGroupResidentSize(group) : group.size),
+    0,
+  );
   const selectedDownloadTooLarge = Boolean(
     inspection
     && selectedSizeKnown
-    && selectedDownloadSize > inspection.download_limit_bytes
+    && selectedResidentSize > inspection.download_limit_bytes
   );
+  const matchingRecentSearches = recentSearches.filter((item) => (
+    !query.trim() || item.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
+  ));
 
   function toggleHfFileGroup(group: HfFileGroup, checked: boolean) {
     const pending = group.files.filter((file) => !file.downloaded).map((file) => file.name);
@@ -3554,7 +3651,23 @@ function ModelsView({
             </div>
             {catalogMode !== "favorites" && <form className={`search-bar${searchStateClass(query, hasSearched && !busy ? (catalogMode === "all" ? allResults : results).length : null)}`} data-count={searchCountLabel(query, hasSearched && !busy ? (catalogMode === "all" ? allResults : results).length : null)} onSubmit={search} ref={searchFormRef}>
               <Search size={18} />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ejemplo: Qwen coder, Llama instruct, reasoning…" />
+              <div className="search-history-field" onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setSearchHistoryOpen(false);
+              }}>
+                <input
+                  value={query}
+                  onChange={(event) => { setQuery(event.target.value); setSearchHistoryOpen(true); }}
+                  onFocus={() => setSearchHistoryOpen(true)}
+                  placeholder="Ejemplo: Qwen coder, Llama instruct, reasoning…"
+                  autoComplete="off"
+                  aria-label="Buscar modelos en Hugging Face"
+                  aria-expanded={searchHistoryOpen && matchingRecentSearches.length > 0}
+                />
+                {searchHistoryOpen && matchingRecentSearches.length > 0 && <div className="search-history-menu">
+                  <div className="search-history-head"><span><History size={13} /> Búsquedas recientes</span><button type="button" onClick={clearSearchHistory}>Borrar</button></div>
+                  {matchingRecentSearches.map((item) => <button className="search-history-item" type="button" key={item} onClick={() => reuseSearch(item)}><History size={13} /><span>{item}</span></button>)}
+                </div>}
+              </div>
               <button className="button primary" type="submit" disabled={busy}>{busy ? (catalogMode === "spark" ? "Analizando…" : "Buscando…") : (catalogMode === "spark" ? "Recomendar" : "Buscar")}</button>
             </form>}
             {catalogMode !== "favorites" && <a className="hft-catalog-link" href="https://hft.md/uncensored-ai/" target="_blank" rel="noreferrer noopener">
@@ -3832,6 +3945,9 @@ function ModelsView({
             <span>{inspection.remote.recommended_engines.join(" · ") || "runtime por determinar"}</span>
           </div>}
           {inspection.remote_error && <div className="profile-warning"><ShieldCheck size={15} />No se pudo consultar la ficha remota: {inspection.remote_error}</div>}
+          {inspection.remote && !inspection.remote.download_supported && <div className="profile-warning">
+            <TriangleAlert size={15} />{inspection.remote.download_block_reason}
+          </div>}
           {inspection.local && <div className="hf-local-detail">
             <small>Cuantizaciones: {inspection.local.quantizations.join(", ") || "no detectadas"} · Snapshots: {inspection.local.snapshots.length} · Parciales: {inspection.local.partials.length}</small>
             {inspection.local.shards.map((shard) => <span className={`badge ${shard.complete ? "completed" : "failed"}`} key={`${shard.name}-${shard.expected}`}>{shard.name}: {shard.present.length}/{shard.expected}</span>)}
@@ -3871,7 +3987,7 @@ function ModelsView({
                     ? <input
                         aria-label={`Seleccionar ${group.label}`}
                         checked={selected}
-                        disabled={!pending.length}
+                        disabled={!pending.length || inspection.remote?.download_supported === false}
                         name={group.kind === "weights" ? "hf-quantization" : undefined}
                         onChange={(event) => toggleHfFileGroup(group, event.target.checked)}
                         onClick={(event) => event.stopPropagation()}
@@ -3909,14 +4025,18 @@ function ModelsView({
               {selectedFiles.length} archivo(s) seleccionado(s)
               {selectedFiles.length > 0 && (
                 <> · {selectedSizeKnown
-                  ? `${bytes(selectedDownloadSize)} de ${bytes(inspection.download_limit_bytes)} de memoria total`
+                  ? selectedResidentSize < selectedDownloadSize
+                    ? `${bytes(selectedDownloadSize)} de descarga · ~${bytes(selectedResidentSize)} residentes de ${bytes(inspection.download_limit_bytes)}`
+                    : `${bytes(selectedDownloadSize)} de ${bytes(inspection.download_limit_bytes)} de memoria total`
                   : "tamaño desconocido"}</>
               )}
             </small>
             <button
               className="button primary"
-              disabled={!selectedFiles.length || !selectedSizeKnown || selectedDownloadTooLarge || downloadBusy !== null}
-              title={selectedDownloadTooLarge
+              disabled={inspection.remote?.download_supported === false || !selectedFiles.length || !selectedSizeKnown || selectedDownloadTooLarge || downloadBusy !== null}
+              title={inspection.remote?.download_supported === false
+                ? inspection.remote.download_block_reason
+                : selectedDownloadTooLarge
                 ? "La selección supera la memoria total del sistema"
                 : !selectedSizeKnown && selectedFiles.length ? "No se puede comprobar que la selección cabe" : undefined}
               onClick={downloadSelected}
@@ -6217,27 +6337,44 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
 
   const modalityOf = (run: BenchmarkRun) => data.protocols.find((protocol) => protocol.id === run.protocol_id)?.modality ?? "text-generation";
   const validRuns = data.runs.filter((run) => run.status === "completed" && run.valid);
-  const groupKey = (run: BenchmarkRun) => `${run.environment_hash}|${run.score_algorithm}`;
+  // Charts compare one device across software updates (e.g. a new llama.cpp) by default;
+  // the selector narrows them to a single exact environment.
+  const deviceOf = (run: BenchmarkRun) => String(run.hardware.device_model || run.hardware.product_name || "Equipo");
   const comparisonGroups = Array.from(validRuns.reduce((groups, run) => {
-    const key = groupKey(run);
-    const current = groups.get(key);
-    if (current) current.count += 1;
-    else groups.set(key, {
-      key,
-      count: 1,
-      label: `${String(run.hardware.device_model || run.hardware.product_name || "Equipo")} · ${run.environment_hash.slice(0, 8)} · ${run.score_algorithm}`,
-    });
+    const device = deviceOf(run);
+    for (const [key, label] of [
+      [`device|${device}`, `${device} · todas las versiones`],
+      [`env|${run.environment_hash}`, `${device} · entorno ${run.environment_hash.slice(0, 8)}`],
+    ]) {
+      const current = groups.get(key);
+      if (current) {
+        current.count += 1;
+        current.environments.add(run.environment_hash);
+        if (run.created_at < current.since) current.since = run.created_at;
+      } else {
+        groups.set(key, { key, label, count: 1, since: run.created_at, environments: new Set([run.environment_hash]) });
+      }
+    }
     return groups;
-  }, new Map<string, { key: string; count: number; label: string }>()).values());
+  }, new Map<string, { key: string; label: string; count: number; since: string; environments: Set<string> }>()).values())
+    .filter((group, _, all) => group.key.startsWith("device|") || all.filter((item) => item.key.startsWith("env|")).length > 1);
   const selectedComparison = comparisonGroups.some((group) => group.key === comparisonKey)
     ? comparisonKey
-    : (validRuns[0] ? groupKey(validRuns[0]) : "");
+    : (validRuns[0] ? `device|${deviceOf(validRuns[0])}` : "");
+  const selectedGroup = comparisonGroups.find((group) => group.key === selectedComparison);
+  const inComparison = (run: BenchmarkRun) => (selectedComparison.startsWith("env|")
+    ? `env|${run.environment_hash}` === selectedComparison
+    : `device|${deviceOf(run)}` === selectedComparison);
   const comparableByModality = new Map<string, BenchmarkRun[]>();
-  for (const run of validRuns.filter((item) => groupKey(item) === selectedComparison)) {
+  for (const run of validRuns.filter(inComparison)) {
     const modality = modalityOf(run);
     const items = comparableByModality.get(modality) ?? [];
-    const protocolId = items[0]?.protocol_id ?? run.protocol_id;
-    if (run.protocol_id === protocolId && !items.some((item) => item.artifact_hash === run.artifact_hash)) items.push(run);
+    const reference = items[0] ?? run;
+    if (
+      run.protocol_id === reference.protocol_id
+      && run.score_algorithm === reference.score_algorithm
+      && !items.some((item) => item.artifact_hash === run.artifact_hash)
+    ) items.push(run);
     comparableByModality.set(modality, items);
   }
   const artifactGroups = Array.from(data.runs.reduce((groups, run) => {
@@ -6639,9 +6776,12 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
           eyebrow="COMPARACIÓN"
           title={activeCategory.id === "all" ? "Rendimiento por categoría" : `Rendimiento · ${activeCategory.label}`}
           action={comparisonGroups.length > 1 ? <select className="benchmark-comparison-select" value={selectedComparison} onChange={(event) => setComparisonKey(event.target.value)} aria-label="Entorno de comparación">
-            {comparisonGroups.map((group) => <option key={group.key} value={group.key}>{group.label} ({group.count})</option>)}
+            {comparisonGroups.map((group) => <option key={group.key} value={group.key}>{group.label}{group.key.startsWith("env|") ? ` · desde ${new Date(group.since).toLocaleDateString()}` : ""} ({group.count})</option>)}
           </select> : undefined}
         />
+        {selectedGroup && selectedGroup.environments.size > 1 && <small className="benchmark-comparison-note">
+          Combina {selectedGroup.environments.size} entornos de software (por ejemplo, versiones de llama.cpp o del driver). Cada modelo muestra su último resultado; elige un entorno concreto para comparar en igualdad estricta.
+        </small>}
         {chartModalities.map((modality) => <BenchmarkModalityCharts key={modality} modality={modality} runs={comparableByModality.get(modality) ?? []} />)}
       </>}
 

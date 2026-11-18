@@ -2331,7 +2331,8 @@ def model_identity(model: dict[str, Any]) -> str:
 def profile_models(profile: dict[str, Any]) -> list[dict[str, Any]]:
     primary = dict(profile)
     primary["id"] = "primary"
-    primary["name"] = profile["name"]
+    # Default and Quick rows are named after the profile; their primary is the first model in the list.
+    primary["name"] = managed_model_name(profile) if profile.get("id") in MANAGED_PROFILES else profile["name"]
     primary["enabled"] = True
     primary["estimated_memory_mb"] = profile.get("estimated_memory_mb", 0)
     for key, fallback in (
@@ -10035,14 +10036,18 @@ PROFILE_INSERT_COLUMNS = [
 MANAGED_MODEL_NAME_INVALID = re.compile(r"[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+")
 
 
+def managed_model_name(model: dict[str, Any]) -> str:
+    name = MANAGED_MODEL_NAME_INVALID.sub(" ", str(model.get("model_ref") or "")).strip()[:80]
+    return name if len(name) >= 2 else "Modelo"
+
+
 def managed_profile_payload(profile_id: str, models: list[dict[str, Any]]) -> ProfilePayload:
     entries: list[AdditionalModelPayload] = []
     for model in models:
         values = {key: model[key] for key in AdditionalModelPayload.model_fields if key in model}
         values["threads"] = max(1, int(values.get("threads") or 1))
         values["id"] = f"m-{hashlib.sha256(model_identity(model).encode()).hexdigest()[:12]}"
-        name = MANAGED_MODEL_NAME_INVALID.sub(" ", str(model.get("model_ref") or "")).strip()[:80]
-        values["name"] = name if len(name) >= 2 else "Modelo"
+        values["name"] = managed_model_name(model)
         entries.append(AdditionalModelPayload.model_validate(values))
     primary = entries[0].model_dump(exclude={"id", "name"})
     return ProfilePayload.model_validate({

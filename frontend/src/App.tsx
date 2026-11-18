@@ -46,6 +46,7 @@ import {
   TriangleAlert,
   Trash2,
   Trophy,
+  ChevronDown,
   Upload,
   X,
   Zap,
@@ -2278,6 +2279,31 @@ function SectionHeading({
   );
 }
 
+function ActivitySection({ eyebrow, title, total, active, children }: {
+  eyebrow: string;
+  title: string;
+  total: number;
+  active: number;
+  children: ReactNode;
+}) {
+  return (
+    <details className="activity-section">
+      <summary className="section-heading">
+        <div>
+          <span className="eyebrow">{eyebrow}</span>
+          <h2>{title}</h2>
+        </div>
+        <span className="activity-section-meta">
+          {active > 0 && <span className="badge running">{active} en curso</span>}
+          <small>{total} {total === 1 ? "tarea" : "tareas"}</small>
+          <ChevronDown size={18} className="activity-section-chevron" />
+        </span>
+      </summary>
+      {children}
+    </details>
+  );
+}
+
 function ProgressRing({
   value,
   label,
@@ -3782,7 +3808,7 @@ function ModelsView({
             <div><ShieldCheck size={16} /><span><strong>Límite de memoria</strong><small>MyDGX cancela la descarga si el tamaño no cabe en la memoria unificada.</small></span></div>
             <div><Gauge size={16} /><span><strong>Benchmark automático</strong><small>Al terminar se encola su medición si el modo automático está activo.</small></span></div>
           </div>
-          <SectionHeading eyebrow="DESCARGAS" title="Actividad de Ollama" />
+          <ActivitySection eyebrow="DESCARGAS" title="Actividad de Ollama" total={ollamaJobs.length} active={ollamaJobs.filter((job) => activeJobStatuses.has(job.status)).length}>
           {ollamaJobs.length ? <div className="ollama-job-list">
             {ollamaJobs.map((job) => {
               const active = activeJobStatuses.has(job.status);
@@ -3797,6 +3823,7 @@ function ModelsView({
               </Card>;
             })}
           </div> : <Empty icon={<Download />} title="Sin descargas de Ollama" text="Las descargas que lances aparecerán aquí con su progreso." />}
+          </ActivitySection>
         </div>
       ) : tab === "installed" ? (
         <>
@@ -4445,8 +4472,12 @@ function ModelsView({
       {settingsModel && <ModelSettingsDialog modelId={settingsModel} notify={notify} onClose={() => setSettingsModel(null)} onSaved={refresh} />}
 
       {displayedJobs.length > 0 && (
-        <div>
-          <SectionHeading eyebrow="TAREAS" title="Actividad reciente" />
+        <ActivitySection
+          eyebrow="TAREAS"
+          title="Actividad reciente"
+          total={Math.min(displayedJobs.length, 8)}
+          active={displayedJobs.slice(0, 8).filter(({ job }) => activeJobStatuses.has(job.status)).length}
+        >
           <Card className="jobs">
             {displayedJobs.slice(0, 8).map(({ job, duplicateCount }) => (
               <div className="job-row" key={job.id}>
@@ -4457,7 +4488,7 @@ function ModelsView({
               </div>
             ))}
           </Card>
-        </div>
+        </ActivitySection>
       )}
     </div>
   );

@@ -5685,6 +5685,11 @@ class ProfileApiTests(unittest.TestCase):
                     )
                     self.assertTrue(quick["read_only"])
                     self.assertEqual(quick["name"], "Quick")
+                    quick_rows = db.rows("SELECT * FROM profiles WHERE id=?", (main_module.QUICK_PROFILE_ID,))
+                    self.assertEqual(
+                        [item["name"] for item in main_module.profile_models(quick_rows[0])],
+                        ["alpha latest", "beta latest"],
+                    )
                     stop_alpha = client.post("/api/models/quick/stop", json={"source": "ollama", "model_id": "alpha:latest"})
                     self.assertEqual(stop_alpha.status_code, 200)
                     self.assertEqual(len(stopped), 1)

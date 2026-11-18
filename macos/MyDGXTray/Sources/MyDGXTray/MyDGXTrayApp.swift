@@ -67,9 +67,10 @@ struct MyDGXTrayApp: App {
             MenuContentView(model: model)
         } label: {
             HStack(spacing: 4) {
-                Image(nsImage: TrayImages.nvidia)
+                Image(nsImage: TrayImages.menuBar)
                     .resizable()
-                    .frame(width: 18, height: 18)
+                    .interpolation(.high)
+                    .frame(width: TrayImages.menuBar.size.width, height: TrayImages.menuBar.size.height)
                 Text(model.menuBarLabel)
             }
             .accessibilityLabel("NVIDIA MyDGX, \(model.menuBarLabel)")
@@ -78,6 +79,17 @@ struct MyDGXTrayApp: App {
 }
 
 enum TrayImages {
+    static let menuBar: NSImage = {
+        if let url = Bundle.main.url(forResource: "DGXTrayIcon", withExtension: "png"),
+           let image = NSImage(contentsOf: url),
+           image.size.height > 0 {
+            let height: CGFloat = 16
+            image.size = NSSize(width: (image.size.width / image.size.height * height).rounded(), height: height)
+            return image
+        }
+        return nvidia
+    }()
+
     static let nvidia: NSImage = {
         if let url = Bundle.main.url(forResource: "NVIDIAIcon", withExtension: "png"),
            let image = NSImage(contentsOf: url) {

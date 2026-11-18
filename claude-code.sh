@@ -32,7 +32,8 @@ Uso: $ROOT/start.sh install-claude-code
                        la configuración y abre Claude Code con el alias indicado.
   --active             Acepta ediciones, pide confirmación para bash y activa
                        los MCP Playwright, Shodan y NVD. Sin la opción, usa
-                       plan/solo lectura.
+                       plan/solo lectura. La búsqueda web (SearXNG) se añade
+                       en ambos modos cuando el gateway la tiene activada.
 
 Variables opcionales:
   MYDGX_GATEWAY_URL               Base OpenAI; por defecto, gateway local de MyDGX.
@@ -110,8 +111,8 @@ run_claude() {
   fi
 
   local result url selected settings mcp
-  prepare_gateway || exit $?
-  result="$(write_config)" || exit $?
+  prepare_gateway || pause_on_error $? || exit $?
+  result="$(write_config)" || pause_on_error $? || exit $?
   [[ -n "$result" ]] || {
     printf 'ERROR: no se recibió configuración de Claude Code.\n' >&2
     exit 1

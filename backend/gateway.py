@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -31,6 +33,7 @@ from backend.main import (
     execute_video_job,
     gateway_runtime_config,
     managed_comfyui_enabled,
+    SEARXNG_URL,
     mark_gateway_inference,
     profile_models,
     running_profile_models,
@@ -946,6 +949,73 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     return openai_error(str(exc.detail), exc.status_code, code)
 
 
+SEARCH_QUERY_MAX = 300
+SEARCH_RESULT_MAX = 5
+_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def searxng_base_url() -> str:
+    configured = os.environ.get("MYDGX_SEARXNG_URL", "").strip()
+    return (configured or SEARXNG_URL).rstrip("/")
+
+
+def public_result_url(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    host = parsed.hostname.rstrip(".").lower()
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+        return None
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    ):
+        return None
+    if len(candidate) > 2000:
+        return None
+    return candidate
+
+
+def plain_snippet(value: object, limit: int = 500) -> str:
+    text = value if isinstance(value, str) else ""
+    text = _TAG_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
+def search_result_items(payload: object, limit: int) -> list[dict[str, str]]:
+    rows = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return []
+    items: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        url = public_result_url(row.get("url"))
+        if url is None:
+            continue
+        items.append({
+            "title": plain_snippet(row.get("title"), 300),
+            "url": url,
+            "snippet": plain_snippet(row.get("content"), 500),
+        })
+        if len(items) >= limit:
+            break
+    return items
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     config = gateway_runtime_config()
@@ -954,7 +1024,54 @@ async def health() -> dict[str, Any]:
         "status": "ok" if config["enabled"] else "disabled",
         "gateway": "MyDGX",
         "protocol_adapter": "ready" if adapter_binary.is_file() else "unavailable",
+        "web_search": bool(config.get("web_search", True)),
     }
+
+
+@app.post("/v1/search", dependencies=gateway_auth)
+async def web_search(request: Request) -> JSONResponse:
+    """Proxy de SearXNG. No registra la consulta.
+
+    SECURITY NOTES:
+    - La consulta sale a buscadores públicos a través de SearXNG local.
+    - No se escribe en logs ni en la auditoría.
+    - Se descartan resultados que apuntan a localhost o redes privadas.
+    """
+    config = gateway_runtime_config()
+    if not config.get("web_search", True):
+        return openai_error("Búsqueda web desactivada en el gateway", 403, "web_search_disabled")
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return openai_error("El cuerpo debe ser JSON", 400, "invalid_json")
+    if not isinstance(payload, dict):
+        return openai_error("El cuerpo debe ser un objeto", 400, "invalid_json")
+    raw_query = payload.get("query")
+    if not isinstance(raw_query, str):
+        return openai_error("Falta query", 400, "missing_query")
+    query = " ".join(raw_query.split())
+    if not query:
+        return openai_error("Falta query", 400, "missing_query")
+    if len(query) > SEARCH_QUERY_MAX:
+        return openai_error("La consulta supera 300 caracteres", 400, "query_too_long")
+    raw_limit = payload.get("limit", SEARCH_RESULT_MAX)
+    limit = raw_limit if isinstance(raw_limit, int) and not isinstance(raw_limit, bool) else SEARCH_RESULT_MAX
+    limit = max(1, min(SEARCH_RESULT_MAX, limit))
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+            response = await client.get(
+                f"{searxng_base_url()}/search",
+                params={"q": query, "format": "json"},
+            )
+    except httpx.HTTPError:
+        return openai_error("SearXNG no está disponible", 503, "search_unavailable")
+    if response.status_code != 200:
+        return openai_error("SearXNG no está disponible", 503, "search_unavailable")
+    try:
+        body = response.json()
+    except json.JSONDecodeError:
+        return openai_error("SearXNG no está disponible", 503, "search_unavailable")
+    return JSONResponse({"results": search_result_items(body, limit)})
 
 
 def model_capabilities(model: dict[str, Any]) -> dict[str, bool]:

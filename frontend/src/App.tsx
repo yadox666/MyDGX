@@ -27,6 +27,7 @@ import {
   PackageCheck,
   Pencil,
   Play,
+  Plus,
   RefreshCw,
   Rocket,
   Search,
@@ -46,7 +47,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { CSSProperties, FormEvent, ReactNode, createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, FocusEvent, FormEvent, ReactNode, createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MarkdownMessage from "./MarkdownMessage";
 import {
   Area,
@@ -208,6 +209,7 @@ type GatewayConfig = {
   port: number;
   request_timeout_seconds: number;
   max_request_mb: number;
+  web_search?: boolean;
   api_key_configured: boolean;
   endpoint: string;
   anthropic_endpoint: string;
@@ -319,6 +321,15 @@ type QuickStart = {
   fits: boolean;
   reason: string;
   incremental_mb?: number;
+  spare_mb?: number;
+  context?: { context_min: number; context_max: number; memory_min_mb: number; memory_max_mb: number };
+};
+
+type MemoryEstimate = {
+  memory_mb: number;
+  context_size: number;
+  native_context?: number;
+  cache_type: string;
 };
 
 type Models = {
@@ -359,6 +370,9 @@ type Models = {
     tasks?: string[];
     pipeline_tag?: string;
     quick_start?: QuickStart;
+    memory_estimate?: MemoryEstimate | null;
+    manual_settings?: boolean;
+    speculative?: { spec_type: string; draft_filename: string };
   }>;
 };
 
@@ -466,6 +480,309 @@ function ModelGlossaryDialog({ request, onClose }: { request: GlossaryRequest; o
         <h4>{category}</h4>
         <div>{request.terms.filter((term) => term.category === category).map((term) => <article key={term.id}><strong>{term.term}</strong><p>{term.summary}</p></article>)}</div>
       </section>)}
+    </Card>
+  </div>;
+}
+
+const SPEC_LABELS: Record<string, string> = {
+  "draft-mtp": "MTP",
+  "draft-dspark": "DSpark",
+  "draft-dflash": "DFlash",
+  "draft-eagle3": "EAGLE-3",
+  "draft-simple": "Drafter",
+};
+
+const ROLE_LABELS: Record<string, string> = { main: "Modelo principal", mmproj: "Proyector visual" };
+
+function shortContext(value?: number) {
+  return value ? `${Math.round(value / 1024)}K` : "—";
+}
+
+function roleLabel(role: string) {
+  return ROLE_LABELS[role] ?? `Drafter ${SPEC_LABELS[role] ?? role}`;
+}
+
+function useDialogEscape(onClose: () => void) {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", close);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", close);
+    };
+  }, [onClose]);
+}
+
+type PreflightFile = {
+  filename: string;
+  shards: number;
+  expected_shards: number;
+  size: number;
+  role: string;
+  architecture: string;
+  quantization: string;
+  native_context: number;
+  embedded_mtp: boolean;
+  runtime_supported: boolean | null;
+  header_read: boolean;
+  memory_mb?: number;
+  memory_context?: number;
+};
+
+type PreflightReport = {
+  repo_id: string;
+  total_bytes: number;
+  capacity_mb: number;
+  files: PreflightFile[];
+  mmproj: string[];
+  other_files: string[];
+  suggested_draft: string[];
+  warnings: string[];
+};
+
+type PendingDownload = {
+  repoId: string;
+  revision: string;
+  files: string[];
+  label: string;
+  report?: PreflightReport;
+  error?: string;
+  onDone?: () => void;
+};
+
+function DownloadPreflightDialog({ pending, onCancel, onConfirm }: {
+  pending: PendingDownload;
+  onCancel: () => void;
+  onConfirm: (extraFiles: string[]) => void;
+}) {
+  useDialogEscape(onCancel);
+  const report = pending.report;
+  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={`Comprobación previa de ${pending.repoId}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+    <Card className="model-help-dialog preflight-dialog">
+      <SectionHeading eyebrow="COMPROBACIÓN PREVIA" title={pending.repoId} action={<button className="icon-button" onClick={onCancel} aria-label="Cerrar comprobación"><X size={16} /></button>} />
+      {pending.error && <div className="profile-warning"><TriangleAlert size={15} />No se pudieron leer las cabeceras: {pending.error}. Puedes descargar igualmente; MyDGX lo verificará después en Benchmarks.</div>}
+      {report && <>
+        <p className="preflight-intro">
+          {bytes(report.total_bytes)} en {pending.files.length} archivo(s). Los datos de abajo salen de la cabecera GGUF de cada archivo, leída sin descargar los pesos.
+        </p>
+        <div className="preflight-files">
+          {report.files.map((file) => <div className={`preflight-file ${file.role === "main" ? "main" : ""}`} key={file.filename}>
+            <span className="badge">{roleLabel(file.role)}</span>
+            <span className="preflight-name"><strong>{file.filename}</strong><small>
+              {[
+                file.architecture || (file.header_read ? "" : "cabecera no leída"),
+                file.quantization,
+                file.shards > 1 || file.expected_shards > 1 ? `${file.shards}/${file.expected_shards} shards` : "",
+                bytes(file.size),
+                file.native_context ? `contexto nativo ${shortContext(file.native_context)}` : "",
+                file.embedded_mtp ? "MTP integrado" : "",
+              ].filter(Boolean).join(" · ")}
+            </small></span>
+            <span className="preflight-checks">
+              {file.runtime_supported === true && <span className="badge completed">llama.cpp la reconoce</span>}
+              {file.runtime_supported === false && <span className="badge failed">llama.cpp no la reconoce</span>}
+              {file.memory_mb ? <span className={`badge ${file.memory_mb > report.capacity_mb ? "failed" : ""}`}>~{Math.ceil(file.memory_mb / 1024)} GB con {shortContext(file.memory_context)}</span> : null}
+            </span>
+          </div>)}
+          {report.mmproj.map((name) => <div className="preflight-file" key={name}><span className="badge">{roleLabel("mmproj")}</span><span className="preflight-name"><strong>{name}</strong></span></div>)}
+        </div>
+        {report.warnings.length > 0
+          ? <ul className="preflight-warnings">{report.warnings.map((warning) => <li key={warning}><TriangleAlert size={13} /> {warning}</li>)}</ul>
+          : <div className="preflight-ok"><CheckCircle2 size={15} /> Sin problemas detectados.</div>}
+        <small className="preflight-note">Al terminar, Benchmarks comprueba automáticamente que arranca y responde, y compara la memoria real con la estimada y la aceptación del drafter.</small>
+      </>}
+      <div className="preflight-actions">
+        <button className="button secondary" onClick={onCancel}>Cancelar</button>
+        {report?.suggested_draft.length ? <button className="button secondary" onClick={() => onConfirm(report.suggested_draft)}><Plus size={14} /> Añadir drafter y descargar</button> : null}
+        <button className="button primary" onClick={() => onConfirm([])}><Download size={14} /> Descargar</button>
+      </div>
+    </Card>
+  </div>;
+}
+
+type SettingField = { value: number | string | null; auto: number | string | null; origin: string };
+
+type ModelSettingsReport = {
+  model_id: string;
+  overrides: Record<string, string | number>;
+  fields: Record<string, SettingField>;
+  files: { filename: string; shards: number; size: number; quantization: string; architecture: string; context_length: number; runtime_supported: boolean | null; selected: boolean }[];
+  mmproj: string[];
+  mmproj_filename: string;
+  context: { minimum: number; maximum: number; default: number; native: number; card: number; origin: string };
+  speculative: {
+    spec_type: string;
+    draft_filename: string;
+    spec_draft_n_max: number;
+    origin: string;
+    blocked_by_mmproj: boolean;
+    candidates: { spec_type: string; draft_filename: string; size: number; quantization: string; architecture: string; embedded: boolean }[];
+    runtime_supported: boolean | null;
+  };
+  estimated_memory_mb: number;
+};
+
+const ORIGIN_LABELS: Record<string, string> = {
+  ficha: "ficha del autor",
+  GGUF: "cabecera GGUF",
+  manual: "manual",
+  MyDGX: "por defecto",
+  archivo: "drafter detectado",
+};
+
+const SAMPLING_FIELDS: { key: string; label: string; step: string }[] = [
+  { key: "temperature", label: "Temperatura", step: "0.05" },
+  { key: "top_p", label: "Top P", step: "0.01" },
+  { key: "top_k", label: "Top K", step: "1" },
+  { key: "min_p", label: "Min P", step: "0.01" },
+  { key: "repeat_penalty", label: "Repeat penalty", step: "0.01" },
+  { key: "presence_penalty", label: "Presence penalty", step: "0.05" },
+];
+
+function originLabel(origin: string) {
+  return ORIGIN_LABELS[origin] ?? origin;
+}
+
+function ModelSettingsDialog({ modelId, notify, onClose, onSaved }: {
+  modelId: string;
+  notify: (message: string, error?: boolean) => void;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  useDialogEscape(onClose);
+  const [report, setReport] = useState<ModelSettingsReport | null>(null);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+
+  function load(next: ModelSettingsReport) {
+    setReport(next);
+    const values: Record<string, string> = {};
+    for (const [key, value] of Object.entries(next.overrides)) {
+      values[key] = key === "context_size" || key === "context_max" ? String(Math.round(Number(value) / 1024)) : String(value);
+    }
+    if (next.overrides.spec_type && next.overrides.spec_type !== "off") {
+      values.spec = `${next.overrides.spec_type}|${next.overrides.draft_filename ?? ""}`;
+    } else if (next.overrides.spec_type === "off") {
+      values.spec = "off";
+    }
+    if ("mmproj_filename" in next.overrides) values.mmproj = next.overrides.mmproj_filename ? String(next.overrides.mmproj_filename) : "none";
+    setDraft(values);
+  }
+
+  useEffect(() => {
+    api<ModelSettingsReport>(`/api/models/settings?${new URLSearchParams({ model_id: modelId })}`)
+      .then(load)
+      .catch((error) => { notify((error as Error).message, true); onClose(); });
+  }, [modelId]);
+
+  const set = (key: string, value: string) => setDraft((current) => ({ ...current, [key]: value }));
+
+  async function save(reset = false) {
+    const body: Record<string, string | number | null> = { model_id: modelId };
+    if (!reset) {
+      const number = (key: string, scale = 1) => draft[key] !== undefined && draft[key] !== "" ? Number(draft[key]) * scale : null;
+      body.model_filename = draft.model_filename || null;
+      body.mmproj_filename = draft.mmproj === "none" ? "" : draft.mmproj || null;
+      body.context_size = number("context_size", 1024);
+      body.context_max = number("context_max", 1024);
+      for (const field of SAMPLING_FIELDS) body[field.key] = number(field.key);
+      body.cache_type_k = draft.cache_type_k || null;
+      body.cache_type_v = draft.cache_type_v || null;
+      if (draft.spec === "off") body.spec_type = "off";
+      else if (draft.spec) {
+        const [specType, draftFile] = draft.spec.split("|");
+        body.spec_type = specType;
+        body.draft_filename = draftFile || null;
+      }
+      body.spec_draft_n_max = number("spec_draft_n_max");
+    }
+    setBusy(true);
+    try {
+      load(await api<ModelSettingsReport>("/api/models/settings", { method: "PUT", body: JSON.stringify(body) }));
+      notify(reset ? "Ajustes restablecidos a los valores automáticos" : "Ajustes guardados; se aplican la próxima vez que se encienda");
+      onSaved();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const spec = report?.speculative;
+  const current = spec?.spec_type ? `${SPEC_LABELS[spec.spec_type] ?? spec.spec_type} · ${spec.draft_filename || "MTP integrado en el GGUF"}` : "Sin especulativa";
+  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={`Ajustes de ${modelId}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <Card className="model-help-dialog model-settings-dialog">
+      <SectionHeading eyebrow="AJUSTES DE ARRANQUE" title={modelId} action={<button className="icon-button" onClick={onClose} aria-label="Cerrar ajustes"><X size={16} /></button>} />
+      {!report ? <p className="preflight-intro"><RefreshCw className="spin" size={14} /> Leyendo cabeceras y ficha…</p> : <>
+        <p className="preflight-intro">Cada campo vacío usa el valor automático (entre paréntesis, con su origen). Lo que escribas aquí manda sobre la ficha y la cabecera GGUF. Se aplica la próxima vez que se encienda el modelo; si está en Default, también ahí.</p>
+        <section className="model-settings-section">
+          <h4>Archivos</h4>
+          <label>Cuantización principal
+            <select value={draft.model_filename ?? ""} onChange={(event) => set("model_filename", event.target.value)}>
+              <option value="">Automático ({report.files.find((file) => file.selected)?.quantization ?? "—"})</option>
+              {report.files.map((file) => <option key={file.filename} value={file.filename}>
+                {file.quantization} · {bytes(file.size)} · {file.architecture || "?"}{file.runtime_supported === false ? " · llama.cpp no la reconoce" : ""}
+              </option>)}
+            </select>
+          </label>
+          {report.mmproj.length > 0 && <label>Proyector visual (mmproj)
+            <select value={draft.mmproj ?? ""} onChange={(event) => set("mmproj", event.target.value)}>
+              <option value="">Automático ({report.mmproj_filename || "ninguno"})</option>
+              <option value="none">Sin visión (permite la especulativa)</option>
+              {report.mmproj.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>}
+        </section>
+        <section className="model-settings-section">
+          <h4>Contexto <small>rango {shortContext(report.context.minimum)}–{shortContext(report.context.maximum)} · nativo {shortContext(report.context.native)}{report.context.card ? ` · ficha ${shortContext(report.context.card)}` : ""} · origen {originLabel(report.context.origin)}</small></h4>
+          <label>Por defecto al encender (K)
+            <input type="number" min={1} step={1} placeholder={`${Math.round(report.context.default / 1024)}`} value={draft.context_size ?? ""} onChange={(event) => set("context_size", event.target.value)} />
+          </label>
+          <label>Máximo del slider (K)
+            <input type="number" min={1} step={1} placeholder={`${Math.round(report.context.maximum / 1024)}`} value={draft.context_max ?? ""} onChange={(event) => set("context_max", event.target.value)} />
+          </label>
+        </section>
+        <section className="model-settings-section">
+          <h4>Decodificación especulativa <small>ahora: {current}{spec?.origin ? ` · origen ${originLabel(spec.origin)}` : ""}</small></h4>
+          {spec?.runtime_supported === false && <div className="profile-warning"><TriangleAlert size={14} />El llama.cpp instalado no admite <code>--spec-type</code>.</div>}
+          {spec?.blocked_by_mmproj && <small className="preflight-note">Con el mmproj activo llama.cpp no usa la especulativa. Elige «Sin visión» si prefieres velocidad a imágenes.</small>}
+          <label>Drafter
+            <select value={draft.spec ?? ""} onChange={(event) => set("spec", event.target.value)}>
+              <option value="">Automático</option>
+              <option value="off">Desactivada</option>
+              {spec?.candidates.map((item) => <option key={`${item.spec_type}|${item.draft_filename}`} value={`${item.spec_type}|${item.draft_filename}`}>
+                {SPEC_LABELS[item.spec_type] ?? item.spec_type} · {item.embedded ? "integrado en el GGUF" : `${item.draft_filename} · ${bytes(item.size)}`}
+              </option>)}
+            </select>
+          </label>
+          <label>Tokens por borrador
+            <input type="number" min={1} max={16} placeholder={spec?.spec_draft_n_max ? String(spec.spec_draft_n_max) : "llama.cpp"} value={draft.spec_draft_n_max ?? ""} onChange={(event) => set("spec_draft_n_max", event.target.value)} />
+          </label>
+          {spec && !spec.candidates.length && <small className="preflight-note">No hay drafters descargados para este modelo.</small>}
+        </section>
+        <section className="model-settings-section">
+          <h4>Muestreo y caché</h4>
+          {SAMPLING_FIELDS.map((field) => {
+            const info = report.fields[field.key];
+            return <label key={field.key}>{field.label}
+              <input type="number" step={field.step} min={0} placeholder={info?.auto != null ? `${info.auto} (${originLabel(info.origin === "manual" ? "MyDGX" : info.origin)})` : "llama.cpp"} value={draft[field.key] ?? ""} onChange={(event) => set(field.key, event.target.value)} />
+            </label>;
+          })}
+          {(["cache_type_k", "cache_type_v"] as const).map((key) => <label key={key}>{key === "cache_type_k" ? "Caché K" : "Caché V"}
+            <select value={draft[key] ?? ""} onChange={(event) => set(key, event.target.value)}>
+              <option value="">Automático ({report.fields[key]?.auto || "f16"})</option>
+              {["f16", "q8_0", "q4_0"].map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>)}
+        </section>
+        <div className="preflight-actions">
+          <small className="preflight-note">Memoria estimada con los valores actuales: ~{Math.ceil(report.estimated_memory_mb / 1024)} GB</small>
+          <button className="button secondary" disabled={busy || !Object.keys(report.overrides).length} onClick={() => void save(true)}><RefreshCw size={14} /> Restablecer automático</button>
+          <button className="button primary" disabled={busy} onClick={() => void save()}><CheckCircle2 size={14} /> Guardar</button>
+        </div>
+      </>}
     </Card>
   </div>;
 }
@@ -604,23 +921,54 @@ function unsupportedQuickStartReason(category: string) {
   return "Solo tiene pesos safetensors o PyTorch: Encender usa llama.cpp y necesita un GGUF. Descarga una versión GGUF o crea un perfil con un motor compatible";
 }
 
-function QuickStartButton({ label, availability, busy, pending, title, onStart, unsupportedReason }: {
+function QuickStartButton({ label, availability, defaultContext, busy, pending, title, onStart, onContextChange, unsupportedReason }: {
   label: string;
   availability?: QuickStart;
+  defaultContext?: number;
   busy: boolean;
   pending: boolean;
   title: string;
-  onStart: () => void;
+  onStart: (contextSize?: number) => void;
+  onContextChange?: (contextSize?: number) => void;
   unsupportedReason?: string;
 }) {
+  const range = availability?.context;
+  const initial = range ? Math.min(range.context_max, Math.max(range.context_min, defaultContext || range.context_min)) : 0;
+  const [chosen, setChosen] = useState<number | null>(null);
   if (unsupportedReason || (availability && !availability.supported)) {
     return <button className="button secondary compact no-fit" disabled title={unsupportedReason || availability?.reason || "Este modelo no se puede encender desde aquí"} aria-label={`${label} no se puede encender aquí`}><Play size={13} /> No disponible</button>;
   }
-  if (availability && !availability.fits) {
-    return <button className="button secondary compact no-fit" disabled title={availability.reason || "No cabe junto a lo que ya está cargado"} aria-label={`${label} no cabe ahora`}><Play size={13} /> No cabe ahora</button>;
+  const context = chosen ?? initial;
+  const memoryAt = (tokens: number) => range && range.memory_min_mb && range.memory_max_mb
+    ? range.memory_min_mb + (range.memory_max_mb - range.memory_min_mb) * (tokens - range.context_min) / (range.context_max - range.context_min)
+    : 0;
+  const delta = range ? memoryAt(context) - memoryAt(initial) : 0;
+  const memoryLimited = availability?.spare_mb != null && (availability.fits || availability.spare_mb < 0);
+  const fits = !availability || (memoryLimited ? (availability.spare_mb ?? 0) - delta >= 0 : availability.fits);
+  const slider = range && <label className="quick-context-slider" title={`Contexto al encender: ${context.toLocaleString()} tokens${memoryAt(context) ? ` · ~${(memoryAt(context) / 1024).toFixed(1)} GB` : ""}. Va del mínimo de los agentes de código al máximo del autor o del GGUF`}>
+    <input
+      type="range"
+      min={range.context_min}
+      max={range.context_max}
+      step={1024}
+      value={context}
+      disabled={busy}
+      onChange={(event) => {
+        const value = Number(event.target.value);
+        setChosen(value);
+        onContextChange?.(value !== initial ? value : undefined);
+      }}
+      aria-label={`Contexto al encender ${label}`}
+    />
+    <span>{contextLabel(context).replace(" tokens", "")}{memoryAt(context) ? <small>~{(memoryAt(context) / 1024).toFixed(0)} GB</small> : null}</span>
+  </label>;
+  if (!fits) {
+    const reason = memoryLimited && availability?.fits ? "Con este contexto no cabe junto a lo que ya está cargado" : availability?.reason;
+    return <>{slider}<button className="button secondary compact no-fit" disabled title={reason || "No cabe junto a lo que ya está cargado"} aria-label={`${label} no cabe ahora`}><Play size={13} /> No cabe ahora</button></>;
   }
-  const extra = availability?.incremental_mb ? ` · ocupará unos ${(availability.incremental_mb / 1024).toFixed(1)} GB` : "";
-  return <button className="button primary compact" disabled={busy} onClick={onStart} title={`${title}${extra}`} aria-label={`Encender ${label}`}><Play className={pending ? "spin" : ""} size={13} /> {pending ? "Encendiendo…" : "Encender"}</button>;
+  const incremental = (availability?.incremental_mb ?? 0) + delta;
+  const extra = incremental > 0 ? ` · ocupará unos ${(incremental / 1024).toFixed(1)} GB` : "";
+  return <>{slider}<button className="button primary compact" disabled={busy} onClick={() => onStart(chosen != null && chosen !== initial ? chosen : undefined)} title={`${title}${extra}`} aria-label={`Encender ${label}`}><Play className={pending ? "spin" : ""} size={13} /> {pending ? "Encendiendo…" : "Encender"}</button></>;
 }
 
 type Job = {
@@ -665,6 +1013,7 @@ type BenchmarkSummary = {
     average_gpu_utilization?: number | null;
     joules_per_output_token?: number | null;
   };
+  speculative?: { drafted_tokens: number; accepted_tokens: number; acceptance_rate: number } | null;
   cases?: Record<string, {
     samples: number;
     valid_samples: number;
@@ -1210,6 +1559,7 @@ type ModelConfig = {
   mmproj_filename: string;
   model_alias: string;
   port: number;
+  port_auto?: boolean | number;
   context_size: number;
   gpu_layers: number;
   threads: number;
@@ -1513,7 +1863,7 @@ function HuggingFaceIcon({ size = 26 }: { size?: number }) {
 }
 
 function LocalModelCard({
-  source, name, path, loaded, assistant, badges, specs, meta, size, total, estimated, actions, extra, categoryHint,
+  source, name, path, loaded, assistant, badges, specs, meta, size, total, estimated, memory, actions, extra, categoryHint,
 }: {
   source: "ollama" | "huggingface" | "runtime";
   name: string;
@@ -1526,6 +1876,7 @@ function LocalModelCard({
   size: number;
   total: number;
   estimated?: boolean;
+  memory?: MemoryEstimate | null;
   actions?: ReactNode;
   extra?: ReactNode;
   categoryHint: string;
@@ -1552,7 +1903,15 @@ function LocalModelCard({
           {meta && <span className="lc-meta">{meta}</span>}
         </div>
       </div>
-      <ModelSizeGauge size={size} total={total} estimated={estimated} label={source === "runtime" ? "Memoria" : "Tamaño"} />
+      {memory
+        ? <ModelSizeGauge
+          size={memory.memory_mb * 1024 * 1024}
+          total={total}
+          estimated
+          label={loaded ? "Memoria" : "Memoria al encender"}
+          detail={[`${bytes(size)} en disco`, memory.context_size ? `${Math.round(memory.context_size / 1024)}K contexto` : "", memory.cache_type ? `KV ${memory.cache_type}` : ""].filter(Boolean).join(" · ")}
+        />
+        : <ModelSizeGauge size={size} total={total} estimated={estimated} label={source === "runtime" ? "Memoria" : "Tamaño"} />}
     </div>
     {visible.length > 0 && <dl className="lc-specs">
       {visible.map((spec) => <span key={spec.label}><dt>{spec.label}</dt><dd title={spec.title || String(spec.value)}>{spec.value}</dd></span>)}
@@ -1567,11 +1926,13 @@ function ModelSizeGauge({
   total,
   estimated = false,
   label = "Tamaño",
+  detail,
 }: {
   size: number;
   total: number;
   estimated?: boolean;
   label?: string;
+  detail?: string;
 }) {
   const ratio = total > 0 ? size / total : 0;
   const level = ratio >= 0.85 ? "critical" : ratio >= 0.7 ? "high" : ratio >= 0.5 ? "medium" : "comfortable";
@@ -1596,6 +1957,7 @@ function ModelSizeGauge({
           <span className="model-size-gauge-label">{comparison}</span>
         </div>
       )}
+      {detail && <small className="model-size-detail" title="Pesos y mmproj, caché KV según la cabecera del GGUF y buffers de cálculo">{detail}</small>}
     </div>
   );
 }
@@ -2458,6 +2820,9 @@ function ModelsView({
   const [showAllFileGroups, setShowAllFileGroups] = useState(false);
   const [quickBusy, setQuickBusy] = useState<string | null>(null);
   const [downloadBusy, setDownloadBusy] = useState<string | null>(null);
+  const [pendingDownload, setPendingDownload] = useState<PendingDownload | null>(null);
+  const [settingsModel, setSettingsModel] = useState<string | null>(null);
+  const [chosenContexts, setChosenContexts] = useState<Record<string, number | undefined>>({});
   const [glossaryRequest, setGlossaryRequest] = useState<GlossaryRequest | null>(null);
 
   const loadFavorites = useCallback(async () => {
@@ -2577,24 +2942,36 @@ function ModelsView({
     }
   }
 
-  async function downloadSelected() {
-    if (!inspection || !selectedFiles.length) return;
-    const repoId = inspection.repo_id;
-    setDownloadBusy(repoId);
+  async function preflightDownload(pending: PendingDownload) {
+    setDownloadBusy(pending.repoId);
+    try {
+      const report = await api<PreflightReport>("/api/models/huggingface/preflight", {
+        method: "POST",
+        body: JSON.stringify({ repo_id: pending.repoId, revision: pending.revision, files: pending.files }),
+      });
+      setPendingDownload({ ...pending, report });
+    } catch (error) {
+      setPendingDownload({ ...pending, error: (error as Error).message });
+    } finally {
+      setDownloadBusy(null);
+    }
+  }
+
+  async function confirmDownload(extraFiles: string[]) {
+    const pending = pendingDownload;
+    if (!pending) return;
+    setPendingDownload(null);
+    setDownloadBusy(pending.repoId);
+    const files = [...pending.files, ...extraFiles.filter((name) => !pending.files.includes(name))];
     try {
       const result = await api<{ job_id: string; deduplicated?: boolean }>("/api/models/huggingface/files/download", {
         method: "POST",
-        body: JSON.stringify({
-          repo_id: repoId,
-          revision: inspection.remote?.revision || "main",
-          files: selectedFiles,
-        }),
+        body: JSON.stringify({ repo_id: pending.repoId, revision: pending.revision, files }),
       });
       notify(result.deduplicated
-        ? `La descarga de ${repoId} ya estaba en curso; no se ha duplicado`
-        : `${selectedFiles.length} archivo(s) añadidos a la cola`);
-      setInspection(null);
-      setSelectedFiles([]);
+        ? `La descarga de ${pending.repoId} ya estaba en curso; no se ha duplicado`
+        : `${pending.label}${extraFiles.length ? " · con drafter" : ""}`);
+      pending.onDone?.();
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -2603,31 +2980,39 @@ function ModelsView({
     }
   }
 
+  function downloadSelected() {
+    if (!inspection || !selectedFiles.length) return;
+    void preflightDownload({
+      repoId: inspection.repo_id,
+      revision: inspection.remote?.revision || "main",
+      files: selectedFiles,
+      label: `${selectedFiles.length} archivo(s) añadidos a la cola`,
+      onDone: () => {
+        setInspection(null);
+        setSelectedFiles([]);
+      },
+    });
+  }
+
   async function downloadRecommendation(model: HfRecommendation) {
+    if (model.recommended_files.length) {
+      void preflightDownload({
+        repoId: model.id,
+        revision: "main",
+        files: model.recommended_files,
+        label: `Descarga recomendada iniciada: ${model.recommended_quantization}`,
+      });
+      return;
+    }
     setDownloadBusy(model.id);
     try {
-      if (!model.recommended_files.length) {
-        const result = await api<{ job_id: string; deduplicated?: boolean }>("/api/models/huggingface/download", {
-          method: "POST",
-          body: JSON.stringify({ repo_id: model.id, revision: "main" }),
-        });
-        notify(result.deduplicated
-          ? `La descarga de ${model.id} ya estaba en curso; no se ha duplicado`
-          : `Descarga completa iniciada: ${model.id}`);
-        refresh();
-        return;
-      }
-      const result = await api<{ job_id: string; deduplicated?: boolean }>("/api/models/huggingface/files/download", {
+      const result = await api<{ job_id: string; deduplicated?: boolean }>("/api/models/huggingface/download", {
         method: "POST",
-        body: JSON.stringify({
-          repo_id: model.id,
-          revision: "main",
-          files: model.recommended_files,
-        }),
+        body: JSON.stringify({ repo_id: model.id, revision: "main" }),
       });
       notify(result.deduplicated
         ? `La descarga de ${model.id} ya estaba en curso; no se ha duplicado`
-        : `Descarga recomendada iniciada: ${model.recommended_quantization}`);
+        : `Descarga completa iniciada: ${model.id}`);
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -2649,11 +3034,11 @@ function ModelsView({
     }
   }
 
-  async function togglePersistence(source: "ollama" | "huggingface", modelId: string, enabled: boolean) {
+  async function togglePersistence(source: "ollama" | "huggingface", modelId: string, enabled: boolean, contextSize?: number) {
     try {
       const result = await api<{ applied: boolean }>("/api/models/persistence", {
         method: "PUT",
-        body: JSON.stringify({ source, model_id: modelId, enabled }),
+        body: JSON.stringify({ source, model_id: modelId, enabled, ...(enabled && contextSize ? { context_size: contextSize } : {}) }),
       });
       notify(
         `${modelId} ${enabled ? "añadido al" : "quitado del"} perfil Default`
@@ -2665,12 +3050,12 @@ function ModelsView({
     }
   }
 
-  async function quickModel(source: "ollama" | "huggingface", modelId: string, start: boolean) {
+  async function quickModel(source: "ollama" | "huggingface", modelId: string, start: boolean, contextSize?: number) {
     setQuickBusy(`${source}:${modelId}`);
     try {
       const result = await api<{ alias?: string }>(`/api/models/quick/${start ? "start" : "stop"}`, {
         method: "POST",
-        body: JSON.stringify({ source, model_id: modelId }),
+        body: JSON.stringify({ source, model_id: modelId, ...(start && contextSize ? { context_size: contextSize } : {}) }),
       });
       notify(start ? `${modelId} encendido en Quick${result.alias ? ` · alias ${result.alias}` : ""}` : `${modelId} apagado`);
       refresh();
@@ -2789,6 +3174,11 @@ function ModelsView({
       + (models?.ollama ?? []).filter((model) => matchesLocalFilter("ollama", model) && localCategoryLabel("ollama", model) === section.sourceLabel).length
       + (models?.huggingface ?? []).filter((model) => matchesLocalFilter("huggingface", model as unknown as Record<string, unknown>) && localCategoryLabel("huggingface", model as unknown as Record<string, unknown>) === section.sourceLabel).length,
   })).filter((section) => section.count > 0);
+  const modelGroupCount = (sourceLabel: string, loadedGroup: boolean) => (
+    (loadedGroup ? (models?.runtime_models ?? []).filter((model) => matchesRuntimeFilter(model) && runtimeCategoryLabel(model) === sourceLabel).length : 0)
+    + (models?.ollama ?? []).filter((model) => isActiveOllama(model) === loadedGroup && matchesLocalFilter("ollama", model) && localCategoryLabel("ollama", model) === sourceLabel).length
+    + (models?.huggingface ?? []).filter((model) => isActiveHuggingFace(model) === loadedGroup && matchesLocalFilter("huggingface", model as unknown as Record<string, unknown>) && localCategoryLabel("huggingface", model as unknown as Record<string, unknown>) === sourceLabel).length
+  );
   const localModelCount = (models?.ollama.length ?? 0) + (models?.huggingface.length ?? 0);
   const loadedModelCount = (models?.ollama ?? []).filter(isOllamaLoaded).length
     + (models?.huggingface ?? []).filter((model) => model.loaded).length
@@ -2957,8 +3347,15 @@ function ModelsView({
           </div>
 
           <div className="model-list">
-            {visibleModelSections.map((category, categoryIndex) => <div className="model-category-wrapper" key={category.key}>
-              {category.managed && !visibleModelSections[categoryIndex - 1]?.managed && <div className="managed-model-divider">
+            {[true, false].map((loadedGroup) => {
+              const groupSections = visibleModelSections
+                .map((section) => ({ ...section, count: modelGroupCount(section.sourceLabel, loadedGroup) }))
+                .filter((section) => section.count > 0);
+              if (!groupSections.length) return null;
+              return <section className={`model-split split-section ${loadedGroup ? "is-active" : ""}`} key={loadedGroup ? "loaded" : "unloaded"}>
+                <div className="split-section-title"><strong>{loadedGroup ? "Activos" : "Disponibles"}</strong><span>{groupSections.reduce((total, section) => total + section.count, 0)}</span></div>
+            {groupSections.map((category, categoryIndex) => <div className="model-category-wrapper" key={category.key}>
+              {category.managed && !groupSections[categoryIndex - 1]?.managed && <div className="managed-model-divider">
                 <span>Recursos seleccionados automáticamente</span>
                 <small>Los motores de imagen, vídeo y audio cargan el recurso adecuado cuando ejecutas una tarea.</small>
               </div>}
@@ -2967,12 +3364,7 @@ function ModelsView({
                   <div><strong>{category.title}</strong><small>{category.managed ? "Gestionados por su motor o perfil" : "Puedes activarlos desde aquí o desde un perfil"}</small></div>
                   <span>{category.count}</span>
                 </div>
-            {[true, false].map((loadedGroup) => {
-              const runtimeCount = loadedGroup ? (models?.runtime_models ?? []).filter((model) => matchesRuntimeFilter(model) && runtimeCategoryLabel(model) === category.sourceLabel).length : 0;
-              const ollamaCount = (models?.ollama ?? []).filter((model) => isActiveOllama(model) === loadedGroup && matchesLocalFilter("ollama", model) && localCategoryLabel("ollama", model) === category.sourceLabel).length;
-              const huggingFaceCount = (models?.huggingface ?? []).filter((model) => isActiveHuggingFace(model) === loadedGroup && matchesLocalFilter("huggingface", model as unknown as Record<string, unknown>) && localCategoryLabel("huggingface", model as unknown as Record<string, unknown>) === category.sourceLabel).length;
-              if (!(runtimeCount + ollamaCount + huggingFaceCount)) return null;
-              return <div className={`model-category-cards ${loadedGroup ? "is-active" : "is-available"}`} key={loadedGroup ? "loaded" : "unloaded"}>
+              <div className={`model-category-cards ${loadedGroup ? "is-active" : "is-available"}`}>
             {loadedGroup && (models?.runtime_models ?? []).filter((model) => matchesRuntimeFilter(model) && runtimeCategoryLabel(model) === category.sourceLabel).map((model) => (
               <LocalModelCard
                 key={`${model.engine}:${model.name}`}
@@ -3021,10 +3413,12 @@ function ModelsView({
                     { label: "Cuantización", value: String(details.quantization_level || "") },
                     { label: "Familia", value: String(details.family || "") },
                     { label: "Formato", value: String(details.format || "").toUpperCase() },
+                    { label: model.quick ? "Contexto cargado" : "Contexto al encender", value: contextLabel((model.memory_estimate as MemoryEstimate | null | undefined)?.context_size) },
                     { label: "Digest", value: String(model.digest || "").slice(0, 12), title: String(model.digest || "") },
                   ]}
                   size={Number(model.size)}
                   total={totalMemory}
+                  memory={model.memory_estimate as MemoryEstimate | null | undefined}
                   actions={<>
                     <label className="persistence-toggle" title="Incluir en el perfil Default, que arranca siempre con MyDGX">
                       <input type="checkbox" checked={Boolean(model.persistent)} onChange={(event) => void togglePersistence("ollama", name, event.target.checked)} />
@@ -3083,6 +3477,8 @@ function ModelsView({
                     <UncensoredBadge name={model.repo_id} flagged={model.uncensored} />
                     {incomplete && <span className="badge warning">Incompleto</span>}
                     {cardOnly && <span className="badge warning" title="Solo está la ficha del modelo; no hay archivos de pesos">Sin pesos</span>}
+                    {model.speculative && <span className="badge" title={`Decodificación especulativa con ${model.speculative.draft_filename || "el MTP integrado en el GGUF"}`}><Zap size={11} /> {SPEC_LABELS[model.speculative.spec_type] ?? model.speculative.spec_type}</span>}
+                    {model.manual_settings && <span className="badge" title="Tiene ajustes manuales que mandan sobre la ficha y la cabecera GGUF"><SlidersHorizontal size={11} /> Manual</span>}
                   </>}
                   categoryHint={localModelCategoryHint("huggingface", model as unknown as Record<string, unknown>)}
                   meta={`${model.snapshot_count} snapshot${model.snapshot_count === 1 ? "" : "s"} · ${model.file_count} archivo${model.file_count === 1 ? "" : "s"}${model.shard_count ? ` · ${model.shard_count} shards` : ""}`}
@@ -3091,11 +3487,13 @@ function ModelsView({
                     { label: "Cuantización", value: model.quantizations.join(", ") },
                     { label: "Formato", value: model.formats.map((format) => format.toUpperCase()).join(", ") },
                     { label: "Arquitectura", value: architectureLabel },
-                    { label: "Contexto nativo", value: contextLabel(model.configuration.max_position_embeddings) },
+                    { label: model.quick ? "Contexto cargado" : "Contexto al encender", value: contextLabel(model.memory_estimate?.context_size), title: "Punto medio entre el mínimo de los agentes de código y el máximo del autor o del GGUF" },
+                    { label: "Contexto nativo", value: contextLabel(model.configuration.max_position_embeddings || model.memory_estimate?.native_context) },
                     { label: "Revisión", value: model.revision ? model.revision.slice(0, 10) : "", title: model.revision },
                   ]}
                   size={model.size}
                   total={totalMemory}
+                  memory={model.memory_estimate}
                   extra={verification && <div className={`model-verification ${verification.status}`}>
                     <ShieldCheck size={13} />
                     <div><strong>{verification.message}</strong><small>{verification.status === "completed" ? "Integridad comprobada" : verification.status === "failed" ? "La verificación falló" : `${Math.round(verification.progress)}% completado`}</small></div>
@@ -3103,7 +3501,7 @@ function ModelsView({
                   </div>}
                   actions={<>
                     <label className={`persistence-toggle ${model.quantizations.length ? "" : "disabled"}`} title={model.quantizations.length ? "Incluir en el perfil Default, que arranca siempre con MyDGX" : "El perfil Default requiere un GGUF"}>
-                      <input type="checkbox" disabled={!model.quantizations.length} checked={model.persistent} onChange={(event) => void togglePersistence("huggingface", model.repo_id, event.target.checked)} />
+                      <input type="checkbox" disabled={!model.quantizations.length} checked={model.persistent} onChange={(event) => void togglePersistence("huggingface", model.repo_id, event.target.checked, chosenContexts[model.repo_id])} />
                       <span>Default</span>
                     </label>
                     <ModelTermsButton text={`${model.repo_id} ${model.formats.join(" ")} ${model.quantizations.join(" ")} ${architectureLabel} ${(model.tasks ?? []).join(" ")}`} label={model.repo_id} onOpen={setGlossaryRequest} />
@@ -3113,9 +3511,10 @@ function ModelsView({
                       : model.loaded_by.includes("ComfyUI")
                         ? <button className="button secondary compact" disabled={quickBusy !== null} onClick={() => void releaseComfyUI(model.repo_id)} title="ComfyUI descarga de memoria todos los modelos que tenga cargados; se vuelven a cargar en la siguiente generación" aria-label={`Liberar ${model.repo_id} de ComfyUI`}><Square size={13} /> {quickBusy === `comfyui:${model.repo_id}` ? "Liberando…" : "Liberar"}</button>
                       : !model.loaded && !incomplete
-                        && <QuickStartButton label={model.repo_id} availability={model.quick_start} unsupportedReason={unsupportedReason} busy={quickBusy !== null} pending={quickBusy === `huggingface:${model.repo_id}`} title="Cargar ahora con llama.cpp en el perfil Quick; no se restaura al reiniciar el equipo" onStart={() => void quickModel("huggingface", model.repo_id, true)} />}
+                        && <QuickStartButton label={model.repo_id} availability={model.quick_start} defaultContext={model.memory_estimate?.context_size} unsupportedReason={unsupportedReason} busy={quickBusy !== null} pending={quickBusy === `huggingface:${model.repo_id}`} title="Cargar ahora con llama.cpp en el perfil Quick; no se restaura al reiniciar el equipo" onStart={(contextSize) => void quickModel("huggingface", model.repo_id, true, contextSize)} onContextChange={(contextSize) => setChosenContexts((current) => ({ ...current, [model.repo_id]: contextSize }))} />}
                     <a className="icon-button" href={`https://huggingface.co/${model.repo_id}`} target="_blank" rel="noreferrer noopener" title="Abrir en Hugging Face" aria-label={`Abrir ${model.repo_id} en Hugging Face`}><ExternalLink size={15} /></a>
                     <button className="button secondary compact" disabled={inspectingRepo !== null} onClick={() => inspect(model.repo_id)} aria-label={`Inspeccionar ${model.repo_id}`}><Search className={inspectingRepo === model.repo_id ? "spin" : ""} size={13} /> Detalles</button>
+                    {runnable && !incomplete && <button className="icon-button" onClick={() => setSettingsModel(model.repo_id)} title="Ajustes de arranque: cuantización, contexto, drafter y muestreo" aria-label={`Ajustes de ${model.repo_id}`}><SlidersHorizontal size={15} /></button>}
                     <button className="icon-button" disabled={verificationActive} onClick={() => verifyIntegrity(model.repo_id)} aria-label={`Verificar ${model.repo_id}`} title={verification?.message || "Verificar integridad (SHA-256)"}><ShieldCheck className={verificationActive ? "spin" : ""} size={15} /></button>
                     <button
                       className="icon-button danger"
@@ -3128,10 +3527,11 @@ function ModelsView({
                 />
               );
             })}
-            </div>;
-            })}
+            </div>
               </section>
             </div>)}
+              </section>;
+            })}
             {!models?.ollama.length && !models?.huggingface.length && <Empty icon={<Boxes />} title="No hay modelos locales" text="Descarga tu primer modelo desde «Explorar Hugging Face» o «Descargar con Ollama»." />}
             {localModelCount > 0 && visibleLocalModelCount === 0 && <Empty icon={<Search />} title="Ningún modelo coincide" text="Prueba otro filtro." />}
           </div>
@@ -3527,6 +3927,8 @@ function ModelsView({
       )}
 
       {glossaryRequest && <ModelGlossaryDialog request={glossaryRequest} onClose={() => setGlossaryRequest(null)} />}
+      {pendingDownload && <DownloadPreflightDialog pending={pendingDownload} onCancel={() => setPendingDownload(null)} onConfirm={(extra) => void confirmDownload(extra)} />}
+      {settingsModel && <ModelSettingsDialog modelId={settingsModel} notify={notify} onClose={() => setSettingsModel(null)} onSaved={refresh} />}
 
       {displayedJobs.length > 0 && (
         <div>
@@ -3547,6 +3949,29 @@ function ModelsView({
   );
 }
 
+function isAutoPort(model: Pick<ModelConfig, "port_auto">) {
+  return model.port_auto !== false && model.port_auto !== 0;
+}
+
+function PortField({ auto, port, onAuto, onPort }: {
+  auto: boolean;
+  port: number;
+  onAuto: (auto: boolean) => void;
+  onPort: (port: number) => void;
+}) {
+  return <label>Puerto
+    <div className="paired-inputs">
+      <select value={auto ? "auto" : "manual"} onChange={(event) => onAuto(event.target.value === "auto")} aria-label="Modo del puerto">
+        <option value="auto">Automático</option>
+        <option value="manual">Manual</option>
+      </select>
+      {auto
+        ? <input value={port >= 1024 ? String(port) : "Al guardar"} readOnly title="MyDGX elige un puerto libre que no usa ningún otro perfil, app ni servicio, y lo mantiene mientras siga libre" />
+        : <input type="number" min={1024} max={65535} value={port || ""} onChange={(event) => onPort(Number(event.target.value))} required />}
+    </div>
+  </label>;
+}
+
 function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string, error?: boolean) => void }) {
   type ProfileForm = Omit<Profile, "id" | "active" | "favorite" | "downloaded" | "models" | "memory_plan" | "runs">;
   const blank = (): ProfileForm => ({
@@ -3561,7 +3986,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
     mmproj_repo: "",
     mmproj_filename: "",
     model_alias: "",
-    port: 18080,
+    port: 0,
+    port_auto: true,
     context_size: 8192,
     gpu_layers: -1,
     threads: 1,
@@ -3608,6 +4034,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   const [formOpenRequest, setFormOpenRequest] = useState(0);
   const editorRef = useRef<HTMLDivElement>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [loadingDefaults, setLoadingDefaults] = useState<string | null>(null);
   const [profileSearch, setProfileSearch] = useState("");
   const [recommendation, setRecommendation] = useState<{ recommended_file?: string; model_max_context?: number; context_source?: string; warning?: string } | null>(null);
   const [requestedStarts, setRequestedStarts] = useState<Record<string, string>>({});
@@ -3681,32 +4108,81 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
         auto_fit_context: _autoFit,
         minimum_context_size: _minimum,
         app: _app,
-        ...base
-      } = current;
+        ...defaults
+      } = blank();
       void _name;
       void _additional;
       void _reserve;
       void _autoFit;
       void _minimum;
       void _app;
-      const nextPort = Math.max(current.port, ...current.additional_models.map((item) => item.port)) + 1;
+      // Each model gets its own parameters (from "Parámetros del modelo"), not a copy of the primary's.
       const model: ProfileModel = {
-        ...base,
+        ...defaults,
+        engine: current.engine,
+        runtime_backend: current.runtime_backend,
+        task: current.task,
+        input_modalities: current.input_modalities,
+        output_modalities: current.output_modalities,
         id: `model-${Date.now()}`,
         name: `Modelo ${current.additional_models.length + 2}`,
-        model_ref: "",
-        model_file: "",
-        model_repo: "",
-        model_filename: "",
-        model_files: [],
-        model_alias: "",
-        port: Math.min(65535, nextPort),
         downloaded: false,
         enabled: true,
       };
       return { ...current, additional_models: [...current.additional_models, model] };
     });
   }
+
+  async function applyModelDefaults(index: number | null, silent = false) {
+    const target = index === null ? form : form.additional_models[index];
+    if (!target) return;
+    const source = target.engine === "ollama" ? "ollama" : "huggingface";
+    const modelId = source === "ollama" ? target.model_ref.trim() : target.model_repo.trim();
+    if (!modelId || (source === "huggingface" && !modelId.includes("/"))) {
+      if (!silent) notify(source === "ollama" ? "Indica el modelo de Ollama" : "Indica el repositorio Hugging Face como organización/modelo", true);
+      return;
+    }
+    setLoadingDefaults(index === null ? "primary" : form.additional_models[index].id);
+    try {
+      const values = await api<Partial<ModelConfig> & { memory_preview_mb: number }>(
+        `/api/profiles/model-defaults?source=${source}&model_id=${encodeURIComponent(modelId)}`,
+      );
+      const { memory_preview_mb: preview, ...fields } = values;
+      const apply = <T extends ModelConfig>(model: T): T => ({
+        ...model,
+        ...fields,
+        model_ref: model.model_ref.trim() || fields.model_ref || "",
+        model_alias: model.model_alias.trim() || fields.model_alias || "",
+        flash_attention: Number(fields.flash_attention ?? model.flash_attention),
+        jinja: Number(fields.jinja ?? model.jinja),
+        reasoning_off: Number(fields.reasoning_off ?? model.reasoning_off),
+        kv_unified_per_slot: Number(fields.kv_unified_per_slot ?? model.kv_unified_per_slot),
+      });
+      setForm((current) => index === null
+        ? apply(current)
+        : { ...current, additional_models: current.additional_models.map((model, itemIndex) => itemIndex === index ? apply(model) : model) });
+      notify(`Parámetros de ${modelId} aplicados · contexto ${Math.round((fields.context_size ?? 0) / 1024)}K · ~${(preview / 1024).toFixed(1)} GB en memoria`);
+    } catch (error) {
+      if (!silent) notify((error as Error).message, true);
+    } finally {
+      setLoadingDefaults(null);
+    }
+  }
+
+  // Filling on blur only when the model actually changed keeps hand-tuned parameters of a saved profile.
+  const modelFieldOnFocus = useRef("");
+  const modelFieldEvents = (index: number | null) => ({
+    onFocus: (event: FocusEvent<HTMLInputElement>) => { modelFieldOnFocus.current = event.target.value; },
+    onBlur: (event: FocusEvent<HTMLInputElement>) => {
+      if (event.target.value.trim() && event.target.value !== modelFieldOnFocus.current) void applyModelDefaults(index, true);
+    },
+  });
+
+  const defaultsButton = (index: number | null, id: string) => (
+    <button type="button" className="button secondary" onClick={() => void applyModelDefaults(index)} disabled={loadingDefaults !== null} title="Contexto, muestreo, caché KV y mmproj que usaría Encender para este modelo descargado">
+      <Sparkles size={15} /> {loadingDefaults === id ? "Leyendo modelo…" : "Parámetros del modelo"}
+    </button>
+  );
 
   function setAdditionalField<K extends keyof ProfileModel>(index: number, key: K, value: ProfileModel[K]) {
     setForm((current) => ({
@@ -4214,7 +4690,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             <label>Motor<select value={form.engine} onChange={(event) => setPrimaryEngine(event.target.value as Profile["engine"])}>{engineOptions.map((engine) => <option value={engine} key={engine}>{engine}</option>)}</select></label>
             <label>Tarea<select value={form.task} onChange={(event) => setPrimaryTask(event.target.value as ModelTask)}>{taskOptions.map((task) => <option value={task.id} key={task.id}>{task.label}</option>)}</select></label>
             <label>Runtime<select value={form.runtime_backend} onChange={(event) => setField("runtime_backend", event.target.value as Profile["runtime_backend"])}><option value="native">Nativo</option><option value="external">Endpoint externo local</option><option value="compose" disabled>Compose (próxima fase)</option></select></label>
-            <label className="wide">{form.engine === "llama.cpp" ? "Identificador del modelo / API" : "Modelo Ollama"}<input value={form.model_ref} onChange={(event) => setField("model_ref", event.target.value)} placeholder={form.engine === "llama.cpp" ? "mi-modelo" : "qwen3:8b"} required /></label>
+            <label className="wide">{form.engine === "llama.cpp" ? "Identificador del modelo / API" : "Modelo Ollama"}<input value={form.model_ref} onChange={(event) => setField("model_ref", event.target.value)} {...(form.engine === "ollama" ? modelFieldEvents(null) : {})} placeholder={form.engine === "llama.cpp" ? "Se completa con el repositorio" : "qwen3:8b"} required /></label>
+            {form.engine === "ollama" && <div className="wide recommendation-action">{defaultsButton(null, "primary")}</div>}
             {!["llama.cpp", "ollama"].includes(form.engine) && <>
               <label className="wide">Endpoint local<input type="url" value={form.endpoint_url} onChange={(event) => setField("endpoint_url", event.target.value)} placeholder={form.api_protocol === "tts-lab" ? "http://127.0.0.1:8010/api/projects/mi-voz" : "http://127.0.0.1:8000"} required /></label>
               <label>Protocolo<select value={form.api_protocol} onChange={(event) => setField("api_protocol", event.target.value as Profile["api_protocol"])}><option value="openai">OpenAI compatible</option><option value="tts-lab">TTS Lab</option><option value="voice-agent">Voice Agent (API privada)</option><option value="ragkit">RAGKit</option><option value="security-app">Aplicación de seguridad</option><option value="comfyui">ComfyUI (adaptador requerido)</option></select></label>
@@ -4222,7 +4699,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             </>}
             {form.engine === "llama.cpp" && (
               <>
-                <label className="wide">Repositorio Hugging Face<input value={form.model_repo} onChange={(event) => setField("model_repo", event.target.value)} placeholder="organización/modelo-GGUF" /></label>
+                <label className="wide">Repositorio Hugging Face<input value={form.model_repo} onChange={(event) => setField("model_repo", event.target.value)} {...modelFieldEvents(null)} placeholder="organización/modelo-GGUF" /></label>
                 <label>Alias OpenAI servido<input value={form.model_alias} onChange={(event) => setField("model_alias", event.target.value)} placeholder={form.model_ref || "mi-modelo"} /></label>
                 <label>Archivo GGUF remoto<input value={form.model_filename} onChange={(event) => setField("model_filename", event.target.value)} placeholder="modelo.Q4_K_M.gguf" /></label>
                 <label className="wide">Archivo GGUF local<input value={form.model_file} onChange={(event) => setField("model_file", event.target.value)} placeholder="Se completa al descargar, o indica una ruta absoluta" /></label>
@@ -4233,12 +4710,13 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
                   <label className="wide">Archivo mmproj local<input value={form.mmproj_file} onChange={(event) => setField("mmproj_file", event.target.value)} /></label>
                 </>}
                 <div className="wide recommendation-action">
+                  {defaultsButton(null, "primary")}
                   <button type="button" className="button secondary" onClick={recommend} disabled={analyzing}><Sparkles size={15} /> {analyzing ? "Analizando ficha…" : "Recomendar desde Hugging Face"}</button>
                   {recommendation && <small>Contexto obtenido de {recommendation.context_source}. GGUF sugerido: {recommendation.recommended_file ?? "no indicado"}.</small>}
                 </div>
               </>
             )}
-            <label>Puerto preferido <small>(se reasigna si está ocupado)</small><input type="number" value={form.port} min={1024} max={65535} onChange={(event) => setField("port", Number(event.target.value))} /></label>
+            <PortField auto={isAutoPort(form)} port={form.port} onAuto={(auto) => setField("port_auto", auto)} onPort={(port) => setField("port", port)} />
             <label>Contexto<input type="number" value={form.context_size} min={512} onChange={(event) => setField("context_size", Number(event.target.value))} /></label>
             <label>Capas GPU<input type="number" value={form.gpu_layers} min={-1} onChange={(event) => setField("gpu_layers", Number(event.target.value))} /></label>
             <label>Hilos CPU<input type="number" value={form.threads} min={1} onChange={(event) => setField("threads", Number(event.target.value))} /></label>
@@ -4316,14 +4794,14 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
                     <label>Nombre<input value={model.name} onChange={(event) => setAdditionalField(index, "name", event.target.value)} required /></label>
                     <label>Motor<select value={model.engine} onChange={(event) => setAdditionalEngine(index, event.target.value as ProfileModel["engine"])}>{engineOptions.map((engine) => <option value={engine} key={engine}>{engine}</option>)}</select></label>
                     <label>Tarea<select value={model.task} onChange={(event) => setAdditionalTask(index, event.target.value as ModelTask)}>{taskOptions.map((task) => <option value={task.id} key={task.id}>{task.label}</option>)}</select></label>
-                    <label>Identificador / modelo<input value={model.model_ref} onChange={(event) => setAdditionalField(index, "model_ref", event.target.value)} required /></label>
-                    <label>Puerto preferido <small>(automático si hay conflicto)</small><input type="number" min={1024} max={65535} value={model.port} onChange={(event) => setAdditionalField(index, "port", Number(event.target.value))} /></label>
+                    <label>Identificador / modelo<input value={model.model_ref} onChange={(event) => setAdditionalField(index, "model_ref", event.target.value)} {...(model.engine === "ollama" ? modelFieldEvents(index) : {})} placeholder={model.engine === "llama.cpp" ? "Se completa con el repositorio" : undefined} required /></label>
+                    <PortField auto={isAutoPort(model)} port={model.port} onAuto={(auto) => setAdditionalField(index, "port_auto", auto)} onPort={(port) => setAdditionalField(index, "port", port)} />
                     {!["llama.cpp", "ollama"].includes(model.engine) && <>
                       <label className="span-two">Endpoint local<input type="url" value={model.endpoint_url} onChange={(event) => setAdditionalField(index, "endpoint_url", event.target.value)} placeholder={model.api_protocol === "tts-lab" ? "http://127.0.0.1:8010/api/projects/mi-voz" : "http://127.0.0.1:8000"} required /></label>
                       <label>Protocolo<select value={model.api_protocol} onChange={(event) => setAdditionalField(index, "api_protocol", event.target.value as ModelConfig["api_protocol"])}><option value="openai">OpenAI compatible</option><option value="tts-lab">TTS Lab</option><option value="voice-agent">Voice Agent (API privada)</option><option value="ragkit">RAGKit</option><option value="security-app">Aplicación de seguridad</option><option value="comfyui">ComfyUI</option></select></label>
                     </>}
                     {model.engine === "llama.cpp" && <>
-                      <label className="span-two">Repositorio Hugging Face<input value={model.model_repo} onChange={(event) => setAdditionalField(index, "model_repo", event.target.value)} placeholder="organización/modelo-GGUF" /></label>
+                      <label className="span-two">Repositorio Hugging Face<input value={model.model_repo} onChange={(event) => setAdditionalField(index, "model_repo", event.target.value)} {...modelFieldEvents(index)} placeholder="organización/modelo-GGUF" /></label>
                       <label>Archivo GGUF remoto<input value={model.model_filename} onChange={(event) => setAdditionalField(index, "model_filename", event.target.value)} /></label>
                       <label>Archivo GGUF local<input value={model.model_file} onChange={(event) => setAdditionalField(index, "model_file", event.target.value)} /></label>
                       {model.task === "vision" && <>
@@ -4335,6 +4813,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
                     <label>Batch / uBatch<div className="paired-inputs"><input type="number" min={1} value={model.batch_size} onChange={(event) => setAdditionalField(index, "batch_size", Number(event.target.value))} /><input type="number" min={1} value={model.ubatch_size} onChange={(event) => setAdditionalField(index, "ubatch_size", Number(event.target.value))} /></div></label>
                     <label>Memoria estimada (MiB)<input type="number" min={0} value={model.estimated_memory_mb} onChange={(event) => setAdditionalField(index, "estimated_memory_mb", Number(event.target.value))} placeholder="0 = automática" /></label>
                     <label>Alias OpenAI servido<input value={model.model_alias} onChange={(event) => setAdditionalField(index, "model_alias", event.target.value)} /></label>
+                    {["llama.cpp", "ollama"].includes(model.engine) && <div className="span-two recommendation-action">{defaultsButton(index, model.id)}</div>}
                   </div>
                 </div>
               ))}
@@ -6220,6 +6699,10 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
               const radar = Object.entries(detail.summary.score_dimensions ?? {})
                 .filter(([, value]) => value != null)
                 .map(([key, value]) => ({ dimension: key.replace(/_/g, " "), value: Number(value) }));
+              const runEstimate = Number(detail.runtime?.estimated_memory_mb || 0) || info?.estimated_memory_mb || 0;
+              const peakMemory = detail.summary.resources?.max_memory_bytes;
+              const drafter = detail.runtime?.speculative as { spec_type?: string; draft_filename?: string } | undefined;
+              const acceptance = detail.summary.speculative;
               const facts = [
                 ["Tarea", MODALITY_LABELS[detailModality] ?? detailModality],
                 ["Autor", info?.author],
@@ -6227,7 +6710,13 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
                 ["Tamaño en disco", bytes(detail.artifact_size)],
                 ["Cuantización", detail.quantization],
                 ["Arquitectura", detail.architecture],
-                ["Memoria estimada", info?.estimated_memory_mb ? bytes(info.estimated_memory_mb * 1024 * 1024) : ""],
+                ["Memoria estimada", runEstimate ? bytes(runEstimate * 1024 * 1024) : ""],
+                ["Pico real vs estimada", peakMemory && runEstimate
+                  ? `${bytes(peakMemory)} del sistema · ${peakMemory > runEstimate * 1024 * 1024 ? "por encima" : "dentro"} de la estimación`
+                  : ""],
+                ["Especulativa", drafter?.spec_type
+                  ? `${SPEC_LABELS[drafter.spec_type] ?? drafter.spec_type}${drafter.draft_filename ? ` · ${drafter.draft_filename}` : " integrado"}${acceptance ? ` · aceptación ${Math.round(acceptance.acceptance_rate * 100)}%` : " · sin datos de aceptación"}`
+                  : ""],
                 ["Entrada → salida", info?.input_modalities.length ? `${info.input_modalities.join(", ")} → ${info.output_modalities.join(", ") || "—"}` : ""],
                 ["Licencia", info?.license],
                 ["Modelo base", info?.base_model],
@@ -6730,9 +7219,10 @@ function SettingsView({ config, themePreference, setThemePreference, notify }: {
           port: gateway.port,
           request_timeout_seconds: gateway.request_timeout_seconds,
           max_request_mb: gateway.max_request_mb,
+          web_search: gateway.web_search !== false,
         }),
       });
-      notify("Gateway actualizado. Ejecuta ./start.sh restart para aplicar host o puerto.");
+      notify("Gateway actualizado. La búsqueda web se aplica al momento y OpenCode la toma al volver a abrirse. Host, puerto o activación requieren ./start.sh restart.");
       setGateway(await api<GatewayConfig>("/api/gateway/config"));
     } catch (error) {
       notify((error as Error).message, true);
@@ -6761,6 +7251,7 @@ function SettingsView({ config, themePreference, setThemePreference, notify }: {
         </div>
         {gateway && <form onSubmit={saveGateway}>
           <label className="checkbox"><input type="checkbox" checked={gateway.enabled} onChange={(event) => setGateway({ ...gateway, enabled: event.target.checked })} /><span>Activar gateway al arrancar MyDGX</span></label>
+          <label className="checkbox"><input type="checkbox" checked={gateway.web_search !== false} onChange={(event) => setGateway({ ...gateway, web_search: event.target.checked })} /><span>Búsqueda web para OpenCode, con SearXNG local. Activada por defecto; no requiere reiniciar.</span></label>
           <label>Escucha<select value={gateway.host} onChange={(event) => setGateway({ ...gateway, host: event.target.value as GatewayConfig["host"] })}><option value="127.0.0.1">Solo localhost (recomendado)</option><option value="::1">Solo localhost IPv6</option><option value="0.0.0.0">Toda la red IPv4</option><option value="::">Toda la red IPv6</option></select></label>
           <label>Puerto<input type="number" min={1024} max={65535} value={gateway.port} onChange={(event) => setGateway({ ...gateway, port: Number(event.target.value) })} /></label>
           <label>Timeout de inferencia (s)<input type="number" min={10} max={7200} value={gateway.request_timeout_seconds} onChange={(event) => setGateway({ ...gateway, request_timeout_seconds: Number(event.target.value) })} /></label>
@@ -6769,6 +7260,7 @@ function SettingsView({ config, themePreference, setThemePreference, notify }: {
             <span><small>Perfil proxy</small><strong>{gateway.active_profile ?? "Ningún perfil activo"}</strong></span>
             <span><small>Autenticación</small><strong>{gateway.api_key_configured ? "Bearer configurado en .env" : "Sin clave · solo localhost"}</strong></span>
             <span><small>Adaptador de protocolos</small><strong>{gateway.protocol_adapter ? `LiteLLM ${gateway.protocol_adapter}` : "No disponible"}</strong></span>
+            <span><small>Búsqueda web</small><strong>{gateway.web_search !== false ? "Activada · SearXNG" : "Desactivada"}</strong></span>
             <span className="gateway-aliases"><small>Modelos publicados · nombre completo y alias para el campo model</small><GatewayModelList gateway={gateway} empty="Ninguno configurado" /></span>
           </div>
           <div className="gateway-actions"><small>OpenAI: {gateway.endpoint} · Anthropic: {gateway.anthropic_endpoint}</small></div>

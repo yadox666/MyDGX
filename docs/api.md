@@ -65,16 +65,18 @@ curl -s -H "X-MyDGX-Key: $MYDGX_API_KEY" http://127.0.0.1:8088/api/overview
 | GET | `/api/overview` | Telemetría actual, identidad del equipo, servicios, suite de benchmarks en curso, mapa de memoria, perfiles cargados (`running_profiles`) y apps web activas (`web_apps`: `name`, `alias`, `port`, `url`, `state`, `reachable`). |
 | GET | `/api/metrics/history` | Histórico del host. Parámetros: `minutes`, o `start` y `end` ISO. |
 | GET | `/api/metrics/models` | Telemetría por modelo. Parámetros: `minutes`, `profile_id`. |
-| GET | `/api/gateway/config` | Configuración y estado del gateway: host, puerto, alias publicados, perfil activo. |
-| PUT | `/api/gateway/config` | Cambia `enabled`, `host`, `port`, `request_timeout_seconds`, `max_request_mb`. Requiere reiniciar el gateway. |
+| GET | `/api/gateway/config` | Configuración y estado del gateway: host, puerto, alias publicados, perfil activo y `web_search`. |
+| PUT | `/api/gateway/config` | Cambia `enabled`, `host`, `port`, `request_timeout_seconds`, `max_request_mb` y `web_search` (por defecto `true`). Host, puerto y activación requieren reiniciar el gateway. La búsqueda web se aplica al guardar. |
 
 ## Modelos
 
 | Método | Ruta | Para qué |
 |---|---|---|
 | GET | `/api/models` | Modelos instalados de Ollama y Hugging Face, modelos cargados en memoria y persistencia. |
-| PUT | `/api/models/persistence` | Añade o quita un modelo del perfil **Default**, que arranca siempre con MyDGX. Si Default está cargado, el cambio se aplica al momento. Cuerpo: `source` (`ollama`/`huggingface`), `model_id`, `enabled`. |
-| POST | `/api/models/quick/start` | **Enciende** un modelo instalado al momento en el perfil **Quick**, si cabe en memoria. Quick no se restaura al reiniciar. Cuerpo: `source`, `model_id`. `409` si no cabe o ya está cargado. |
+| PUT | `/api/models/persistence` | Añade o quita un modelo del perfil **Default**, que arranca siempre con MyDGX. Si Default está cargado, el cambio se aplica al momento. Cuerpo: `source` (`ollama`/`huggingface`), `model_id`, `enabled` y, opcional, `context_size`. Sin `context_size` usa el mismo contexto que `quick/start`. |
+| POST | `/api/models/quick/start` | **Enciende** un modelo instalado al momento en el perfil **Quick**, si cabe en memoria. Quick no se restaura al reiniciar. Cuerpo: `source`, `model_id` y, opcional, `context_size` (se ajusta al rango entre el mínimo de los agentes y el máximo del modelo, que `GET /api/models` publica en `quick_start.context`). `409` si no cabe o ya está cargado. |
+| GET | `/api/models/settings` | **Ajustes de arranque** de un GGUF descargado. Para cada valor da el automático, el efectivo y su origen (`ficha`, `GGUF`, `manual`…). Incluye las cuantizaciones principales con su arquitectura y si el llama.cpp instalado la reconoce, los mmproj, el rango de contexto y los drafters disponibles para la decodificación especulativa. Parámetro: `model_id`. |
+| PUT | `/api/models/settings` | Guarda valores manuales para ese modelo; un campo `null` vuelve al automático y un cuerpo solo con `model_id` lo restablece todo. Campos: `model_filename`, `mmproj_filename` (`""` desactiva la visión), `context_size`, `context_max`, muestreo (`temperature`, `top_p`, `top_k`, `min_p`, `repeat_penalty`, `presence_penalty`), `cache_type_k`/`cache_type_v`, `spec_type` (`off` o un `draft-*`), `draft_filename` y `spec_draft_n_max`. Si el modelo está en Default, se actualiza también ahí. |
 | POST | `/api/models/quick/stop` | **Apaga** un modelo de Quick sin tocar los demás. Al apagar el último, Quick desaparece. Cuerpo: `source`, `model_id`. |
 | POST | `/api/models/stop-all` | **Para todos los modelos** salvo el del chat: detiene los perfiles cargados (también Quick) menos Default y el que aloja el modelo del asistente, y descarga los residentes de Ollama que no pertenezcan a ellos. No toca ComfyUI, TTS ni Whisper. Devuelve `stopped_profiles`, `released_ollama` y `kept_profiles`; `409` si hay un perfil arrancando. |
 | POST | `/api/models/comfyui/release` | **Libera** la memoria de ComfyUI. Descarga todos los modelos que tenga cargados, porque ComfyUI no permite soltar uno solo; se vuelven a cargar en la siguiente generación. Devuelve `502` si ComfyUI no responde. |
@@ -84,7 +86,8 @@ curl -s -H "X-MyDGX-Key: $MYDGX_API_KEY" http://127.0.0.1:8088/api/overview
 | PUT | `/api/models/huggingface/favorites` | Añade o quita un favorito. Cuerpo: `repo_id`, `enabled`. |
 | GET | `/api/models/huggingface/inspect/{repo_id}` | Metadatos, formatos, archivos y capacidades de un repositorio. Parámetro: `revision`. |
 | POST | `/api/models/huggingface/download` | Descarga un snapshot completo. Cuerpo: `repo_id`, `revision`. Devuelve `job_id`. |
-| POST | `/api/models/huggingface/files/download` | Descarga solo algunos archivos (por ejemplo un GGUF). Cuerpo: `repo_id`, `revision`, `files`. Devuelve `job_id`. |
+| POST | `/api/models/huggingface/files/download` | Descarga solo algunos archivos (por ejemplo un GGUF). Cuerpo: `repo_id`, `revision`, `files`. Devuelve `job_id`. Al terminar, pone en cola un benchmark automático de los GGUF principales descargados. Ese benchmark comprueba que arrancan y responden, y mide la memoria real frente a la estimada y la aceptación del drafter. |
+| POST | `/api/models/huggingface/preflight` | **Comprobación previa** sin descargar nada: lee por HTTP Range la cabecera de cada GGUF seleccionado. Devuelve para cada uno el papel que tiene (principal, mmproj o un tipo de drafter), la arquitectura, si el llama.cpp instalado la reconoce, el contexto nativo, la cuantización, si lleva MTP integrado y la memoria estimada con 32K. Incluye avisos: shards incompletos, falta del modelo principal, drafter con mmproj, drafter disponible pero no seleccionado (en `suggested_draft`) o memoria insuficiente. Cuerpo: `repo_id`, `revision`, `files`. |
 | POST | `/api/models/huggingface/integrity/{repo_id}` | Verifica los SHA-256 de la caché local contra Hugging Face. Devuelve `job_id`. |
 | DELETE | `/api/models/huggingface/{repo_id}` | Borra un repositorio de la caché. `?confirm=` el `repo_id` exacto. `409` si lo usa un perfil cargado o una descarga. |
 | POST | `/api/models/ollama/pull` | Descarga un modelo de Ollama. Cuerpo: `name`. Devuelve `job_id`. |
@@ -114,6 +117,7 @@ puerto, contexto y parámetros. Puede haber hasta dos perfiles cargados a la vez
 | POST | `/api/profiles/{profile_id}/stop` | Detiene un perfil cargado y su app. |
 | POST | `/api/profiles/stop` | Detiene todos los perfiles y sus apps. |
 | DELETE | `/api/profiles/{profile_id}` | Borra el perfil. `?confirm=` el nombre exacto del perfil. |
+| GET | `/api/profiles/model-defaults` | Parámetros con los que arrancaría un modelo descargado (los mismos de *Encender*: contexto, muestreo de la ficha o del GGUF, caché KV, `mmproj`), para rellenar un modelo de un perfil. Parámetros: `source` (`huggingface` u `ollama`) y `model_id`. |
 | GET | `/api/profiles/recommend/{repo_id}` | Recomienda motor, archivo GGUF, contexto y parámetros para un repositorio. Parámetros: `task`, `runtime`. |
 | POST | `/api/profile-apps/{name}/{action}` | Ejecuta `start.sh` de una app de perfil. `action`: `start`, `stop`, `restart` o `status`. |
 | PUT | `/api/profile-apps/{name}/web` | Fija el alias y el puerto web de una app (`alias`, `port` 1024-65535; `port: null` lo quita). `409` si el alias o el puerto ya están en uso (MyDGX, gateway, servicios, modelos de perfiles, túneles del systray, rangos de Default/Quick u otra app). Devuelve `restart_required` si la app está en marcha. |
@@ -211,7 +215,8 @@ Detalle en [Asistente MyDGX](asistente-mydgx.md).
 
 | Método | Ruta | Para qué |
 |---|---|---|
-| GET | `/health` | Salud del gateway. |
+| GET | `/health` | Salud del gateway. Incluye `web_search`. |
+| POST | `/v1/search` | Búsqueda web vía SearXNG local. Cuerpo: `{"query":"términos","limit":5}`. Misma autenticación que el resto del gateway. `403` si está desactivada, `503` si SearXNG no responde. No registra la consulta. |
 | GET | `/v1/models` | Modelos publicados por los perfiles cargados (alias y nombre completo). |
 | GET | `/v1/models/{model_id}` | Detalle de un modelo publicado. |
 | POST | `/v1/chat/completions` | Chat OpenAI (streaming incluido). |

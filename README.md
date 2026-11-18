@@ -278,8 +278,18 @@ cd ~/opencode
 /ruta/a/MyDGX-Dashboard/start.sh opencode MODEL_ALIAS
 ```
 
+OpenCode y Claude Code necesitan un modelo cargado con al menos 32 768 tokens de
+contexto: su prompt de sistema y sus herramientas ocupan unos 16 000 antes del
+primer mensaje. Los modelos con menos contexto no aparecen en el selector, y si
+pides uno, el script se niega a arrancar y explica cómo subir el contexto del
+perfil. El mínimo se puede cambiar con `MYDGX_AGENT_MIN_CONTEXT`.
+
 El modo predeterminado es `plan` y solo lectura. `--active` permite edición,
 solicita confirmación para bash y activa los MCP de Playwright, Shodan y NVD.
+La búsqueda web está activada por defecto en los dos modos: OpenCode consulta
+SearXNG local a través de `POST /v1/search`. Se apaga en Configuración → Gateway
+y OpenCode deja de ofrecer la herramienta la próxima vez que se abre. `webfetch`
+y el `websearch` nativo siguen desactivados.
 La configuración incluye automáticamente todos los modelos de chat o visión
 publicados por el gateway; puedes seleccionar cualquiera por su alias. Sin
 alias, se elige un modelo del perfil con tool calling, de chat y con más
@@ -323,10 +333,13 @@ JSON limpio para scripts y CI.
 Los modos equivalen a los de OpenCode: `plan` y solo lectura por defecto;
 `--active` acepta ediciones, pide confirmación para bash y carga únicamente los
 MCP Playwright, NVD y, si existe `SHODAN_API_KEY`, Shodan (`--strict-mcp-config`).
-Ambos modos bloquean subagentes, web y lectura de `.env` y claves privadas. Los
-skills se copian en `~/claude-code/.claude/skills/` y las instrucciones en
-`~/claude-code/CLAUDE.md`. La clave del gateway se entrega solo mediante
-`MYDGX_GATEWAY_API_KEY` y `ANTHROPIC_API_KEY` se elimina del entorno de la sesión.
+La búsqueda web está activada por defecto en los dos modos, con el mismo MCP
+`searxng` que OpenCode y la misma casilla de Configuración → Gateway. `WebSearch`
+y `WebFetch` nativos siguen bloqueados. Ambos modos bloquean subagentes y la
+lectura de `.env` y claves privadas. Los skills se copian en
+`~/claude-code/.claude/skills/` y las instrucciones en `~/claude-code/CLAUDE.md`.
+La clave del gateway se entrega solo mediante `MYDGX_GATEWAY_API_KEY` y
+`ANTHROPIC_API_KEY` se elimina del entorno de la sesión.
 
 ## Prueba de aceptación del DGX Spark
 

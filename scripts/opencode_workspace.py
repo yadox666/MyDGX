@@ -17,10 +17,14 @@ from pathlib import Path
 PLAYWRIGHT_MCP = "@playwright/mcp@0.0.83"
 SHODAN_MCP = "@burtthecoder/mcp-shodan@1.0.32"
 NVD_MCP = "@cyanheads/nist-nvd-mcp-server@0.3.2"
+SEARXNG_MCP = Path(__file__).resolve().parent / "opencode_searxng_mcp.py"
 DEFAULT_CONTEXT = 262_144
 DEFAULT_STEPS = 8192
 DEFAULT_MAX_OUTPUT = 32_000
 MIN_MAX_OUTPUT = 4096
+# The agents' system prompt plus tool and MCP schemas take ~16k tokens before the
+# first message; below this the request fails and auto-compaction loops forever.
+DEFAULT_MIN_AGENT_CONTEXT = 32_768
 MANAGED_ASSISTANT_OWNER = "mydgx:managed-assistant"
 # OpenCode aplica la última regla que coincide: la general va primero.
 READ_RULES = {
@@ -45,6 +49,11 @@ Browser, Shodan, and NVD tools exist only in the active profile. Discover which
 tools are connected before using them. Use NVD for published CVE records and
 never invent CVE identifiers. Only perform security testing against systems for
 which the user has explicit authorization.
+
+When gateway web search is enabled, the searxng web_search tool is available in
+both profiles. It queries the public web through local SearXNG. Send short
+search terms only. Never send file contents, credentials, tokens, cookies, or
+private data. The built-in websearch and webfetch tools stay disabled.
 
 For security assessments, load the authorized-pentest skill before starting.
 Load blackbox-wordpress only for an authorized WordPress initial-access
@@ -94,11 +103,14 @@ def request_json(url: str, api_key: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def discover(base_url: str, api_key: str) -> list[dict]:
+def discover(base_url: str, api_key: str) -> tuple[list[dict], bool]:
     root = base_url.removesuffix("/v1").rstrip("/")
     health = request_json(f"{root}/health", api_key)
     if health.get("status") != "ok":
         raise RuntimeError("el gateway está desactivado")
+    web_search = health.get("web_search", True)
+    if not isinstance(web_search, bool):
+        web_search = True
     payload = request_json(f"{base_url.rstrip('/')}/models", api_key)
     models = []
     for item in payload.get("data", []):
@@ -119,10 +131,11 @@ def discover(base_url: str, api_key: str) -> list[dict]:
                 "reasoning": bool(capabilities.get("reasoning", False)),
                 "vision": bool(capabilities.get("vision", task == "vision" or "image" in modalities)),
                 "assistant": item.get("owned_by") == MANAGED_ASSISTANT_OWNER,
+                "profile": str(item.get("owned_by") or "").removeprefix("mydgx:"),
             })
     if not models:
         raise RuntimeError("el gateway no publica ningún modelo de chat o visión")
-    return models
+    return models, web_search
 
 
 def max_output_tokens(context: int, env_name: str) -> int:
@@ -148,17 +161,47 @@ def opencode_major(version: str) -> int:
     return int(match.group(1)) if match else 1
 
 
+def min_agent_context() -> int:
+    try:
+        value = int(os.environ.get("MYDGX_AGENT_MIN_CONTEXT", str(DEFAULT_MIN_AGENT_CONTEXT)))
+    except ValueError:
+        value = DEFAULT_MIN_AGENT_CONTEXT
+    return max(value, 0)
+
+
+def context_error(models: list[dict], minimum: int) -> str:
+    loaded = ", ".join(
+        f"{model['id']} ({model['context']} tokens"
+        + (f", perfil {model['profile']}" if model.get("profile") else "")
+        + ")"
+        for model in models
+    )
+    return (
+        f"ERROR: los agentes de código necesitan un modelo con al menos {minimum} tokens de contexto.\n"
+        f"       Su prompt de sistema y sus herramientas ocupan unos 16 000 antes del primer mensaje.\n"
+        f"       Cargados: {loaded}.\n"
+        "       Sube el contexto del perfil en el dashboard (Perfiles → editar → contexto, p. ej. 65536)\n"
+        "       y vuelve a cargarlo, o fija MYDGX_AGENT_MIN_CONTEXT si sabes lo que haces."
+    )
+
+
 def select_model(models: list[dict], requested: str) -> dict:
+    minimum = min_agent_context()
     if requested:
         selected = next((model for model in models if model["id"] == requested), None)
         if selected is None:
             available = ", ".join(model["id"] for model in models)
             raise SystemExit(f"ERROR: el modelo {requested!r} no está cargado. Disponibles: {available}")
+        if selected["context"] < minimum:
+            raise SystemExit(context_error([selected], minimum))
     else:
+        usable = [model for model in models if model["context"] >= minimum]
+        if not usable:
+            raise SystemExit(context_error(models, minimum))
         # El gateway ordena alfabéticamente; se prefiere un modelo del perfil
         # con tool calling, de chat y con más contexto antes que el asistente.
         selected = min(
-            models,
+            usable,
             key=lambda model: (
                 model["assistant"], not model["tools"], model["task"] != "chat", -model["context"],
             ),
@@ -194,6 +237,7 @@ def write_config(
     selected: dict,
     active: bool,
     version: str,
+    web_search: bool = True,
 ) -> Path:
     config_dir = workspace / ".opencode"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -225,6 +269,7 @@ def write_config(
             },
         }
         for model in models
+        if model["context"] >= min_agent_context() or model["id"] == selected["id"]
     }
     if major >= 2:
         provider = {
@@ -267,6 +312,9 @@ def write_config(
         "shodan_*": "allow",
         "nvd_*": "allow",
     }
+    if web_search:
+        plan_permissions["searxng_*"] = "allow"
+        active_permissions["searxng_*"] = "allow"
     permissions = active_permissions if active else plan_permissions
     tools = {"webfetch": False, "websearch": False, "skill": True, "question": False}
     if not active:
@@ -304,8 +352,20 @@ def write_config(
         },
         provider_key: {"mydgx": provider},
     }
+    mcp: dict = {}
+    if web_search:
+        mcp["searxng"] = {
+            "type": "local",
+            "command": [sys.executable, str(SEARXNG_MCP)],
+            "environment": {
+                "MYDGX_GATEWAY_URL": base_url.rstrip("/"),
+                "MYDGX_GATEWAY_API_KEY": "{env:MYDGX_GATEWAY_API_KEY}",
+            },
+            "enabled": True,
+            "timeout": 20_000,
+        }
     if active:
-        config["mcp"] = {
+        mcp.update({
             "playwright": {
                 "type": "local",
                 "command": playwright_command(workspace),
@@ -334,7 +394,9 @@ def write_config(
                 "enabled": True,
                 "timeout": 60_000,
             },
-        }
+        })
+    if mcp:
+        config["mcp"] = mcp
 
     payload = json.dumps(config, indent=2) + "\n"
     path = config_dir / "opencode.json"
@@ -404,9 +466,14 @@ def main() -> int:
         print(args.workspace.resolve())
         return 0
     try:
-        models = discover(args.base_url, os.environ.get("MYDGX_GATEWAY_API_KEY", ""))
+        models, web_search = discover(args.base_url, os.environ.get("MYDGX_GATEWAY_API_KEY", ""))
     except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as exc:
         raise SystemExit(f"ERROR: no se pudo configurar OpenCode desde {args.base_url}: {exc}") from exc
+    if not web_search:
+        print(
+            "AVISO: la búsqueda web del gateway está desactivada; OpenCode no recibe la herramienta.",
+            file=sys.stderr,
+        )
     selected = select_model(models, args.model)
     path = write_config(
         args.workspace.resolve(),
@@ -415,6 +482,7 @@ def main() -> int:
         selected,
         args.active,
         args.version,
+        web_search,
     )
     print(f"{selected['id']}\t{path}")
     return 0

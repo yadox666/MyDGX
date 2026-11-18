@@ -7,12 +7,14 @@ import argparse
 import json
 import os
 import shutil
+import sys
 import urllib.error
 from pathlib import Path
 
 from opencode_workspace import (
     NVD_MCP,
     PLAYWRIGHT_MCP,
+    SEARXNG_MCP,
     SHODAN_MCP,
     SKILLS_SOURCE,
     discover,
@@ -37,6 +39,11 @@ Browser, Shodan, and NVD tools exist only in the active profile. Discover which
 tools are connected before using them. Use NVD for published CVE records and
 never invent CVE identifiers. Only perform security testing against systems for
 which the user has explicit authorization.
+
+When gateway web search is enabled, the searxng web_search tool is available in
+both profiles. It queries the public web through local SearXNG. Send short
+search terms only. Never send file contents, credentials, tokens, cookies, or
+private data. The built-in WebSearch and WebFetch tools stay disabled.
 
 For security assessments, load the authorized-pentest skill before starting.
 Load blackbox-wordpress only for an authorized WordPress initial-access
@@ -71,17 +78,27 @@ def playwright_args(workspace: Path) -> list[str]:
     return args
 
 
-def write_mcp(workspace: Path) -> Path:
-    servers: dict = {
-        "playwright": {
+def write_mcp(workspace: Path, base_url: str, active: bool, web_search: bool) -> Path | None:
+    servers: dict = {}
+    if web_search:
+        servers["searxng"] = {
+            "command": sys.executable,
+            "args": [str(SEARXNG_MCP)],
+            "env": {
+                "MYDGX_GATEWAY_URL": base_url.rstrip("/"),
+                "MYDGX_GATEWAY_API_KEY": "${MYDGX_GATEWAY_API_KEY}",
+            },
+        }
+    if active:
+        servers["playwright"] = {
             "command": "npx",
             "args": playwright_args(workspace),
             "env": {
                 "PLAYWRIGHT_BROWSERS_PATH": "${PLAYWRIGHT_BROWSERS_PATH}",
                 "HOME": "${HOME}",
             },
-        },
-        "nvd": {
+        }
+        servers["nvd"] = {
             "command": "npx",
             "args": ["-y", NVD_MCP],
             "env": {
@@ -89,20 +106,21 @@ def write_mcp(workspace: Path) -> Path:
                 "NVD_API_KEY": "${NVD_API_KEY:-}",
                 "NVD_REQUEST_TIMEOUT_MS": "30000",
             },
-        },
-    }
-    if os.environ.get("SHODAN_API_KEY"):
-        servers["shodan"] = {
-            "command": "npx",
-            "args": ["-y", SHODAN_MCP],
-            "env": {"SHODAN_API_KEY": "${SHODAN_API_KEY}"},
         }
+        if os.environ.get("SHODAN_API_KEY"):
+            servers["shodan"] = {
+                "command": "npx",
+                "args": ["-y", SHODAN_MCP],
+                "env": {"SHODAN_API_KEY": "${SHODAN_API_KEY}"},
+            }
+    if not servers:
+        return None
     path = workspace / ".claude" / "mydgx-mcp.json"
     path.write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n", encoding="utf-8")
     return path
 
 
-def write_config(workspace: Path, base_url: str, selected: dict, active: bool) -> Path:
+def write_config(workspace: Path, base_url: str, selected: dict, active: bool, web_search: bool = True) -> Path:
     config_dir = workspace / ".claude"
     config_dir.mkdir(parents=True, exist_ok=True)
     model = selected["id"]
@@ -128,17 +146,18 @@ def write_config(workspace: Path, base_url: str, selected: dict, active: bool) -
     env.update({f"ANTHROPIC_DEFAULT_{tier}_MODEL": model for tier in MODEL_TIERS})
 
     deny = ["WebFetch", "WebSearch", "Task", "Agent", "Workflow", "EnterWorktree", *SECRET_READS]
+    search_tools = ["mcp__searxng", "mcp__searxng__web_search"] if web_search else []
     if active:
         permissions = {
             "defaultMode": "acceptEdits",
-            "allow": ["Read", "Edit", "Write", "Glob", "Grep", "mcp__playwright", "mcp__nvd", "mcp__shodan"],
+            "allow": ["Read", "Edit", "Write", "Glob", "Grep", "mcp__playwright", "mcp__nvd", "mcp__shodan", *search_tools],
             "ask": ["Bash"],
             "deny": deny,
         }
     else:
         permissions = {
             "defaultMode": "plan",
-            "allow": ["Read", "Glob", "Grep"],
+            "allow": ["Read", "Glob", "Grep", *search_tools],
             "deny": [*deny, "Bash", "Edit", "Write", "NotebookEdit"],
         }
     permissions["disableBypassPermissionsMode"] = "disable"
@@ -186,12 +205,17 @@ def main() -> int:
         print(workspace)
         return 0
     try:
-        models = discover(args.base_url, os.environ.get("MYDGX_GATEWAY_API_KEY", ""))
+        models, web_search = discover(args.base_url, os.environ.get("MYDGX_GATEWAY_API_KEY", ""))
     except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as exc:
         raise SystemExit(f"ERROR: no se pudo configurar Claude Code desde {args.base_url}: {exc}") from exc
+    if not web_search:
+        print(
+            "AVISO: la búsqueda web del gateway está desactivada; Claude Code no recibe la herramienta.",
+            file=sys.stderr,
+        )
     selected = select_model(models, args.model)
-    settings = write_config(workspace, args.base_url, selected, args.active)
-    mcp = write_mcp(workspace) if args.active else ""
+    settings = write_config(workspace, args.base_url, selected, args.active, web_search)
+    mcp = write_mcp(workspace, args.base_url, args.active, web_search) or ""
     print(f"{selected['id']}\t{settings}\t{mcp}")
     return 0
 

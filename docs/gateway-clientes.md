@@ -92,6 +92,11 @@ Usa un modelo con tool calling fiable. La clave puede ser un valor no vacío
 cuando el acceso es exclusivamente localhost; para red debe coincidir con
 `GATEWAY_API_KEY`.
 
+Con la búsqueda web del gateway activada, Claude Code recibe el MCP `searxng`
+en los modos plan y activo. La herramienta llama a `POST /v1/search` y `WebSearch`
+y `WebFetch` nativos permanecen denegados. La clave se referencia como
+`${MYDGX_GATEWAY_API_KEY}` y no se copia a `mydgx-mcp.json`.
+
 ## OpenCode
 
 MyDGX puede instalarlo, descubrir los aliases cargados y generar su configuración
@@ -128,6 +133,13 @@ Completions:
 No uses el proveedor `openai` contra un backend que solo admita Chat
 Completions; ese proveedor puede seleccionar Responses. MyDGX también expone
 Responses mediante LiteLLM cuando el cliente lo requiera.
+
+Con la búsqueda web del gateway activada (el valor por defecto, en
+Configuración → Gateway), OpenCode recibe el MCP `searxng` en los modos plan y
+activo. La herramienta llama a `POST /v1/search` del mismo gateway y este
+consulta SearXNG en `127.0.0.1:8888`. `webfetch` y el `websearch` nativo
+permanecen desactivados. La clave sigue referenciada como
+`{env:MYDGX_GATEWAY_API_KEY}` y no se copia al JSON.
 
 Si el gateway no es localhost, exporta `MYDGX_GATEWAY_URL` y
 `MYDGX_GATEWAY_API_KEY` antes del comando. La clave se referencia desde el

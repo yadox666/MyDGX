@@ -83,6 +83,17 @@ gateway_client_key() {
   fi
 }
 
+# Lanzado desde el Tray, la ventana se cierra al salir y el error no se ve.
+# Solo en terminal interactiva; los scripts y CI siguen saliendo sin esperar.
+pause_on_error() {
+  local status="$1"
+  if [[ "$status" -ne 0 && -t 0 && -t 1 ]]; then
+    printf '\nPulsa Enter para cerrar esta ventana.' >&2
+    read -r _ || true
+  fi
+  return "$status"
+}
+
 # Exporta PLAYWRIGHT_BROWSERS_PATH e instala Chromium si falta (perfil activo).
 ensure_node_for_mcp() {
   command -v npx >/dev/null 2>&1 || {

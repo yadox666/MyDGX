@@ -43,10 +43,22 @@ install_native() {
   bash "$installer"
 }
 
+# Without sudo, a root-owned npm prefix (e.g. /usr/lib/node_modules) fails with EACCES.
+npm_install_user() {
+  local prefix
+  prefix="$(npm config get prefix 2>/dev/null || true)"
+  if [[ -n "$prefix" && -w "$prefix/lib" ]] || [[ -n "$prefix" && ! -e "$prefix/lib" && -w "$prefix" ]]; then
+    npm install -g "$@"
+  else
+    mkdir -p "$HOME/.local"
+    npm install -g --prefix "$HOME/.local" "$@"
+  fi
+}
+
 if [[ "$(uname -s)" == Darwin ]] && command -v brew >/dev/null 2>&1; then
   brew install --cask claude-code
 elif command -v npm >/dev/null 2>&1; then
-  npm install -g @anthropic-ai/claude-code
+  npm_install_user @anthropic-ai/claude-code
 elif install_native; then
   :
 else

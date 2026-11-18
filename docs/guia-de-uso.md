@@ -60,7 +60,25 @@ Dos modos:
   - borrar, escribiendo el nombre para confirmar;
   - marcar como favorito;
   - **Encender**: carga el modelo al momento en el perfil **Quick** si cabe en
-    memoria y se puede levantar (los de Hugging Face deben ser GGUF). Los modelos
+    memoria y se puede levantar (los de Hugging Face deben ser GGUF). El contexto
+    es el punto medio entre el mínimo de los agentes de código (32K en modelos de
+    chat, 8K en visión) y el máximo que recomienda el autor (`--ctx-size` en la
+    ficha) o, si no lo indica, el contexto nativo del GGUF. Nunca supera el nativo.
+    Por ejemplo, un modelo de 262K arranca con 144K. Si la ficha usa un `-c`
+    menor que ese mínimo (suele ser un ejemplo), arranca con el mínimo. En los
+    GGUF que no están encendidos, un slider a la izquierda de *Encender* permite
+    elegir otro contexto entre ese mínimo y el contexto nativo del GGUF; muestra
+    la memoria que ocuparía y desactiva el botón si con ese contexto no cabe.
+    El muestreo (`--temp`,
+    `--top-p`, `--top-k`, `--min-p`, penalizaciones) y la caché KV (`-ctk`/`-ctv`)
+    se toman del primer comando `llama-server` de ejemplo de la ficha; si el autor
+    no indica `--repeat-penalty`, se usa 1.0. Sin comando en la ficha se usa el
+    muestreo que trae el GGUF (`general.sampling.*`) y, si tampoco lo hay, los
+    valores por defecto de MyDGX. Lo mismo aplica al añadir el modelo a
+    *Default*. La memoria necesaria, que decide si el botón está activo, se
+    calcula con ese contexto y esa caché KV a partir de la cabecera del GGUF
+    (capas de atención, cabezas KV y estado SSM en modelos híbridos), más los
+    pesos y el `mmproj`. Los modelos
     encendidos quedan arriba de la lista con la etiqueta *Quick* y el botón
     **Apagar**, que los baja de memoria. Si el modelo ya lo carga otro perfil, el
     botón muestra el nombre de ese perfil. Si no cabe junto a lo que ya está
@@ -81,6 +99,55 @@ Dos modos:
     Pide confirmación antes;
   - marcar la casilla **Default** para añadirlo al perfil Default, que arranca
     en cada inicio. Si Default ya está cargado, el cambio se aplica al momento.
+    Usa los mismos parámetros que *Encender*. El contexto es el que marque el
+    slider en ese momento; si no lo has movido, el mismo que usaría *Encender*.
+    Para cambiar el contexto de un modelo que ya está en Default, desmárcalo,
+    mueve el slider y vuelve a marcarlo;
+  - **Ajustes de arranque** (icono de deslizadores en los GGUF): muestra cada
+    valor con el que se encendería el modelo y su origen (ficha del autor,
+    cabecera GGUF, drafter detectado o valor por defecto). Permite fijar a mano:
+    - la cuantización principal y el `mmproj` («Sin visión» lo desactiva);
+    - el contexto por defecto y el máximo del slider;
+    - el drafter, o desactivar la especulativa, y los tokens por borrador;
+    - el muestreo y la caché KV.
+
+    Un campo vacío usa el automático y **Restablecer automático** borra todos
+    los ajustes manuales. Se aplica la próxima vez que se encienda; si el modelo
+    está en Default, también se actualiza allí. Los modelos con ajustes manuales
+    llevan la etiqueta *Manual*.
+- **Decodificación especulativa**: un drafter es un modelo pequeño que propone
+  tokens y el principal los valida, así que genera más rápido con la misma
+  calidad. MyDGX reconoce un drafter por:
+  - su nombre o carpeta (`mtp-`, `MTP/`, `dspark-`, `dflash-`, `eagle3-`, `draft-`);
+  - la arquitectura de su cabecera (`dflash`, `eagle3`…);
+  - tener muchos menos tensores que el modelo principal.
+
+  Los drafters nunca se eligen como modelo principal. MyDGX usa el drafter que
+  indica la ficha (`--spec-type`, `--spec-draft-model`) si está descargado. Si
+  no, prefiere DSpark, DFlash, EAGLE-3 y, por último, el MTP integrado en el
+  GGUF (`nextn_predict_layers`). Los modelos con especulativa llevan su etiqueta
+  (por ejemplo *DSpark* o *MTP*). Con el `mmproj` activo no se usa, porque
+  llama.cpp no combina las dos cosas. Si el modelo no arranca con el drafter,
+  MyDGX lo vuelve a lanzar sin él y lo anota en los logs.
+- **Comprobación previa a la descarga**: antes de bajar un GGUF, MyDGX lee por
+  HTTP Range la cabecera de cada archivo seleccionado, sin descargar los pesos.
+  Muestra qué es cada archivo (principal, proyector o drafter), su
+  arquitectura y si el llama.cpp instalado la reconoce. También indica el
+  contexto nativo, la cuantización y la memoria estimada con 32K. Avisa de:
+  - shards incompletos;
+  - una selección sin modelo principal;
+  - un drafter junto a un `mmproj`;
+  - memoria insuficiente.
+
+  Si el repositorio trae un drafter que no está seleccionado, ofrece **Añadir
+  drafter y descargar**. La descarga recomendada ya lo incluye cuando el modelo
+  no lleva visión.
+- **Verificación tras la descarga**: al terminar una descarga de Hugging Face,
+  el GGUF principal entra en la cola de **Benchmarks** automáticos. Se lanza
+  con la misma configuración que *Encender* (drafter y ajustes manuales
+  incluidos). Así se comprueba que arranca y responde, y la ficha del benchmark
+  compara el pico de memoria real con la estimada y muestra la tasa de
+  aceptación del drafter.
 - Descarga de Ollama por nombre exacto (`qwen3:32b`, `gpt-oss:120b`...).
 - Un modelo cargado por un perfil no se puede borrar: detén antes ese perfil o
   apágalo.
@@ -122,6 +189,14 @@ de descarga, plan de memoria y, si tiene, la app asociada.
 - **Crear o editar**: elige motor, modelo (o un repositorio recomendado, que
   rellena GGUF, contexto y parámetros), alias, puerto, contexto y parámetros de
   muestreo.
+  - Al escribir el repositorio de un modelo ya descargado (o el nombre en
+    Ollama), o con **Parámetros del modelo**, se rellenan los mismos valores que
+    usaría *Encender* para ese modelo: GGUF, `mmproj`, tarea, contexto,
+    muestreo, caché KV e identificador. Cada modelo del perfil tiene los suyos;
+    un modelo nuevo no copia los del principal.
+  - El **puerto** es *Automático* por defecto: al guardar, MyDGX elige uno libre
+    entre 18080 y 19999 que no use ningún otro perfil, app web ni servicio, y lo
+    conserva mientras siga libre. Con *Manual* se usa el número indicado.
   - Puedes añadir hasta 12 modelos adicionales: embeddings, reranking, visión,
     audio, imagen...
   - *Ajustar contexto automáticamente* reduce el contexto si no cabe en memoria,
@@ -239,8 +314,9 @@ herramientas. Ver [Laboratorio IA](laboratorio-ia.md).
 - Estado de las integraciones: token de Hugging Face, actualizaciones y control de
   servicios.
 - **Gateway**: activación, escucha (localhost recomendado), puerto, timeout,
-  tamaño máximo de petición y modelos publicados. Los cambios de host, puerto o
-  activación requieren reiniciar MyDGX.
+  tamaño máximo de petición, búsqueda web (SearXNG, activada por defecto) y
+  modelos publicados. La búsqueda se aplica al guardar. Los cambios de host,
+  puerto o activación requieren reiniciar MyDGX.
 
 ## Sistema
 

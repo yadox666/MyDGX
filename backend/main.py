@@ -8,11 +8,15 @@ import hashlib
 import hmac
 import html
 import importlib.metadata
+import io
+import itertools
 import json
 import math
+import mmap
 import os
 import signal
 import re
+import shlex
 import shutil
 import socket
 import sqlite3
@@ -30,7 +34,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 # huggingface_hub 1.x sustituye hf_transfer por el cliente Xet. Esta variable
 # debe estar activa antes de importar la librería.
@@ -1005,6 +1009,10 @@ class Database:
                 "minimum_context_size": "INTEGER NOT NULL DEFAULT 8192",
                 "favorite": "INTEGER NOT NULL DEFAULT 0",
                 "app": "TEXT NOT NULL DEFAULT ''",
+                "port_auto": "INTEGER NOT NULL DEFAULT 1",
+                "spec_type": "TEXT NOT NULL DEFAULT ''",
+                "draft_filename": "TEXT NOT NULL DEFAULT ''",
+                "spec_draft_n_max": "INTEGER NOT NULL DEFAULT 0",
             }
             for column, definition in additions.items():
                 if column not in existing:
@@ -1324,6 +1332,7 @@ def gateway_runtime_config() -> dict[str, Any]:
         "port": settings.gateway_port,
         "request_timeout_seconds": settings.gateway_request_timeout_seconds,
         "max_request_mb": settings.gateway_max_request_mb,
+        "web_search": True,
     }
     raw = preference_value("gateway.config")
     if not raw:
@@ -1334,7 +1343,11 @@ def gateway_runtime_config() -> dict[str, Any]:
         return defaults
     if not isinstance(stored, dict):
         return defaults
-    return {**defaults, **{key: stored[key] for key in defaults if key in stored}}
+    merged = {**defaults, **{key: stored[key] for key in defaults if key in stored}}
+    # Solo un booleano explícito apaga la búsqueda; un valor viejo o raro sigue activo.
+    web_search = stored.get("web_search", True)
+    merged["web_search"] = web_search if isinstance(web_search, bool) else True
+    return merged
 
 
 def sync_openwebui_gateway_port(port: int) -> None:
@@ -2390,7 +2403,50 @@ def model_weight_mb(model: dict[str, Any]) -> int:
                 paths.append(mmproj_path)
         except Exception:
             pass
-    return sum(path.stat().st_size for path in paths) // (1024 * 1024)
+    if model.get("spec_type") and (draft := resolve_draft_file(model)):
+        paths.append(draft)
+    # A local path and its Hub snapshot entry are often the same blob behind a symlink.
+    unique = {path.resolve(): path for path in paths}
+    return sum(path.stat().st_size for path in unique.values()) // (1024 * 1024)
+
+
+def model_gguf_path(model: dict[str, Any]) -> Path | None:
+    """First (metadata-bearing) GGUF of a llama.cpp model, resolved offline."""
+    if model.get("engine", "llama.cpp") != "llama.cpp":
+        return None
+    configured = model.get("model_file", "")
+    if configured and (path := Path(configured).expanduser()).is_file():
+        return path
+    repo = model.get("model_repo", "")
+    filename = (model.get("model_files") or [model.get("model_filename") or ""])[0]
+    if not repo or not filename:
+        return None
+    try:
+        path = cached_hf_file(repo, filename)
+    except Exception:
+        return None
+    return path if path.is_file() else None
+
+
+def model_kv_cache_mb(model: dict[str, Any], context: int | None = None) -> int | None:
+    path = model_gguf_path(model)
+    if path is None:
+        return None
+    return gguf_kv_cache_mb(
+        gguf_metadata(path),
+        int(context or model.get("context_size") or 8192),
+        int(model.get("parallel") or 1),
+        bool(model.get("kv_unified_per_slot")),
+        str(model.get("cache_type_k") or ""),
+        str(model.get("cache_type_v") or ""),
+    )
+
+
+def gguf_model_memory_mb(model: dict[str, Any]) -> int | None:
+    """Weights (and mmproj) with 12 % overhead, 1 GiB of compute buffers and the header-derived KV cache."""
+    kv_mb = model_kv_cache_mb(model)
+    weight = model_weight_mb(model) if kv_mb is not None else 0
+    return math.ceil(weight * 1.12) + 1024 + kv_mb if kv_mb is not None and weight else None
 
 
 def estimate_model_memory_mb(model: dict[str, Any]) -> dict[str, Any]:
@@ -2400,8 +2456,10 @@ def estimate_model_memory_mb(model: dict[str, Any]) -> dict[str, Any]:
     context = int(model.get("context_size") or 8192)
     parallel = int(model.get("parallel") or 1)
     task = model.get("task", "chat")
+    kv_mb = model_kv_cache_mb(model) if weight else None
     context_estimate = (
-        max(1024, context * parallel // 32)
+        kv_mb if kv_mb is not None
+        else max(1024, context * parallel // 32)
         if task in {"chat", "vision", "embeddings", "reranking"}
         else 2048
     )
@@ -2409,6 +2467,8 @@ def estimate_model_memory_mb(model: dict[str, Any]) -> dict[str, Any]:
         estimate, source = explicit, "manual"
     elif declared:
         estimate, source = declared, "mínimo del perfil"
+    elif kv_mb is not None:
+        estimate, source = math.ceil(weight * 1.12) + 1024 + kv_mb, "GGUF + KV según la cabecera"
     elif weight:
         estimate, source = int(weight * 1.12) + context_estimate, "GGUF + contexto conservador"
     else:
@@ -2419,6 +2479,7 @@ def estimate_model_memory_mb(model: dict[str, Any]) -> dict[str, Any]:
         "port": model["port"],
         "context_size": context,
         "weight_mb": weight,
+        "context_mb": min(context_estimate, estimate),
         "estimated_memory_mb": estimate,
         "source": source,
     }
@@ -2554,6 +2615,54 @@ def llama_binary(profile: dict[str, Any] | None = None) -> str | None:
     return configured_binary(configured_value)
 
 
+@lru_cache(maxsize=8)
+def _llama_help_text(binary: str, mtime_ns: int) -> str:
+    try:
+        result = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return f"{result.stdout}\n{result.stderr}"
+
+
+def llama_supports_flag(binary: str | None, flag: str) -> bool:
+    if not binary:
+        return False
+    try:
+        mtime = Path(binary).stat().st_mtime_ns
+    except OSError:
+        return False
+    return re.search(rf"(?:^|[\s,]){re.escape(flag)}(?:[\s,=]|$)", _llama_help_text(binary, mtime), re.MULTILINE) is not None
+
+
+@lru_cache(maxsize=128)
+def _llama_knows_architecture(binary: str, mtime_ns: int, architecture: str) -> bool | None:
+    """llama.cpp keeps architecture names as C strings; one missing from the binary and its libraries is unsupported."""
+    needle = b"\0" + architecture.encode() + b"\0"
+    root = Path(binary).resolve()
+    candidates = [root, *root.parent.glob("libllama*.so*"), *(root.parent.parent / "lib").glob("libllama*.so*")]
+    searched = False
+    for path in candidates:
+        try:
+            with open(path, "rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                searched = True
+                if data.find(needle) != -1:
+                    return True
+        except (OSError, ValueError):
+            continue
+    return False if searched else None
+
+
+def llama_knows_architecture(architecture: str, model: dict[str, Any] | None = None) -> bool | None:
+    """True/False for the llama.cpp this model would use; None when it cannot be checked."""
+    binary = llama_binary(model)
+    if not binary or not architecture:
+        return None
+    try:
+        return _llama_knows_architecture(binary, Path(binary).stat().st_mtime_ns, architecture)
+    except OSError:
+        return None
+
+
 HF_REPO_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
@@ -2687,6 +2796,34 @@ def build_llama_args(binary: str, model_file: Path, profile: dict[str, Any]) -> 
     mmproj = resolve_mmproj_file(profile)
     if mmproj:
         args.extend(["--mmproj", str(mmproj)])
+    args.extend(speculative_args(binary, profile))
+    return args
+
+
+def resolve_draft_file(model: dict[str, Any]) -> Path | None:
+    repo, filename = str(model.get("model_repo") or ""), str(model.get("draft_filename") or "")
+    if not repo or not filename:
+        return None
+    try:
+        path = Path(cached_hf_file(repo, filename)).absolute()
+    except Exception:
+        return None
+    return path if path.is_file() else None
+
+
+def speculative_args(binary: str, model: dict[str, Any]) -> list[str]:
+    """`--spec-type` and its drafter, only when this llama.cpp has the flag and the drafter is on disk."""
+    spec = str(model.get("spec_type") or "")
+    if spec not in SPEC_TYPES or not llama_supports_flag(binary, "--spec-type"):
+        return []
+    draft = resolve_draft_file(model)
+    if draft is None and spec != "draft-mtp":
+        return []
+    args = ["--spec-type", spec]
+    if draft is not None:
+        args.extend(["--spec-draft-model", str(draft), "--spec-draft-ngl", "all"])
+    if length := int(model.get("spec_draft_n_max") or 0):
+        args.extend(["--spec-draft-n-max", str(length)])
     return args
 
 
@@ -2767,6 +2904,50 @@ def local_port_available(port: int) -> bool:
         return False
 
 
+AUTO_MODEL_PORTS = range(18_080, 20_000)
+
+
+def reserved_model_ports() -> set[int]:
+    """Ports no model may take: MyDGX, the gateway, bundled services and the profile apps' web ports."""
+    gateway = gateway_runtime_config()
+    reserved = {settings.port, int(gateway["port"]), settings.gateway_litellm_port, 3000, 8188, 8888, 9000, 11000}
+    for url in (settings.ollama_url, settings.openwebui_url):
+        parsed = urlparse(url)
+        if parsed.port:
+            reserved.add(parsed.port)
+    reserved.update(int(config["port"]) for config in profile_app_web_configs().values() if config.get("port"))
+    return reserved
+
+
+def assign_profile_ports(payload: ProfilePayload, profile_id: str | None) -> None:
+    """Give each automatic-port model a port no other profile, app or local process uses; manual ports stay."""
+    taken = reserved_model_ports()
+    own: set[int] = set()
+    for row in db.rows("SELECT * FROM profiles"):
+        ports = {int(model.get("port") or 0) for model in profile_models(row)}
+        (own if row["id"] == profile_id else taken).update(ports)
+    models: list[ModelPayload] = [payload, *payload.additional_models]
+    taken.update(model.port for model in models if model.port >= 1024 and not model.port_auto)
+    for model in models:
+        if model.port >= 1024 and (not model.port_auto or model.engine != "llama.cpp"):
+            taken.add(model.port)
+            continue
+        # The profile's own ports may be bound by its running models, so only foreign listeners disqualify a port.
+        keep = (
+            model.port >= 1024
+            and model.port not in taken
+            and (model.port in own or local_port_available(model.port))
+        )
+        if not keep:
+            model.port = next(
+                (port for port in AUTO_MODEL_PORTS if port not in taken and port not in own and local_port_available(port)),
+                0,
+            )
+            if not model.port:
+                raise HTTPException(status_code=409, detail="No hay puertos locales libres entre 18080 y 19999")
+        taken.add(model.port)
+
+
 def managed_profile_ports(
     profile: dict[str, Any],
     existing_profiles: list[dict[str, Any]],
@@ -2782,21 +2963,7 @@ def managed_profile_ports(
         for model in profile_models(existing):
             if model.get("enabled", True) and model.get("engine") == "llama.cpp":
                 occupied[int(model.get("port") or 0)] = planned_model_signature(model)
-    gateway = gateway_runtime_config()
-    reserved = {
-        settings.port,
-        int(gateway["port"]),
-        settings.gateway_litellm_port,
-        3000,
-        8188,
-        8888,
-        9000,
-        11000,
-    }
-    for url in (settings.ollama_url, settings.openwebui_url):
-        parsed = urlparse(url)
-        if parsed.port:
-            reserved.add(parsed.port)
+    reserved = reserved_model_ports()
     assignments: list[dict[str, Any]] = []
     models = [managed, *additional]
     for index, model in enumerate(models):
@@ -3781,9 +3948,11 @@ async def start_profile_process(
             last_error = ""
             for attempt_number, context in enumerate(attempts, start=1):
                 available_mb = psutil.virtual_memory().available // (1024 * 1024)
+                context_mb = int(estimate.get("context_mb") or 0)
                 scaled_estimate = max(
                     1024,
-                    estimate["estimated_memory_mb"] * context // max(1, int(model["context_size"])),
+                    estimate["estimated_memory_mb"] - context_mb
+                    + context_mb * context // max(1, int(model["context_size"])),
                 )
                 if available_mb < scaled_estimate + plan["reserve_mb"]:
                     last_error = (
@@ -3798,7 +3967,21 @@ async def start_profile_process(
                 else:
                     try:
                         record_model_run(profile["id"], model, "starting", context, scaled_estimate, attempt_number)
-                        await launch_profile_model(profile, model, context, runtime_key)
+                        try:
+                            await launch_profile_model(profile, model, context, runtime_key)
+                        except Exception as exc:
+                            if not model.get("spec_type") or str(exc).startswith("OOM:"):
+                                raise
+                            await stop_model_process(runtime_key)
+                            await wait_for_memory_recovery()
+                            db.log(
+                                "warning", "profile", "profile.model.speculative_disabled",
+                                f"{model['name']}: arranca sin decodificación especulativa ({model['spec_type']})",
+                                entity_type="profile", entity_id=profile["id"],
+                                detail={"model_id": model["id"], "error": redact_log_text(str(exc), 300)},
+                            )
+                            model = {**model, "spec_type": "", "draft_filename": "", "spec_draft_n_max": 0}
+                            await launch_profile_model(profile, model, context, runtime_key)
                         record_model_run(profile["id"], model, "running", context, scaled_estimate, attempt_number)
                         break
                     except Exception as exc:
@@ -4268,6 +4451,7 @@ class GatewayConfigPayload(BaseModel):
     port: int = Field(default=4000, ge=1024, le=65535)
     request_timeout_seconds: int = Field(default=600, ge=10, le=7200)
     max_request_mb: int = Field(default=32, ge=1, le=256)
+    web_search: bool = True
 
 
 def gateway_model_full_name(model: dict[str, Any]) -> str:
@@ -4825,7 +5009,14 @@ def local_hf_repo_details(directory: Path) -> dict[str, Any]:
                 blob = target.name if "blobs" in target.parts else None
                 quant_match = QUANTIZATION_PATTERN.search(item.name)
                 quantization = quant_match.group(1).upper() if quant_match else None
-                if quantization:
+                main_gguf = (
+                    item.name.lower().endswith(".gguf")
+                    and "mmproj" not in item.name.casefold()
+                    and not GGUF_AUXILIARY_PATTERN.search(relative)
+                )
+                if not quantization and main_gguf and complete:
+                    quantization = GGUF_FILE_TYPES.get(gguf_metadata(target).get("general.file_type"))
+                if quantization and (main_gguf or not item.name.lower().endswith(".gguf")):
                     quantizations.add(quantization)
                 shard_match = re.match(r"(.+)-(\d{5})-of-(\d{5})\.gguf$", item.name, re.IGNORECASE)
                 if shard_match:
@@ -5610,19 +5801,43 @@ async def models() -> dict[str, Any]:
     loaded_rows = running_profiles()
     current_quick = managed_models(QUICK_PROFILE_ID)
 
+    quick_by_identity = {model_identity(item): item for item in current_quick}
+
+    def memory_summary(config: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not config or not config.get("estimated_memory_mb"):
+            return None
+        path = model_gguf_path(config)
+        return {
+            "memory_mb": int(config["estimated_memory_mb"]),
+            "context_size": int(config.get("context_size") or 0),
+            "native_context": (gguf_context_length(path) if path else None) or 0,
+            "cache_type": str(config.get("cache_type_k") or "f16") if config.get("engine") == "llama.cpp" else "",
+        }
+
     def availability() -> None:
         for model in installed:
-            if model["loaded"] or model["quick"]:
-                continue
             name = str(model.get("name") or model.get("model") or "")
-            config, reason = cached_quick_config("ollama", name, f"{model.get('digest')}:{model.get('size')}", int(model.get("size") or 0))
-            model["quick_start"] = quick_start_availability(config, reason, loaded_rows, current_quick)
+            config, reason, _ = cached_quick_config("ollama", name, f"{model.get('digest')}:{model.get('size')}", int(model.get("size") or 0))
+            model["memory_estimate"] = memory_summary(quick_by_identity.get(f"ollama:{name.casefold()}") or config)
+            if not (model["loaded"] or model["quick"]):
+                model["quick_start"] = quick_start_availability(config, reason, loaded_rows, current_quick)
         for model in huggingface:
-            if model["loaded"] or model["quick"] or not model.get("quantizations"):
+            if not model.get("quantizations"):
                 continue
             signature = f"{model.get('revision')}:{model.get('file_count')}:{model.get('size')}:{model.get('incomplete_shards')}"
-            config, reason = cached_quick_config("huggingface", model["repo_id"], signature)
-            model["quick_start"] = quick_start_availability(config, reason, loaded_rows, current_quick)
+            config, reason, context_range = cached_quick_config("huggingface", model["repo_id"], signature)
+            effective = quick_by_identity.get(f"huggingface:{model['repo_id'].casefold()}") or config
+            model["memory_estimate"] = memory_summary(effective)
+            model["manual_settings"] = bool(model_overrides(f"huggingface:{model['repo_id']}"))
+            if effective and effective.get("spec_type"):
+                model["speculative"] = {
+                    "spec_type": effective["spec_type"],
+                    "draft_filename": effective.get("draft_filename") or "",
+                }
+            if not (model["loaded"] or model["quick"]):
+                model["quick_start"] = quick_start_availability(config, reason, loaded_rows, current_quick)
+                if context_range and model["quick_start"].get("supported"):
+                    model["quick_start"]["context"] = context_range
 
     await asyncio.to_thread(availability)
     return {
@@ -5790,11 +6005,70 @@ def hf_recommended_engines(tasks: list[str], formats: list[str]) -> list[str]:
     return list(dict.fromkeys(engines))
 
 
-def hf_gguf_groups(siblings: list[Any]) -> list[dict[str, Any]]:
+GGUF_AUXILIARY_PATTERN = re.compile(r"(?i)(?:^|/)(mtp|dspark|dflash|draft|eagle3?|speculative)[-_/]")
+SPEC_TYPES = ("draft-mtp", "draft-dflash", "draft-dspark", "draft-eagle3", "draft-simple")
+SPEC_TYPE_BY_PREFIX = {
+    "mtp": "draft-mtp", "dspark": "draft-dspark", "dflash": "draft-dflash",
+    "eagle": "draft-eagle3", "eagle3": "draft-eagle3", "draft": "draft-simple",
+}
+GGUF_DRAFTER_ARCHITECTURES = {"dflash": "draft-dflash", "dspark": "draft-dspark", "eagle3": "draft-eagle3"}
+# Every quantization of a model has the same tensors; a drafter carries a small fraction of them.
+DRAFTER_TENSOR_RATIO = 0.25
+
+
+def gguf_tensor_count(metadata: dict[str, Any]) -> int:
+    return int(metadata.get("split.tensors.count") or metadata.get("gguf.tensor_count") or 0)
+
+
+def gguf_file_role(filename: str, metadata: dict[str, Any], main_metadata: dict[str, Any] | None = None) -> str:
+    """'main', 'mmproj' or the llama.cpp `--spec-type` a drafter GGUF is for, from its path, header and tensors."""
+    if "mmproj" in filename.casefold() or metadata.get("general.architecture") == "clip":
+        return "mmproj"
+    match = GGUF_AUXILIARY_PATTERN.search(filename)
+    prefix = match.group(1).casefold() if match else ""
+    if prefix in SPEC_TYPE_BY_PREFIX:
+        return SPEC_TYPE_BY_PREFIX[prefix]
+    architecture = str(metadata.get("general.architecture") or "")
+    if architecture in GGUF_DRAFTER_ARCHITECTURES:
+        return GGUF_DRAFTER_ARCHITECTURES[architecture]
+    tensors, main_tensors = gguf_tensor_count(metadata), gguf_tensor_count(main_metadata or {})
+    if prefix or (tensors and main_tensors and tensors < main_tensors * DRAFTER_TENSOR_RATIO):
+        return "draft-mtp" if gguf_arch_value(metadata, "nextn_predict_layers") else "draft-simple"
+    return "main"
+
+
+def hf_named_drafter(siblings: list[Any]) -> dict[str, Any] | None:
+    """The repo's drafter worth downloading, judged by its name alone (no header yet): DSpark/DFlash first, then Q8_0."""
+    order = {"draft-dspark": 0, "draft-dflash": 1, "draft-eagle3": 2, "draft-mtp": 3}
+    preference = {"Q8_0": 0, "BF16": 1, "F16": 2}
+    choices = []
+    for group in hf_gguf_groups(siblings, auxiliary=True):
+        role = gguf_file_role(group["files"][0], {})
+        if role in order and group["complete"]:
+            choices.append(({**group, "spec_type": role}, (order[role], preference.get(group["quantization"], 5), group["size"])))
+    return min(choices, key=lambda item: item[1])[0] if choices else None
+
+
+# llama.cpp `general.file_type` (llama_ftype), for files whose name carries no quantization tag.
+GGUF_FILE_TYPES = {
+    0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1", 7: "Q8_0", 8: "Q5_0", 9: "Q5_1", 10: "Q2_K",
+    11: "Q3_K_S", 12: "Q3_K_M", 13: "Q3_K_L", 14: "Q4_K_S", 15: "Q4_K_M", 16: "Q5_K_S", 17: "Q5_K_M",
+    18: "Q6_K", 19: "IQ2_XXS", 20: "IQ2_XS", 21: "Q2_K_S", 22: "IQ3_XS", 23: "IQ3_XXS", 24: "IQ1_S",
+    25: "IQ4_NL", 26: "IQ3_S", 27: "IQ3_M", 28: "IQ2_S", 29: "IQ2_M", 30: "IQ4_XS", 31: "IQ1_M",
+    32: "BF16", 36: "TQ1_0", 37: "TQ2_0", 38: "MXFP4",
+}
+
+
+def hf_gguf_groups(siblings: list[Any], auxiliary: bool = False) -> list[dict[str, Any]]:
+    """GGUF weights grouped by shard set; projectors never, and named drafters only with `auxiliary`."""
     groups: dict[str, dict[str, Any]] = {}
     for sibling in siblings:
         filename = str(getattr(sibling, "rfilename", "") or "")
-        if not filename.lower().endswith(".gguf") or "mmproj" in filename.casefold():
+        if (
+            not filename.lower().endswith(".gguf")
+            or "mmproj" in filename.casefold()
+            or bool(GGUF_AUXILIARY_PATTERN.search(filename)) != auxiliary
+        ):
             continue
         size = integer_value(getattr(sibling, "size", None)) or 0
         shard = re.match(r"(.+)-(\d{5})-of-(\d{5})\.gguf$", filename, re.IGNORECASE)
@@ -5816,7 +6090,151 @@ def hf_gguf_groups(siblings: list[Any]) -> list[dict[str, Any]]:
     return sorted(groups.values(), key=lambda item: (not item["complete"], item["size"] or sys.maxsize))
 
 
+MODEL_OVERRIDES_KEY = "models.overrides"
+OVERRIDE_SAMPLING_KEYS = ("temperature", "top_p", "top_k", "min_p", "repeat_penalty", "presence_penalty")
+
+
+def all_model_overrides() -> dict[str, dict[str, Any]]:
+    try:
+        values = json.loads(preference_value(MODEL_OVERRIDES_KEY) or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return {str(key): dict(value) for key, value in values.items() if isinstance(value, dict)} if isinstance(values, dict) else {}
+
+
+def model_overrides(identity: str) -> dict[str, Any]:
+    return all_model_overrides().get(identity.casefold(), {})
+
+
+def local_gguf_metadata(model_id: str, filename: str) -> dict[str, Any]:
+    try:
+        return gguf_metadata(cached_hf_file(model_id, filename))
+    except Exception:
+        return {}
+
+
+def card_speculative_settings(model_id: str) -> list[dict[str, Any]]:
+    """`--spec-type` (with its drafter and draft length) from the cards' `llama-server` commands, in order."""
+    found: list[dict[str, Any]] = []
+    for text in local_card_texts(model_id):
+        for args in card_llama_server_commands(text):
+            pairs = dict(zip(args, args[1:]))
+            spec = next((item for item in str(pairs.get("--spec-type", "")).split(",") if item in SPEC_TYPES), "")
+            if not spec:
+                continue
+            draft = next((pairs[flag] for flag in ("--spec-draft-model", "-md", "--model-draft") if flag in pairs), "")
+            length = str(pairs.get("--spec-draft-n-max") or pairs.get("--draft-max") or "")
+            found.append({
+                "spec_type": spec,
+                "draft_name": Path(draft).name if draft else "",
+                "spec_draft_n_max": int(length) if length.isdigit() and 1 <= int(length) <= 16 else 0,
+            })
+    return found
+
+
+def local_speculative_candidates(model_id: str, siblings: list[Any], main_group: dict[str, Any]) -> list[dict[str, Any]]:
+    """Drafters on disk for the chosen main GGUF, plus MTP layers embedded in it."""
+    main_metadata = local_gguf_metadata(model_id, main_group["files"][0])
+    candidates: list[dict[str, Any]] = []
+    others = [
+        group for group in [*hf_gguf_groups(siblings, auxiliary=True), *hf_gguf_groups(siblings)]
+        if group["complete"] and group["size"] and group["name"] != main_group["name"]
+    ]
+    for group in others:
+        metadata = local_gguf_metadata(model_id, group["files"][0])
+        role = gguf_file_role(group["files"][0], metadata, main_metadata)
+        if role in SPEC_TYPES:
+            candidates.append({
+                "spec_type": role,
+                "draft_filename": group["files"][0],
+                "size": group["size"],
+                "quantization": group["quantization"],
+                "architecture": str(metadata.get("general.architecture") or ""),
+                "embedded": False,
+            })
+    if gguf_arch_value(main_metadata, "nextn_predict_layers"):
+        candidates.append({
+            "spec_type": "draft-mtp", "draft_filename": "", "size": 0, "quantization": "",
+            "architecture": str(main_metadata.get("general.architecture") or ""), "embedded": True,
+        })
+    return candidates
+
+
+SPEC_AUTO_ORDER = {"draft-dspark": 0, "draft-dflash": 1, "draft-eagle3": 2, "draft-mtp": 3}
+
+
+def choose_speculative(model_id: str, candidates: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
+    """The card's speculative setup when its drafter is here, else the model's own drafter; never a generic one."""
+    for wanted in card_speculative_settings(model_id):
+        match = next((
+            item for item in sorted(candidates, key=lambda item: Path(item["draft_filename"]).name != wanted["draft_name"])
+            if item["spec_type"] == wanted["spec_type"] and (item["draft_filename"] or wanted["spec_type"] == "draft-mtp")
+        ), None)
+        if match:
+            return {
+                "spec_type": match["spec_type"],
+                "draft_filename": match["draft_filename"],
+                "spec_draft_n_max": wanted["spec_draft_n_max"],
+            }, "ficha"
+    preference = {"Q8_0": 0, "BF16": 1, "F16": 2}
+    automatic = sorted(
+        (item for item in candidates if item["spec_type"] in SPEC_AUTO_ORDER),
+        key=lambda item: (SPEC_AUTO_ORDER[item["spec_type"]], item["embedded"], preference.get(item["quantization"], 5), item["size"]),
+    )
+    if not automatic:
+        return {}, ""
+    best = automatic[0]
+    return {"spec_type": best["spec_type"], "draft_filename": best["draft_filename"], "spec_draft_n_max": 0}, (
+        "GGUF" if best["embedded"] else "archivo"
+    )
+
+
+def local_hf_siblings(model_id: str) -> list[Any]:
+    """Complete files of the snapshot Encender uses (refs/main, else the newest complete one)."""
+    directory = huggingface_cache_dir() / f"models--{model_id.replace('/', '--')}"
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="El modelo Hugging Face no está descargado")
+    details = local_hf_repo_details(directory)
+    snapshots = details["snapshots"]
+    preferred_commit = details["refs"].get("main")
+    snapshot = next((item for item in snapshots if item["commit"] == preferred_commit), None)
+    snapshot = snapshot or next((item for item in reversed(snapshots) if item["complete"]), None)
+    if not snapshot:
+        raise HTTPException(status_code=409, detail="El modelo no tiene un snapshot local completo")
+    return [
+        SimpleNamespace(rfilename=item["name"], size=item["size"])
+        for item in snapshot["files"] if item["complete"]
+    ]
+
+
+def local_main_gguf_groups(model_id: str, siblings: list[Any]) -> list[dict[str, Any]]:
+    """Complete main-model GGUF groups in Encender's order; drafters found by their header are left out."""
+    groups = [group for group in hf_gguf_groups(siblings) if group["complete"] and group["size"]]
+    if not groups:
+        return []
+    largest = max(groups, key=lambda item: item["size"])
+    largest_metadata = local_gguf_metadata(model_id, largest["files"][0])
+    groups = [
+        group for group in groups
+        if group is largest
+        or gguf_file_role(group["files"][0], local_gguf_metadata(model_id, group["files"][0]), largest_metadata) == "main"
+    ]
+    preference = {"Q4_K_M": 0, "Q5_K_M": 1, "Q6_K": 2, "Q8_0": 3}
+    return sorted(groups, key=lambda item: (preference.get(item["quantization"], 20), item["size"]))
+
+
 def persistent_model_config(source: Literal["ollama", "huggingface"], model_id: str) -> dict[str, Any]:
+    return persistent_model_config_with_origins(
+        source, model_id, model_overrides(f"{source}:{model_id}") if source == "huggingface" else {},
+    )[0]
+
+
+def persistent_model_config_with_origins(
+    source: Literal["ollama", "huggingface"], model_id: str, overrides: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Encender/Default config and where each tuned value came from: MyDGX, GGUF, ficha, archivo or manual."""
+    origins: dict[str, str] = {}
+    overrides = overrides or {}
     capabilities = hf_model_capabilities(model_id, None, [])
     tasks = capabilities["tasks"]
     task = "vision" if "vision" in tasks else "embeddings" if "embedding" in tasks else "chat"
@@ -5835,7 +6253,7 @@ def persistent_model_config(source: Literal["ollama", "huggingface"], model_id: 
         "port": 19_000,
         "context_size": 8192,
         "gpu_layers": -1,
-        "threads": 0,
+        "threads": 1,
         "parallel": 1,
         "batch_size": 512,
         "ubatch_size": 128,
@@ -5868,54 +6286,89 @@ def persistent_model_config(source: Literal["ollama", "huggingface"], model_id: 
     }
     if source == "ollama":
         base["engine"] = "ollama"
-        return base
+        return base, origins
 
-    directory = huggingface_cache_dir() / f"models--{model_id.replace('/', '--')}"
-    if not directory.is_dir():
-        raise HTTPException(status_code=404, detail="El modelo Hugging Face no está descargado")
-    details = local_hf_repo_details(directory)
-    snapshots = details["snapshots"]
-    preferred_commit = details["refs"].get("main")
-    snapshot = next((item for item in snapshots if item["commit"] == preferred_commit), None)
-    snapshot = snapshot or next((item for item in reversed(snapshots) if item["complete"]), None)
-    if not snapshot:
-        raise HTTPException(status_code=409, detail="El modelo no tiene un snapshot local completo")
-    siblings = [
-        SimpleNamespace(rfilename=item["name"], size=item["size"])
-        for item in snapshot["files"] if item["complete"]
-    ]
-    groups = [group for group in hf_gguf_groups(siblings) if group["complete"] and group["size"]]
+    siblings = local_hf_siblings(model_id)
+    groups = local_main_gguf_groups(model_id, siblings)
     if not groups:
         raise HTTPException(
             status_code=409,
             detail="Encender o añadir a Default requiere un modelo GGUF completo o un modelo de Ollama",
         )
-    preference = {"Q4_K_M": 0, "Q5_K_M": 1, "Q6_K": 2, "Q8_0": 3}
-    groups.sort(key=lambda item: (preference.get(item["quantization"], 20), item["size"]))
-    selected = groups[0]
+    selected = next((group for group in groups if group["files"][0] == overrides.get("model_filename")), groups[0])
+    origins["model_filename"] = "manual" if selected["files"][0] == overrides.get("model_filename") else "MyDGX"
     mmproj = hf_mmproj_files(siblings)
+    mmproj_name = mmproj[0]["name"] if mmproj else ""
+    if overrides.get("mmproj_filename") is not None:
+        wanted = str(overrides["mmproj_filename"])
+        if not wanted or any(item["name"] == wanted for item in mmproj):
+            mmproj_name, origins["mmproj_filename"] = wanted, "manual"
     base.update({
         "engine": "llama.cpp",
         "model_repo": model_id,
         "model_filename": selected["files"][0],
         "model_files": selected["files"],
-        "mmproj_repo": model_id if mmproj else "",
-        "mmproj_filename": mmproj[0]["name"] if mmproj else "",
+        "mmproj_repo": model_id if mmproj_name else "",
+        "mmproj_filename": mmproj_name,
         "runtime_requirement": "llama.cpp CUDA · GB10 sm_121",
         "estimated_memory_mb": math.ceil(selected["size"] / (1024 * 1024) * 1.12) + 1024,
     })
-    if task == "vision" and not mmproj:
+    if task == "vision" and not mmproj_name and origins.get("mmproj_filename") == "manual":
+        base.update({"task": "chat", "input_modalities": ["text"]})
+        task = "chat"
+    card = local_card_launch_settings(model_id)
+    for key in card:
+        origins[key] = "ficha"
+    if not any(key in card for key in CARD_SAMPLING_KEYS):
+        embedded = gguf_sampling_settings(model_gguf_path(base))
+        origins.update({key: "GGUF" for key in embedded})
+        card = {**embedded, **card}
+    base.update(card)
+    speculative: dict[str, Any] = {}
+    spec_origin = ""
+    candidates = local_speculative_candidates(model_id, siblings, selected)
+    if not mmproj_name:
+        # llama.cpp does not combine speculative decoding with a multimodal projector.
+        speculative, spec_origin = choose_speculative(model_id, candidates)
+    if overrides.get("spec_type") is not None:
+        wanted_type = str(overrides["spec_type"])
+        wanted_file = str(overrides.get("draft_filename") or "")
+        on_disk = any(
+            item["draft_filename"] == wanted_file and (wanted_file or item["embedded"]) for item in candidates
+        )
+        if wanted_type == "off":
+            speculative, spec_origin = {}, "manual"
+        elif wanted_type in SPEC_TYPES and on_disk:
+            speculative = {"spec_type": wanted_type, "draft_filename": wanted_file, "spec_draft_n_max": 0}
+            spec_origin = "manual"
+    if speculative and overrides.get("spec_draft_n_max"):
+        speculative["spec_draft_n_max"] = int(overrides["spec_draft_n_max"])
+    base.update({"spec_type": "", "draft_filename": "", "spec_draft_n_max": 0, **speculative})
+    if spec_origin:
+        origins["spec_type"] = spec_origin
+    for key in (*OVERRIDE_SAMPLING_KEYS, "cache_type_k", "cache_type_v"):
+        if overrides.get(key) is not None:
+            base[key] = overrides[key]
+            origins[key] = "manual"
+    if overrides.get("context_size"):
+        base["context_size"] = int(overrides["context_size"])
+        origins["context_size"] = "manual"
+    base["estimated_memory_mb"] = gguf_model_memory_mb(base) or base["estimated_memory_mb"]
+    if task == "vision" and not mmproj_name:
         raise HTTPException(status_code=409, detail="El modelo de visión no tiene un mmproj local completo")
-    return base
+    return base, origins
 
 
 class ModelPersistencePayload(BaseModel):
     source: Literal["ollama", "huggingface"]
     model_id: str = Field(min_length=1, max_length=300, pattern=r"^[A-Za-z0-9._:/-]+$")
     enabled: bool
+    context_size: int | None = Field(default=None, ge=512, le=10_485_760)
 
 
-async def managed_model_config(source: Literal["ollama", "huggingface"], model_id: str) -> dict[str, Any]:
+async def managed_model_config(
+    source: Literal["ollama", "huggingface"], model_id: str, context_size: int | None = None,
+) -> dict[str, Any]:
     if source == "ollama":
         installed = (await ollama_payload("/api/tags")).get("models", [])
         match = next((item for item in installed if str(item.get("name") or "") == model_id), None)
@@ -5926,7 +6379,8 @@ async def managed_model_config(source: Literal["ollama", "huggingface"], model_i
         if size:
             config["estimated_memory_mb"] = math.ceil(size / (1024 * 1024) * 1.12) + 1024
         return config
-    return await asyncio.to_thread(persistent_model_config, source, model_id)
+    config = await asyncio.to_thread(persistent_model_config, source, model_id)
+    return await asyncio.to_thread(with_launch_context, config, context_size)
 
 
 async def apply_managed_models(profile_id: str, models: list[dict[str, Any]]) -> bool:
@@ -5952,43 +6406,614 @@ async def update_model_persistence(payload: ModelPersistencePayload) -> dict[str
     async with _profile_start_lock:
         values = [item for item in persistent_models() if model_identity(item) != identity]
         if payload.enabled:
-            values.append(await managed_model_config(payload.source, payload.model_id))
+            values.append(await managed_model_config(payload.source, payload.model_id, payload.context_size))
         loaded = await apply_managed_models(DEFAULT_PROFILE_ID, values)
     db.audit("model.persistence", payload.model_id, True, "enabled" if payload.enabled else "disabled")
     return {"persistent": payload.enabled, "profile_id": DEFAULT_PROFILE_ID, "applied": loaded, "models": len(values)}
 
 
+HF_MODEL_ID_PATTERN = r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+SpecOverride = Literal["off", "draft-mtp", "draft-dflash", "draft-dspark", "draft-eagle3", "draft-simple"]
+CacheOverride = Literal["", "f16", "q8_0", "q4_0"]
+
+
+class ModelSettingsPayload(BaseModel):
+    """Manual values for one Hugging Face GGUF; an unset (null) field keeps the automatic value."""
+    model_id: str = Field(pattern=HF_MODEL_ID_PATTERN, max_length=200)
+    model_filename: str | None = Field(default=None, max_length=1000)
+    mmproj_filename: str | None = Field(default=None, max_length=1000)
+    context_size: int | None = Field(default=None, ge=512, le=1_048_576)
+    context_max: int | None = Field(default=None, ge=512, le=1_048_576)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    top_p: float | None = Field(default=None, ge=0.01, le=1)
+    top_k: int | None = Field(default=None, ge=0, le=100)
+    min_p: float | None = Field(default=None, ge=0, le=1)
+    repeat_penalty: float | None = Field(default=None, ge=0, le=2)
+    presence_penalty: float | None = Field(default=None, ge=0, le=2)
+    cache_type_k: CacheOverride | None = None
+    cache_type_v: CacheOverride | None = None
+    spec_type: SpecOverride | None = None
+    draft_filename: str | None = Field(default=None, max_length=1000)
+    spec_draft_n_max: int | None = Field(default=None, ge=1, le=16)
+
+
+def model_settings_report(model_id: str) -> dict[str, Any]:
+    """Automatic and effective launch values of a local GGUF, each with its origin, plus the files to choose from."""
+    identity = f"huggingface:{model_id}".casefold()
+    overrides = model_overrides(identity)
+    automatic, _ = persistent_model_config_with_origins("huggingface", model_id, {})
+    current, origins = persistent_model_config_with_origins("huggingface", model_id, overrides)
+    siblings = local_hf_siblings(model_id)
+    groups = local_main_gguf_groups(model_id, siblings)
+    selected = next((group for group in groups if group["files"][0] == current["model_filename"]), groups[0])
+    files = []
+    for group in groups:
+        metadata = local_gguf_metadata(model_id, group["files"][0])
+        architecture = str(metadata.get("general.architecture") or "")
+        files.append({
+            "filename": group["files"][0],
+            "shards": len(group["files"]),
+            "size": group["size"],
+            "quantization": group["quantization"],
+            "architecture": architecture,
+            "context_length": gguf_arch_value(metadata, "context_length") or 0,
+            "runtime_supported": llama_knows_architecture(architecture, current),
+            "selected": group is selected,
+        })
+    limits = quick_context_limits(current) or (0, 0, 0)
+    quick = quick_model_config(current, model_id)
+    fields = {
+        key: {"value": current.get(key), "auto": automatic.get(key), "origin": origins.get(key, "MyDGX")}
+        for key in (*OVERRIDE_SAMPLING_KEYS, "cache_type_k", "cache_type_v")
+    }
+    return {
+        "model_id": model_id,
+        "overrides": overrides,
+        "fields": fields,
+        "files": files,
+        "mmproj": [item["name"] for item in hf_mmproj_files(siblings)],
+        "mmproj_filename": current.get("mmproj_filename") or "",
+        "context": {
+            "minimum": limits[0],
+            "maximum": limits[2],
+            "default": quick.get("context_size") or 0,
+            "native": gguf_context_length(model_gguf_path(current)) or 0 if model_gguf_path(current) else 0,
+            "card": local_card_context(model_id) or 0,
+            "origin": "manual" if overrides.get("context_size") or overrides.get("context_max") else (
+                "ficha" if limits[1] and limits[1] < limits[2] else "GGUF"
+            ),
+        },
+        "speculative": {
+            "spec_type": current.get("spec_type") or "",
+            "draft_filename": current.get("draft_filename") or "",
+            "spec_draft_n_max": int(current.get("spec_draft_n_max") or 0),
+            "origin": origins.get("spec_type", ""),
+            "blocked_by_mmproj": bool(current.get("mmproj_filename")) and origins.get("spec_type") != "manual",
+            "candidates": [
+                {key: item[key] for key in ("spec_type", "draft_filename", "size", "quantization", "architecture", "embedded")}
+                for item in local_speculative_candidates(model_id, siblings, selected)
+            ],
+            "runtime_supported": llama_supports_flag(llama_binary(current), "--spec-type"),
+        },
+        "estimated_memory_mb": int(quick.get("estimated_memory_mb") or 0),
+    }
+
+
+@app.get("/api/models/settings", dependencies=secure)
+async def get_model_settings(model_id: str = Query(pattern=HF_MODEL_ID_PATTERN, max_length=200)) -> dict[str, Any]:
+    return await asyncio.to_thread(model_settings_report, model_id)
+
+
+@app.put("/api/models/settings", dependencies=secure)
+async def update_model_settings(payload: ModelSettingsPayload) -> dict[str, Any]:
+    for name in (payload.model_filename, payload.mmproj_filename, payload.draft_filename):
+        if name and (not name.lower().endswith(".gguf") or name.startswith("/") or ".." in Path(name).parts):
+            raise HTTPException(status_code=400, detail="Nombre de archivo GGUF inválido")
+    if payload.context_size and payload.context_max and payload.context_size > payload.context_max:
+        raise HTTPException(status_code=400, detail="El contexto por defecto no puede superar al máximo")
+    identity = f"huggingface:{payload.model_id}".casefold()
+    values = {key: value for key, value in payload.model_dump(exclude={"model_id"}).items() if value is not None}
+    async with _profile_start_lock:
+        overrides = all_model_overrides()
+        if values:
+            overrides[identity] = values
+        else:
+            overrides.pop(identity, None)
+        db.execute(
+            """
+            INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+            """,
+            (MODEL_OVERRIDES_KEY, json.dumps(overrides, sort_keys=True), utc_now()),
+        )
+        _quick_config_cache.pop(identity, None)
+        saved = persistent_models()
+        previous = next((item for item in saved if model_identity(item) == identity), None)
+        if previous:
+            kept_context = None if values.get("context_size") else int(previous.get("context_size") or 0) or None
+            config = await managed_model_config("huggingface", payload.model_id, kept_context)
+            save_persistent_models([config if model_identity(item) == identity else item for item in saved])
+    db.audit("model.settings", payload.model_id, True, ", ".join(sorted(values)) or "restablecido")
+    return await asyncio.to_thread(model_settings_report, payload.model_id)
+
+
 class QuickModelPayload(BaseModel):
     source: Literal["ollama", "huggingface"]
     model_id: str = Field(min_length=1, max_length=300, pattern=r"^[A-Za-z0-9._:/-]+$")
+    context_size: int | None = Field(default=None, ge=512, le=10_485_760)
 
 
-def quick_model_config(config: dict[str, Any], model_id: str) -> dict[str, Any]:
+QUICK_MIN_CONTEXT = {"chat": 32_768, "vision": 8192}
+_GGUF_SCALAR_FORMATS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
+
+
+def parse_gguf_header(handle: Any, partial: bool = False) -> dict[str, Any]:
+    """GGUF header scalars, short strings and numeric arrays (≤4096 items); skips the tokenizer and never reads tensors.
+
+    With `partial`, a header cut short (a ranged download) returns the keys read so far instead of failing.
+    """
+    metadata: dict[str, Any] = {}
+
+    def read(size: int) -> bytes:
+        data = handle.read(size)
+        if len(data) != size:
+            raise ValueError("GGUF truncado")
+        return data
+
+    def skip(size: int) -> None:
+        position = handle.tell()
+        if handle.seek(size, os.SEEK_CUR) != position + size:
+            raise ValueError("GGUF truncado")
+
+    def value(kind: int, keep: bool) -> Any:
+        if kind in _GGUF_SCALAR_FORMATS:
+            fmt = _GGUF_SCALAR_FORMATS[kind]
+            return struct.unpack(fmt, read(struct.calcsize(fmt)))[0]
+        if kind == 8:
+            size = struct.unpack("<Q", read(8))[0]
+            if keep and size <= 256:
+                return read(size).decode("utf-8", errors="replace")
+            skip(size)
+            return None
+        if kind == 9:
+            item_kind, count = struct.unpack("<IQ", read(12))
+            if item_kind in _GGUF_SCALAR_FORMATS:
+                fmt = "<" + _GGUF_SCALAR_FORMATS[item_kind][1:] * count
+                if keep and count <= 4096:
+                    return list(struct.unpack(fmt, read(struct.calcsize(fmt))))
+                skip(struct.calcsize(_GGUF_SCALAR_FORMATS[item_kind]) * count)
+                return None
+            for _ in range(count):
+                value(item_kind, False)
+            return None
+        raise ValueError(f"tipo GGUF desconocido {kind}")
+
+    try:
+        if read(4) != b"GGUF":
+            return {}
+        version = struct.unpack("<I", read(4))[0]
+        if version < 2:
+            return {}
+        tensors, kv_count = struct.unpack("<QQ", read(16))
+        metadata["gguf.tensor_count"] = tensors
+        for _ in range(min(kv_count, 100_000)):
+            key = read(struct.unpack("<Q", read(8))[0]).decode("utf-8", errors="replace")
+            kind = struct.unpack("<I", read(4))[0]
+            item = value(kind, not key.startswith("tokenizer."))
+            if item is not None:
+                metadata[key] = item
+    except (ValueError, struct.error):
+        if not partial:
+            raise
+    return metadata
+
+
+@lru_cache(maxsize=64)
+def _gguf_metadata_cached(path: str, mtime_ns: int) -> dict[str, Any]:
+    with open(path, "rb") as handle:
+        return parse_gguf_header(handle)
+
+
+REMOTE_GGUF_HEADER_BYTES = (8 * 1024 * 1024, 48 * 1024 * 1024)
+_remote_gguf_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+
+def remote_gguf_metadata(repo_id: str, revision: str, filename: str) -> dict[str, Any]:
+    """Header of a Hub GGUF read with HTTP Range (the first megabytes), without downloading the weights."""
+    key = (repo_id, revision, filename)
+    if key in _remote_gguf_cache:
+        return _remote_gguf_cache[key]
+    path = "/".join(quote(part, safe="") for part in filename.split("/"))
+    url = f"https://huggingface.co/{repo_id}/resolve/{quote(revision, safe='')}/{path}"
+    headers = {"User-Agent": "MyDGX"}
+    if token := huggingface_token():
+        headers["Authorization"] = f"Bearer {token}"
+    metadata: dict[str, Any] = {}
+    for size in REMOTE_GGUF_HEADER_BYTES:
+        with httpx.Client(follow_redirects=True, timeout=30) as client:
+            with client.stream("GET", url, headers={**headers, "Range": f"bytes=0-{size - 1}"}) as response:
+                response.raise_for_status()
+                chunks: list[bytes] = []
+                received = 0
+                for chunk in response.iter_bytes():
+                    chunks.append(chunk)
+                    received += len(chunk)
+                    if received >= size:
+                        break
+        metadata = parse_gguf_header(io.BytesIO(b"".join(chunks)[:size]), partial=True)
+        if gguf_arch_value(metadata, "block_count") is not None:
+            break
+    _remote_gguf_cache[key] = metadata
+    return metadata
+
+
+def gguf_metadata(path: Path) -> dict[str, Any]:
+    try:
+        stat = path.stat()
+        return _gguf_metadata_cached(str(path.resolve()), stat.st_mtime_ns)
+    except (OSError, ValueError, struct.error):
+        return {}
+
+
+def gguf_arch_value(metadata: dict[str, Any], name: str) -> Any:
+    return metadata.get(f"{metadata.get('general.architecture')}.{name}")
+
+
+def gguf_context_length(path: Path) -> int | None:
+    value = gguf_arch_value(gguf_metadata(path), "context_length")
+    return int(value) if isinstance(value, int) and value > 0 else None
+
+
+KV_CACHE_BYTES_PER_ELEMENT = {
+    "f32": 4.0, "f16": 2.0, "bf16": 2.0, "q8_0": 34 / 32, "q5_1": 24 / 32,
+    "q5_0": 22 / 32, "q4_1": 20 / 32, "q4_0": 18 / 32, "iq4_nl": 18 / 32,
+}
+
+
+def gguf_kv_cache_mb(
+    metadata: dict[str, Any],
+    context: int,
+    parallel: int = 1,
+    per_slot: bool = False,
+    cache_type_k: str = "",
+    cache_type_v: str = "",
+) -> int | None:
+    """KV cache plus recurrent (SSM) state from GGUF metadata; None when the header lacks the attention shape."""
+    def number(name: str) -> Any:
+        return gguf_arch_value(metadata, name)
+
+    layers = int(number("block_count") or 0)
+    heads = number("attention.head_count")
+    kv_heads = number("attention.head_count_kv") or heads
+    if not layers or not kv_heads:
+        return None
+    per_layer = [int(item) for item in kv_heads[:layers]] if isinstance(kv_heads, list) else [int(kv_heads)] * layers
+    interval = int(number("full_attention_interval") or 0)
+    if interval > 1:
+        # Hybrid attention/SSM: only every `interval`-th block keeps a KV cache.
+        per_layer = [count if (index + 1) % interval == 0 else 0 for index, count in enumerate(per_layer)]
+    attention_layers = sum(1 for count in per_layer if count)
+    first_heads = int((heads[0] if isinstance(heads, list) else heads) or 0)
+    embedding = int(number("embedding_length") or 0)
+    key_length = int(number("attention.key_length") or (embedding // first_heads if first_heads else 0))
+    value_length = int(number("attention.value_length") or key_length)
+    lora_rank = int(number("attention.kv_lora_rank") or 0)
+    window = int(number("attention.sliding_window") or 0)
+    pattern = number("attention.sliding_window_pattern")
+    sliding = [bool(item) for item in pattern[:layers]] if window and isinstance(pattern, list) and not lora_rank else []
+    swa_heads = sum(count for count, is_swa in zip(per_layer, sliding) if is_swa)
+    full_heads = sum(per_layer) - swa_heads
+    if lora_rank:
+        # MLA caches one compressed latent plus the RoPE part per layer, shared by K and V.
+        k_elements, v_elements = (lora_rank + int(number("rope.dimension_count") or 64)) * layers, 0
+    else:
+        k_elements, v_elements = full_heads * key_length, full_heads * value_length
+    k_swa = swa_heads * int(number("attention.key_length_swa") or key_length)
+    v_swa = swa_heads * int(number("attention.value_length_swa") or value_length)
+    if not k_elements + k_swa:
+        return None
+    k_bytes = KV_CACHE_BYTES_PER_ELEMENT.get(cache_type_k or "f16", 2.0)
+    v_bytes = KV_CACHE_BYTES_PER_ELEMENT.get(cache_type_v or "f16", 2.0)
+    bytes_per_token = k_elements * k_bytes + v_elements * v_bytes
+    tokens = context * (parallel if per_slot else 1)
+    # Sliding-window layers keep only the window per sequence plus one micro-batch (llama.cpp default 512).
+    swa_tokens = min(tokens, window * parallel + 512) if swa_heads else 0
+    swa_bytes = swa_tokens * (k_swa * k_bytes + v_swa * v_bytes)
+    state_size = int(number("ssm.state_size") or 0)
+    inner_size = int(number("ssm.inner_size") or 0)
+    recurrent_bytes = 0
+    if state_size and inner_size:
+        conv = (int(number("ssm.conv_kernel") or 4) - 1) * (inner_size + 2 * int(number("ssm.group_count") or 1) * state_size)
+        recurrent_bytes = (layers - attention_layers if interval > 1 else layers) * (conv + state_size * inner_size) * 4 * parallel
+    return math.ceil((bytes_per_token * tokens + swa_bytes + recurrent_bytes) / (1024 * 1024))
+
+
+def _cached_card_texts(model_id: str) -> list[str]:
+    folder = f"models--{model_id.replace('/', '--')}"
+    texts: list[str] = []
+    for root in (huggingface_cache_dir() / folder, huggingface_card_cache_dir() / folder):
+        for readme in sorted(root.glob("snapshots/*/README.md")):
+            try:
+                texts.append(readme.read_text(encoding="utf-8", errors="ignore"))
+            except OSError:
+                continue
+    return texts
+
+
+def card_base_models(text: str) -> list[str]:
+    """`base_model` entries of the card's YAML front matter."""
+    match = re.match(r"---\s*\n(.*?)\n---", text, re.DOTALL)
+    if not match:
+        return []
+    found: list[str] = []
+    lines = match.group(1).splitlines()
+    for index, line in enumerate(lines):
+        if not line.startswith("base_model:"):
+            continue
+        inline = line.split(":", 1)[1].strip().strip("'\"")
+        values = [inline] if inline else [
+            item.strip().lstrip("-").strip().strip("'\"")
+            for item in itertools.takewhile(lambda value: value.startswith((" ", "-")), lines[index + 1:])
+        ]
+        found.extend(value for value in values if re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", value))
+    return found
+
+
+def local_card_texts(model_id: str) -> list[str]:
+    """The repo's cached card followed by its base models' cached cards (GGUF repos often defer to them)."""
+    own = _cached_card_texts(model_id)
+    bases = [base for text in own for base in card_base_models(text) if base.casefold() != model_id.casefold()]
+    return own + [text for base in dict.fromkeys(bases) for text in _cached_card_texts(base)]
+
+
+def cache_model_cards(model_id: str) -> None:
+    """Fetch the repo's README and its base models' READMEs into the card cache; failures are ignored."""
+    def fetch(repo: str) -> str:
+        try:
+            path = hf_hub_download(
+                repo_id=repo, filename="README.md",
+                cache_dir=str(huggingface_card_cache_dir()), token=huggingface_token(),
+            )
+            return Path(path).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return ""
+
+    texts = _cached_card_texts(model_id) or [fetch(model_id)]
+    for base in dict.fromkeys(base for text in texts for base in card_base_models(text)):
+        if not _cached_card_texts(base):
+            fetch(base)
+
+
+def local_card_context(model_id: str) -> int | None:
+    """Largest `--ctx-size`/`-c` in the `llama-server` commands of the cached cards, if any."""
+    values = [
+        int(value)
+        for text in local_card_texts(model_id)
+        for args in card_llama_server_commands(text)
+        for flag, value in zip(args, args[1:])
+        if flag in {"-c", "--ctx-size"} and value.isdigit() and 512 <= int(value) <= 10_485_760
+    ]
+    return max(values) if values else None
+
+
+CARD_SAMPLING_FLAGS: dict[str, tuple[str, float, float]] = {
+    "--temp": ("temperature", 0.0, 2.0),
+    "--temperature": ("temperature", 0.0, 2.0),
+    "--top-p": ("top_p", 0.01, 1.0),
+    "--top-k": ("top_k", 0, 100),
+    "--min-p": ("min_p", 0.0, 1.0),
+    "--repeat-penalty": ("repeat_penalty", 0.5, 2.0),
+    "--presence-penalty": ("presence_penalty", 0.0, 2.0),
+}
+CARD_SAMPLING_KEYS = {key for key, _low, _high in CARD_SAMPLING_FLAGS.values()}
+CARD_CACHE_FLAGS = {"-ctk": "cache_type_k", "--cache-type-k": "cache_type_k", "-ctv": "cache_type_v", "--cache-type-v": "cache_type_v"}
+CARD_CACHE_TYPES = {"f16", "q8_0", "q4_0"}
+
+
+def card_llama_server_commands(text: str) -> list[list[str]]:
+    """`llama-server` invocations inside the card's fenced code blocks, as argument lists."""
+    commands: list[list[str]] = []
+    for block in re.findall(r"```[^\n]*\n(.*?)```", text, re.DOTALL):
+        for line in block.replace("\\\n", " ").splitlines():
+            if "llama-server" not in line:
+                continue
+            try:
+                tokens = shlex.split(line, comments=True)
+            except ValueError:
+                tokens = line.split()
+            args: list[str] = []
+            for token in tokens[next(i for i, t in enumerate(tokens) if "llama-server" in t) + 1:]:
+                args.extend(token.split("=", 1) if token.startswith("--") and "=" in token else [token])
+            commands.append(args)
+    return commands
+
+
+CARD_PROSE_SAMPLING = {
+    "temperature": "--temp", "temp": "--temp", "top_p": "--top-p", "top_k": "--top-k", "min_p": "--min-p",
+    "repetition_penalty": "--repeat-penalty", "repeat_penalty": "--repeat-penalty",
+    "presence_penalty": "--presence-penalty",
+}
+
+
+def card_sampling_value(flag: str, value: str) -> tuple[str, Any] | None:
+    key, low, high = CARD_SAMPLING_FLAGS[flag]
+    try:
+        number = int(value) if key == "top_k" else float(value)
+    except ValueError:
+        return None
+    return (key, number) if low <= number <= high else None
+
+
+def card_prose_presets(text: str) -> list[tuple[str, dict[str, Any]]]:
+    """Lines like "Thinking mode: `temperature=1.0`, `top_p=0.95`…", tagged thinking, direct or generic."""
+    presets: list[tuple[str, dict[str, Any]]] = []
+    for line in text.splitlines():
+        found: dict[str, Any] = {}
+        for name, value in re.findall(r"\b(temperature|temp|top_p|top_k|min_p|repetition_penalty|repeat_penalty|presence_penalty)\s*[=:]\s*`?(\d+(?:\.\d+)?)", line, re.IGNORECASE):
+            if item := card_sampling_value(CARD_PROSE_SAMPLING[name.casefold()], value):
+                found.setdefault(*item)
+        lowered = line.casefold()
+        if len(found) < 2 and not (found and re.search(r"recomm?[eo]nd", lowered)):
+            continue
+        mode = "direct" if re.search(r"non[- ]?thinking|instruct|no[- ]?think", lowered) else "thinking" if "thinking" in lowered or "reasoning" in lowered else "generic"
+        if found not in [preset for _mode, preset in presets]:
+            presets.append((mode, found))
+    return presets
+
+
+def local_card_launch_settings(model_id: str, reasoning_off: bool = False) -> dict[str, Any]:
+    """Author sampling and KV cache: `llama-server` commands first, then the prose preset for the profile's mode."""
+    sampling: dict[str, Any] = {}
+    cache: dict[str, str] = {}
+    texts = local_card_texts(model_id)
+    for text in texts:
+        for args in card_llama_server_commands(text):
+            found: dict[str, Any] = {}
+            for flag, value in zip(args, args[1:]):
+                if flag in CARD_SAMPLING_FLAGS:
+                    if item := card_sampling_value(flag, value):
+                        found.setdefault(*item)
+                elif flag in CARD_CACHE_FLAGS and value.casefold() in CARD_CACHE_TYPES:
+                    cache.setdefault(CARD_CACHE_FLAGS[flag], value.casefold())
+            if found and not sampling:
+                sampling = found
+    if not sampling:
+        presets = [preset for text in texts for preset in card_prose_presets(text)]
+        wanted = "direct" if reasoning_off else "thinking"
+        chosen = next((preset for mode, preset in presets if mode == wanted), None)
+        if chosen is None:
+            other = "thinking" if reasoning_off else "direct"
+            chosen = next((preset for mode, preset in presets if mode != other), None)
+        sampling = dict(chosen or {})
+    if sampling:
+        # Unset by the author means llama.cpp's neutral default, not MyDGX's 1.1.
+        sampling.setdefault("repeat_penalty", 1.0)
+    return {**sampling, **cache}
+
+
+GGUF_SAMPLING_KEYS = {
+    "general.sampling.temp": "--temp",
+    "general.sampling.top_p": "--top-p",
+    "general.sampling.top_k": "--top-k",
+    "general.sampling.min_p": "--min-p",
+    "general.sampling.penalty_repeat": "--repeat-penalty",
+}
+
+
+def gguf_sampling_settings(path: Path | None) -> dict[str, Any]:
+    """Sampling the quantizer embedded as `general.sampling.*`, with the same ranges as the card."""
+    metadata = gguf_metadata(path) if path else {}
+    sampling: dict[str, Any] = {}
+    for key, flag in GGUF_SAMPLING_KEYS.items():
+        value = metadata.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        name, low, high = CARD_SAMPLING_FLAGS[flag]
+        number = int(value) if name == "top_k" else round(float(value), 4)
+        if low <= number <= high:
+            sampling[name] = number
+    if sampling:
+        sampling.setdefault("repeat_penalty", 1.0)
+    return sampling
+
+
+def quick_context_limits(config: dict[str, Any]) -> tuple[int, int, int] | None:
+    """Agents' minimum, the default ceiling (author's `-c`, else native) and the native maximum; 0 when unknown."""
+    minimum = QUICK_MIN_CONTEXT.get(str(config.get("task") or "chat"))
+    repo = str(config.get("model_repo") or "")
+    filename = str(config.get("model_filename") or "")
+    if minimum is None or config.get("engine") != "llama.cpp" or not repo or not filename:
+        return None
+    folder = huggingface_cache_dir() / f"models--{repo.replace('/', '--')}"
+    native = next(
+        (value for path in folder.glob(f"snapshots/*/{filename}") if (value := gguf_context_length(path))),
+        None,
+    )
+    card = local_card_context(repo)
+    maximum = native or card
+    manual_maximum = int(model_overrides(f"huggingface:{repo}").get("context_max") or 0)
+    if manual_maximum:
+        maximum = min(manual_maximum, native) if native else manual_maximum
+    if not maximum:
+        return minimum, 0, 0
+    ceiling = min(card, maximum) if card else maximum
+    return min(minimum, maximum), ceiling, maximum
+
+
+def quick_context_size(config: dict[str, Any], requested: int | None = None) -> int:
+    """The requested size within the limits, or the midpoint between the agents' minimum and the author's ceiling."""
+    current = int(config.get("context_size") or 8192)
+    limits = quick_context_limits(config)
+    if limits is None:
+        return current
+    minimum, ceiling, maximum = limits
+    if not maximum:
+        return max(current, minimum)
+    requested = requested or int(model_overrides(f"huggingface:{config.get('model_repo')}").get("context_size") or 0)
+    if requested:
+        return min(maximum, max(minimum, requested // 1024 * 1024))
+    if ceiling <= minimum:
+        # A card `-c` below what the agents need is a launch example (or a validated floor), not a ceiling.
+        return minimum
+    return min(ceiling, ((minimum + ceiling) // 2) // 1024 * 1024)
+
+
+def quick_context_range(config: dict[str, Any] | None) -> dict[str, int] | None:
+    """Slider bounds for Encender (agents' minimum to native) and the memory each end needs; KV grows linearly."""
+    limits = quick_context_limits(config) if config else None
+    if not config or not limits or limits[2] <= limits[0]:
+        return None
+    minimum, _, maximum = limits
+    return {
+        "context_min": minimum,
+        "context_max": maximum,
+        "memory_min_mb": gguf_model_memory_mb({**config, "context_size": minimum}) or 0,
+        "memory_max_mb": gguf_model_memory_mb({**config, "context_size": maximum}) or 0,
+    }
+
+
+def quick_model_config(config: dict[str, Any], model_id: str, context_size: int | None = None) -> dict[str, Any]:
     config = dict(config)
     config["name"] = f"{model_id} · quick"
     config["model_alias"] = str(config["model_alias"]).removesuffix("-global")
     config["source"] = "Arranque rápido desde Modelos"
+    return with_launch_context(config, context_size)
+
+
+def with_launch_context(config: dict[str, Any], context_size: int | None = None) -> dict[str, Any]:
+    """The context Encender and Default use (requested, manual or the computed default) and the memory it needs."""
+    config = dict(config)
+    context = quick_context_size(config, context_size)
+    if context != config.get("context_size"):
+        config["context_size"] = context
+        if exact := gguf_model_memory_mb(config):
+            config["estimated_memory_mb"] = exact
+        elif config.get("estimated_memory_mb"):
+            # Without the attention shape, assume the base estimate's ~1 GB of KV at ~32 KB/token.
+            config["estimated_memory_mb"] = int(config["estimated_memory_mb"]) + max(0, context // 32 - 1024)
     return config
 
 
-_quick_config_cache: dict[str, tuple[str, dict[str, Any] | None, str]] = {}
+_quick_config_cache: dict[str, tuple[str, dict[str, Any] | None, str, dict[str, int] | None]] = {}
 
 
-def cached_quick_config(source: str, model_id: str, signature: str, size: int = 0) -> tuple[dict[str, Any] | None, str]:
-    """Build (and memoise per local revision) the config Encender would use, or the reason it is not possible."""
+def cached_quick_config(
+    source: str, model_id: str, signature: str, size: int = 0,
+) -> tuple[dict[str, Any] | None, str, dict[str, int] | None]:
+    """Build (and memoise per local revision) the config Encender would use, the reason it is not possible and its context range."""
     key = f"{source}:{model_id.casefold()}"
     cached = _quick_config_cache.get(key)
     if cached and cached[0] == signature:
-        return cached[1], cached[2]
+        return cached[1], cached[2], cached[3]
     try:
         config = quick_model_config(persistent_model_config(source, model_id), model_id)  # type: ignore[arg-type]
         if source == "ollama" and size:
             config["estimated_memory_mb"] = math.ceil(size / (1024 * 1024) * 1.12) + 1024
-        result: tuple[dict[str, Any] | None, str] = (config, "")
+        result: tuple[dict[str, Any] | None, str, dict[str, int] | None] = (config, "", quick_context_range(config))
     except HTTPException as exc:
-        result = (None, str(exc.detail))
+        result = (None, str(exc.detail), None)
     except Exception as exc:
-        result = (None, redact_log_text(str(exc), 200))
+        result = (None, redact_log_text(str(exc), 200), None)
     _quick_config_cache[key] = (signature, *result)
     return result
 
@@ -6009,16 +7034,21 @@ def quick_start_availability(
         plan = profiles_runtime_plan([*(item for item in loaded if item["id"] != QUICK_PROFILE_ID), row])
     except Exception as exc:
         return {"supported": True, "fits": False, "reason": redact_log_text(str(getattr(exc, "detail", exc)), 200)}
+    spare_mb = plan["capacity_mb"] - plan["required_mb"]
+    if _runtime_model_signatures and plan["incremental_mb"]:
+        spare_mb = min(spare_mb, plan["available_mb"] - plan["reserve_mb"] - plan["incremental_mb"])
     if plan["fits"]:
-        return {"supported": True, "fits": True, "reason": "", "incremental_mb": plan["incremental_mb"]}
+        return {"supported": True, "fits": True, "reason": "", "incremental_mb": plan["incremental_mb"], "spare_mb": spare_mb}
     if plan["alias_conflicts"]:
         why = f"Alias en uso: {', '.join(plan['alias_conflicts'])}"
     elif plan["port_conflicts"]:
         why = f"Puertos en uso: {', '.join(map(str, plan['port_conflicts']))}"
-    elif plan["required_mb"] > plan["capacity_mb"]:
-        why = f"Necesita {plan['required_mb'] / 1024:.1f} GB en total y el equipo admite {plan['capacity_mb'] / 1024:.1f} GB"
     else:
-        why = f"Necesita {plan['incremental_mb'] / 1024:.1f} GB más y hay {max(0, plan['available_mb'] - plan['reserve_mb']) / 1024:.1f} GB libres"
+        if plan["required_mb"] > plan["capacity_mb"]:
+            why = f"Necesita {plan['required_mb'] / 1024:.1f} GB en total y el equipo admite {plan['capacity_mb'] / 1024:.1f} GB"
+        else:
+            why = f"Necesita {plan['incremental_mb'] / 1024:.1f} GB más y hay {max(0, plan['available_mb'] - plan['reserve_mb']) / 1024:.1f} GB libres"
+        return {"supported": True, "fits": False, "reason": why, "incremental_mb": plan["incremental_mb"], "spare_mb": spare_mb}
     return {"supported": True, "fits": False, "reason": why, "incremental_mb": plan["incremental_mb"]}
 
 
@@ -6040,7 +7070,9 @@ async def quick_start_model(payload: QuickModelPayload) -> dict[str, Any]:
         owner = loaded_model_owner(identity)
         if owner:
             raise HTTPException(status_code=409, detail=f"{payload.model_id} ya está cargado en el perfil {owner}")
-        config = quick_model_config(await managed_model_config(payload.source, payload.model_id), payload.model_id)
+        config = quick_model_config(
+            await managed_model_config(payload.source, payload.model_id), payload.model_id, payload.context_size,
+        )
         save_managed_models(QUICK_PROFILE_ID, [*current, config])
         try:
             runtime = await start_profile_process(
@@ -6584,8 +7616,12 @@ def hf_spark_recommendation(
     if spark_count > 1:
         warnings.append("Tensor parallel requiere interconexión ConnectX-7 configurada")
     recommended_files = list(selected["files"]) if selected else []
+    drafter = hf_named_drafter(siblings) if selected and not mmproj else None
     if mmproj:
         recommended_files.append(mmproj["name"])
+    if drafter:
+        recommended_files.extend(drafter["files"])
+        reasons.append(f"Drafter {drafter['spec_type']} incluido: {Path(drafter['files'][0]).name}")
     return {
         "id": repo_id,
         "downloads": downloads,
@@ -6610,6 +7646,7 @@ def hf_spark_recommendation(
         "recommended_file": selected["files"][0] if selected else None,
         "recommended_files": recommended_files,
         "recommended_mmproj_file": mmproj["name"] if mmproj else None,
+        "recommended_draft_file": drafter["files"][0] if drafter else None,
         "recommended_context": target_context,
         "recommended_slots": slots,
         "architecture": architecture["architecture"],
@@ -7497,6 +8534,24 @@ async def stop_hf_progress(stop: asyncio.Event, monitor: asyncio.Task[None]) -> 
         await monitor
 
 
+def queue_downloaded_gguf_benchmark(repo_id: str, files: list[str] | None) -> int:
+    """Queue the post-download check (launch, answer, real memory, drafter acceptance) as an automatic benchmark.
+
+    With `files`, the main GGUFs fully inside that selection; for a whole-repo download, the one Encender would use.
+    """
+    try:
+        artifacts = [item for item in local_gguf_benchmark_artifacts() if item["repo_id"].casefold() == repo_id.casefold()]
+        if files is None:
+            chosen = persistent_model_config("huggingface", repo_id).get("model_filename")
+            artifacts = [item for item in artifacts if item["files"][0] == chosen]
+        else:
+            wanted = set(files)
+            artifacts = [item for item in artifacts if set(item["files"]) <= wanted]
+    except Exception:
+        return 0
+    return sum(enqueue_automatic_benchmark(f"gguf:{item['key']}", "huggingface.download") for item in artifacts)
+
+
 async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_bytes: int = 0) -> None:
     stop = asyncio.Event()
     batch_label = {"text": "Descargando"}
@@ -7573,6 +8628,7 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
             "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
             (job_id, json.dumps({"files": downloaded}), utc_now()),
         )
+        await asyncio.to_thread(queue_downloaded_gguf_benchmark, payload.repo_id, payload.files)
         db.update_job(job_id, "completed", 100, f"{len(downloaded)} archivo(s) preparados")
     except Exception as exc:
         db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: descarga no completada")
@@ -7622,6 +8678,109 @@ async def start_hf_files_download(
     job_id = db.create_job("huggingface.files.download", payload.repo_id)
     background.add_task(download_hf_files, job_id, payload, total_bytes)
     return {"job_id": job_id, "deduplicated": False}
+
+
+PREFLIGHT_MAX_HEADERS = 6
+PREFLIGHT_CONTEXT = 32_768
+
+
+def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> dict[str, Any]:
+    """What the selected files really are, read from their remote GGUF headers before downloading anything."""
+    info = HfApi(token=huggingface_token()).model_info(repo_id, revision=revision, files_metadata=True)
+    by_name = {str(sibling.rfilename): sibling for sibling in (info.siblings or [])}
+    missing = [name for name in filenames if name not in by_name]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Archivo no encontrado en Hugging Face: {missing[0]}")
+    selected = [by_name[name] for name in dict.fromkeys(filenames)]
+    commit = str(getattr(info, "sha", "") or revision)
+    groups = [*hf_gguf_groups(selected), *hf_gguf_groups(selected, auxiliary=True)]
+    groups.sort(key=lambda item: item["size"], reverse=True)
+    warnings: list[str] = []
+    headers: dict[str, dict[str, Any]] = {}
+    for group in groups[:PREFLIGHT_MAX_HEADERS]:
+        try:
+            headers[group["name"]] = remote_gguf_metadata(repo_id, commit, group["files"][0])
+        except Exception as exc:
+            headers[group["name"]] = {}
+            warnings.append(f"No se pudo leer la cabecera de {group['files'][0]}: {type(exc).__name__}")
+    main_metadata = headers.get(groups[0]["name"], {}) if groups else {}
+    capacity_mb = spark_memory_budgets()["budget_mb"]
+    files = []
+    for group in groups:
+        metadata = headers.get(group["name"], {})
+        architecture = str(metadata.get("general.architecture") or "")
+        role = gguf_file_role(group["files"][0], metadata, None if metadata is main_metadata else main_metadata)
+        native = int(gguf_arch_value(metadata, "context_length") or 0)
+        file_type = metadata.get("general.file_type")
+        quantization = group["quantization"] if group["quantization"] != "GGUF" else GGUF_FILE_TYPES.get(file_type, "GGUF")
+        entry: dict[str, Any] = {
+            "filename": group["files"][0],
+            "shards": len(group["files"]),
+            "expected_shards": int(metadata.get("split.count") or group["expected_shards"]),
+            "size": group["size"],
+            "role": role,
+            "architecture": architecture,
+            "quantization": quantization,
+            "native_context": native,
+            "tensors": gguf_tensor_count(metadata),
+            "embedded_mtp": bool(gguf_arch_value(metadata, "nextn_predict_layers")),
+            "runtime_supported": llama_knows_architecture(architecture) if architecture and role == "main" else None,
+            "header_read": bool(metadata),
+        }
+        if role == "main" and metadata:
+            context = min(PREFLIGHT_CONTEXT, native) if native else PREFLIGHT_CONTEXT
+            kv_mb = gguf_kv_cache_mb(metadata, context)
+            if kv_mb is not None:
+                entry["memory_mb"] = math.ceil(group["size"] / (1024 * 1024) * 1.12) + 1024 + kv_mb
+                entry["memory_context"] = context
+        files.append(entry)
+        name = Path(group["files"][0]).name
+        if entry["shards"] != entry["expected_shards"]:
+            warnings.append(f"{name}: faltan shards ({entry['shards']} de {entry['expected_shards']} seleccionados)")
+        if entry["runtime_supported"] is False:
+            warnings.append(f"{name}: el llama.cpp instalado no reconoce la arquitectura «{architecture}»")
+        if entry.get("memory_mb", 0) > capacity_mb:
+            warnings.append(f"{name}: necesita ~{entry['memory_mb'] // 1024} GB con {entry['memory_context'] // 1024}K; supera la capacidad segura")
+    roles = {item["role"] for item in files}
+    mmproj = [name for name in filenames if "mmproj" in name.casefold()]
+    if files and "main" not in roles:
+        warnings.insert(0, "La selección solo contiene drafters o proyectores: falta el modelo principal")
+    if sum(1 for item in files if item["role"] == "main") > 1:
+        warnings.append("Hay varias cuantizaciones principales; Encender usará una sola")
+    if mmproj and roles & set(SPEC_TYPES):
+        warnings.append("Con el mmproj activo no se usa la especulativa; el drafter solo sirve sin visión")
+    available = hf_named_drafter(list(by_name.values()))
+    if available and not roles & set(SPEC_TYPES) and not mmproj:
+        warnings.append(f"El repositorio ofrece un drafter ({available['spec_type']}) que no está en la selección: {available['files'][0]}")
+    elif available and not roles & set(SPEC_TYPES):
+        warnings.append(
+            f"El repositorio ofrece un drafter ({available['spec_type']}: {available['files'][0]}), pero con el mmproj "
+            "no se usaría; para solo texto, quita el mmproj y añade el drafter"
+        )
+    return {
+        "repo_id": repo_id,
+        "revision": commit,
+        "total_bytes": sum(integer_value(getattr(item, "size", None)) or 0 for item in selected),
+        "capacity_mb": capacity_mb,
+        "files": files,
+        "mmproj": mmproj,
+        "other_files": [name for name in filenames if not name.lower().endswith(".gguf")],
+        "suggested_draft": available["files"] if available and not roles & set(SPEC_TYPES) and not mmproj else [],
+        "warnings": warnings,
+    }
+
+
+@app.post("/api/models/huggingface/preflight", dependencies=secure)
+async def preflight_hf_download(payload: HfFilesDownloadRequest) -> dict[str, Any]:
+    for filename in payload.files:
+        if len(filename) > 1000 or filename.startswith("/") or ".." in Path(filename).parts:
+            raise HTTPException(status_code=400, detail="Nombre de archivo inválido")
+    try:
+        return await asyncio.to_thread(hf_download_preflight, payload.repo_id, payload.revision, payload.files)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"No se pudo consultar Hugging Face: {type(exc).__name__}") from exc
 
 
 async def verify_hf_integrity(job_id: str, repo_id: str) -> None:
@@ -7813,6 +8972,7 @@ async def download_hf(job_id: str, repo_id: str, revision: str, total_bytes: int
         await stop_hf_progress(stop, monitor)
         db.update_job(job_id, "running", 99, "Descarga completa · registrando el modelo")
         await asyncio.to_thread(refresh_hf_model_description, repo_id, revision)
+        await asyncio.to_thread(queue_downloaded_gguf_benchmark, repo_id, None)
         db.update_job(job_id, "completed", 100, "Modelo almacenado en caché")
         db.audit("huggingface.download", repo_id, True)
     except Exception as exc:
@@ -7905,7 +9065,8 @@ class ModelPayload(BaseModel):
     mmproj_repo: str = Field(default="", max_length=300)
     mmproj_filename: str = Field(default="", max_length=1000)
     model_alias: str = Field(default="", max_length=200)
-    port: int = Field(default=8080, ge=1024, le=65535)
+    port: int = Field(default=0, ge=0, le=65535)
+    port_auto: bool = True
     context_size: int = Field(default=8192, ge=512, le=1_048_576)
     gpu_layers: int = Field(default=-1, ge=-1, le=999)
     threads: int = Field(default=1, ge=1, le=512)
@@ -7925,6 +9086,9 @@ class ModelPayload(BaseModel):
     reasoning_effort: Literal["", "low", "medium", "high"] = ""
     kv_unified_per_slot: bool = True
     jinja: bool = True
+    spec_type: Literal["", "draft-mtp", "draft-dflash", "draft-dspark", "draft-eagle3", "draft-simple"] = ""
+    draft_filename: str = Field(default="", max_length=1000)
+    spec_draft_n_max: int = Field(default=0, ge=0, le=16)
     min_free_memory_mb: int = Field(default=0, ge=0, le=1_048_576)
     source: str = Field(default="", max_length=300)
     runtime_requirement: str = Field(default="", max_length=300)
@@ -7986,6 +9150,15 @@ def validate_model(payload: ModelPayload) -> None:
             raise HTTPException(status_code=400, detail="Lista de archivos GGUF inválida")
         if not re.fullmatch(r"[A-Za-z0-9._-]+", payload.model_alias or payload.model_ref):
             raise HTTPException(status_code=400, detail="Alias de modelo inválido")
+        if payload.draft_filename and (
+            not payload.draft_filename.lower().endswith(".gguf")
+            or payload.draft_filename.startswith("/")
+            or ".." in Path(payload.draft_filename).parts
+            or not payload.model_repo
+        ):
+            raise HTTPException(status_code=400, detail="Drafter inválido: debe ser un GGUF del mismo repositorio")
+        if payload.spec_type and payload.spec_type != "draft-mtp" and not payload.draft_filename:
+            raise HTTPException(status_code=400, detail=f"{payload.spec_type} necesita un archivo drafter")
         if payload.task == "vision":
             has_mmproj_local = payload.mmproj_file.lower().endswith(".gguf")
             has_mmproj_hf = bool(
@@ -8066,6 +9239,8 @@ def validate_model(payload: ModelPayload) -> None:
 
 def validate_profile(payload: ProfilePayload) -> None:
     validate_model(payload)
+    if any(model.port < 1024 for model in [payload, *payload.additional_models]):
+        raise HTTPException(status_code=400, detail="Los puertos manuales deben estar entre 1024 y 65535")
     ports = [payload.port]
     aliases = [payload.model_alias or payload.model_ref]
     for model in payload.additional_models:
@@ -8113,6 +9288,7 @@ def profile_values(profile_id: str, payload: ProfilePayload, now: str) -> tuple[
         payload.estimated_memory_mb, payload.max_input_mb, payload.timeout_seconds,
         serialize_additional_models(payload.additional_models),
         payload.memory_reserve_mb, int(payload.auto_fit_context), payload.minimum_context_size,
+        payload.spec_type, payload.draft_filename, payload.spec_draft_n_max,
         0, now, now,
     )
 
@@ -8127,8 +9303,9 @@ PROFILE_INSERT_SQL = """
         jinja,min_free_memory_mb,source,runtime_requirement,task,input_modalities_json,
         output_modalities_json,runtime_backend,endpoint_url,api_protocol,
         estimated_memory_mb,max_input_mb,timeout_seconds,additional_models_json,
-        memory_reserve_mb,auto_fit_context,minimum_context_size,active,created_at,updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        memory_reserve_mb,auto_fit_context,minimum_context_size,spec_type,draft_filename,spec_draft_n_max,
+        active,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 PROFILE_INSERT_COLUMNS = [
     column.strip() for column in PROFILE_INSERT_SQL.split("(", 1)[1].split(")", 1)[0].split(",")
@@ -8275,29 +9452,15 @@ async def profiles() -> dict[str, Any]:
 
 @app.post("/api/profiles", dependencies=secure)
 async def create_profile(payload: ProfilePayload) -> dict[str, str]:
+    assign_profile_ports(payload, None)
     validate_profile(payload)
     profile_id = str(uuid.uuid4())
     now = utc_now()
     try:
-        db.execute(
-            """
-            INSERT INTO profiles(
-                id,name,engine,model_ref,model_file,model_repo,model_filename,model_files_json,
-                mmproj_file,mmproj_repo,mmproj_filename,model_alias,port,context_size,
-                gpu_layers,threads,parallel,batch_size,ubatch_size,
-                temperature,top_p,top_k,min_p,repeat_penalty,presence_penalty,flash_attention,
-                cache_type_k,cache_type_v,reasoning_off,reasoning_effort,kv_unified_per_slot,
-                jinja,min_free_memory_mb,source,runtime_requirement,task,input_modalities_json,
-                output_modalities_json,runtime_backend,endpoint_url,api_protocol,
-                estimated_memory_mb,max_input_mb,timeout_seconds,additional_models_json,
-                memory_reserve_mb,auto_fit_context,minimum_context_size,active,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            profile_values(profile_id, payload, now),
-        )
+        db.execute(PROFILE_INSERT_SQL, profile_values(profile_id, payload, now))
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="Ya existe un perfil con ese nombre") from exc
-    db.execute("UPDATE profiles SET app=? WHERE id=?", (payload.app, profile_id))
+    db.execute("UPDATE profiles SET app=?,port_auto=? WHERE id=?", (payload.app, int(payload.port_auto), profile_id))
     db.audit("profile.create", payload.name, True)
     return {"id": profile_id}
 
@@ -8305,10 +9468,11 @@ async def create_profile(payload: ProfilePayload) -> dict[str, str]:
 @app.put("/api/profiles/{profile_id}", dependencies=secure)
 async def update_profile(profile_id: str, payload: ProfilePayload) -> dict[str, bool]:
     ensure_profile_editable(profile_id)
-    validate_profile(payload)
     existing = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
     if not existing:
         raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    assign_profile_ports(payload, profile_id)
+    validate_profile(payload)
     try:
         db.execute(
             """
@@ -8349,6 +9513,10 @@ async def update_profile(profile_id: str, payload: ProfilePayload) -> dict[str, 
         )
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="Ya existe un perfil con ese nombre") from exc
+    db.execute(
+        "UPDATE profiles SET port_auto=?,spec_type=?,draft_filename=?,spec_draft_n_max=? WHERE id=?",
+        (int(payload.port_auto), payload.spec_type, payload.draft_filename, payload.spec_draft_n_max, profile_id),
+    )
     db.audit("profile.update", payload.name, True)
     return {"updated": True}
 
@@ -9172,6 +10340,41 @@ def hf_profile_recommendation(
         "tags": tags[:30],
         "warning": "La recomendación se revisa antes de guardarse y nunca se ejecuta desde el README.",
     }
+
+
+PROFILE_MODEL_DEFAULT_KEYS = (
+    "engine", "runtime_backend", "model_ref", "model_repo", "model_filename", "model_files",
+    "mmproj_repo", "mmproj_filename", "task", "input_modalities", "output_modalities",
+    "context_size", "gpu_layers", "parallel", "batch_size", "ubatch_size", "temperature", "top_p",
+    "top_k", "min_p", "repeat_penalty", "presence_penalty", "flash_attention", "cache_type_k",
+    "cache_type_v", "jinja", "reasoning_off", "reasoning_effort", "kv_unified_per_slot",
+    "runtime_requirement",
+)
+
+
+@app.get("/api/profiles/model-defaults", dependencies=secure)
+async def profile_model_defaults(
+    source: Literal["ollama", "huggingface"],
+    model_id: str = Query(min_length=1, max_length=300, pattern=r"^[A-Za-z0-9._:/-]+$"),
+) -> dict[str, Any]:
+    """The parameters Encender would use for a downloaded model, to fill one model of a profile."""
+    if source == "huggingface":
+        await asyncio.to_thread(cache_model_cards, model_id)
+    base = await managed_model_config(source, model_id)
+
+    def build() -> dict[str, Any]:
+        config = quick_model_config(base, model_id)
+        values = {key: config[key] for key in PROFILE_MODEL_DEFAULT_KEYS if key in config}
+        values["model_alias"] = str(config["model_alias"])
+        if source == "huggingface":
+            values["model_ref"] = values["model_alias"]
+        values["memory_preview_mb"] = int(config.get("estimated_memory_mb") or 0)
+        # Header-based estimates follow later context or KV edits; a fixed number would go stale.
+        header_based = source == "huggingface" and model_kv_cache_mb(config) is not None
+        values["estimated_memory_mb"] = 0 if header_based else values["memory_preview_mb"]
+        return values
+
+    return await asyncio.to_thread(build)
 
 
 @app.get("/api/profiles/recommend/{repo_id:path}", dependencies=secure)
@@ -10921,6 +12124,11 @@ def benchmark_summary(run_id: str) -> dict[str, Any]:
     output_tokens = sum(int(sample["output_tokens"] or 0) for sample in valid)
     measured_seconds = sum(float(sample["total_ms"]) for sample in valid) / 1000
     average_power = telemetry.get("avg_power")
+    drafted = accepted = 0
+    for sample in valid:
+        timings = json.loads(sample.get("native_metrics_json") or "{}").get("timings") or {}
+        drafted += int(timings.get("draft_n") or 0)
+        accepted += int(timings.get("draft_n_accepted") or 0)
     joules_per_token = (
         float(average_power) * measured_seconds / output_tokens
         if average_power is not None and output_tokens > 0
@@ -10956,6 +12164,11 @@ def benchmark_summary(run_id: str) -> dict[str, Any]:
             "joules_per_output_token": round(joules_per_token, 4) if joules_per_token else None,
             "energy_method": "potencia GPU media del run × tiempo medido",
         },
+        "speculative": {
+            "drafted_tokens": drafted,
+            "accepted_tokens": accepted,
+            "acceptance_rate": round(accepted / drafted, 4),
+        } if drafted else None,
         "cases": cases,
         "score": round(score, 1),
         "score_provisional": stability_score is None,
@@ -10969,7 +12182,6 @@ def benchmark_summary(run_id: str) -> dict[str, Any]:
 
 BENCHMARK_GGUF_PORT = 18_990
 BENCHMARK_GGUF_PROFILE = {"id": "benchmark-gguf", "name": "Benchmark GGUF"}
-GGUF_AUXILIARY_PATTERN = re.compile(r"(?i)(?:^|/)(?:mtp|dspark|draft|eagle)[-_/]")
 
 
 def local_gguf_benchmark_artifacts() -> list[dict[str, Any]]:
@@ -10990,12 +12202,10 @@ def local_gguf_benchmark_artifacts() -> list[dict[str, Any]]:
         siblings = [
             SimpleNamespace(rfilename=item["name"], size=item["size"])
             for item in snapshot["files"]
-            if item["complete"] and not GGUF_AUXILIARY_PATTERN.search(item["name"])
+            if item["complete"]
         ]
         mmproj = hf_mmproj_files(siblings)
-        for group in hf_gguf_groups(siblings):
-            if not group["complete"] or not group["size"]:
-                continue
+        for group in local_main_gguf_groups(repo_id, siblings):
             basename = Path(str(group["name"])).name
             quant_match = QUANTIZATION_PATTERN.search(basename)
             key = content_hash({
@@ -11016,10 +12226,19 @@ def local_gguf_benchmark_artifacts() -> list[dict[str, Any]]:
 
 
 def gguf_benchmark_model(artifact: dict[str, Any]) -> dict[str, Any]:
+    """The artifact launched the way Encender would (manual settings and drafter included) when it is Encender's file."""
     repo_id = str(artifact["repo_id"])
-    capabilities = hf_model_capabilities(repo_id, None, [])
-    vision = "vision" in capabilities["tasks"] and bool(artifact.get("mmproj"))
-    model = persistent_model_config("ollama", repo_id)
+    try:
+        launch = persistent_model_config("huggingface", repo_id)
+    except Exception:
+        launch = {}
+    if launch.get("model_filename") == artifact["files"][0]:
+        model = dict(launch)
+        vision = bool(model.get("mmproj_filename"))
+    else:
+        capabilities = hf_model_capabilities(repo_id, None, [])
+        vision = "vision" in capabilities["tasks"] and bool(artifact.get("mmproj"))
+        model = persistent_model_config("ollama", repo_id)
     alias = f"benchmark-gguf-{artifact['key']}"
     model.update({
         "id": f"gguf-{artifact['key']}",
@@ -11039,9 +12258,11 @@ def gguf_benchmark_model(artifact: dict[str, Any]) -> dict[str, Any]:
         "source": "GGUF descargado sin perfil",
         "runtime_requirement": "",
         "estimated_memory_mb": math.ceil(int(artifact["size"]) / (1024 * 1024) * 1.12) + 1024,
+        "context_size": 8192,
         "_benchmark_target": f"gguf:{artifact['key']}",
         "_benchmark_context": 8192,
     })
+    model["estimated_memory_mb"] = gguf_model_memory_mb(model) or model["estimated_memory_mb"]
     return model
 
 
@@ -13981,6 +15202,12 @@ async def run_benchmark_job(
                 "co_resident_models": benchmark_co_resident_models(model),
                 "released_ollama_models": released,
             }
+            runtime["estimated_memory_mb"] = int(model.get("estimated_memory_mb") or 0) or None
+            if model.get("spec_type"):
+                runtime["speculative"] = {
+                    "spec_type": model["spec_type"],
+                    "draft_filename": Path(str(model.get("draft_filename") or "")).name,
+                }
             now = utc_now()
             db.execute(
                 """
@@ -16025,7 +17252,7 @@ Conceptos:
 - Default y Quick no se editan, activan ni borran desde Perfiles; se gestionan desde Modelos. Un modelo cargado por un perfil no se puede borrar hasta detenerlo.
 - App del perfil: directorio con start.sh (start/stop/restart/status) que arranca y para con el perfil; recibe MYDGX_GATEWAY_URL y no recibe secretos.
 - App web: una app de perfil puede tener alias y puerto (se configuran en el editor del perfil). start.sh recibe MYDGX_APP_HOST=127.0.0.1, MYDGX_APP_PORT, MYDGX_APP_ALIAS y MYDGX_APP_URL y debe escuchar en ese puerto. Con la app en marcha aparece un acceso directo en Resumen (junto a DGX Dashboard) y en la app de la barra de menús, que abre el túnel SSH para ese puerto. get_profile_apps devuelve la configuración en "web".
-- Gateway: endpoint único OpenAI y Anthropic (por defecto http://127.0.0.1:4000/v1) que enruta por alias a los perfiles cargados.
+- Gateway: endpoint único OpenAI y Anthropic (por defecto http://127.0.0.1:4000/v1) que enruta por alias a los perfiles cargados. La búsqueda web para OpenCode y Claude Code (POST /v1/search, SearXNG local) está activada por defecto y se cambia en Configuración → Gateway.
 - Modo memoria: pausa temporal de servicios opcionales y Ollama para hacer sitio, con restauración posterior.
 - Un motor activo (Whisper, ComfyUI) puede no tener modelos cargados: cargan bajo demanda.
 - Las operaciones largas son trabajos con progreso; consulta get_jobs.

@@ -31,6 +31,8 @@ Uso: $ROOT/start.sh install-opencode [nombre]
                     configuración y abre OpenCode con el alias indicado.
   --active          Activa edición, bash con confirmación y MCP Playwright,
                     Shodan y NVD. Sin la opción, usa plan/solo lectura.
+                    La búsqueda web (SearXNG) se añade en ambos modos cuando
+                    el gateway la tiene activada.
 
 Variables opcionales:
   MYDGX_GATEWAY_URL       Base OpenAI; por defecto, gateway local de MyDGX.
@@ -42,6 +44,10 @@ EOF
 }
 
 ensure_cli() {
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$PATH:$HOME/.local/bin" ;;
+  esac
   command -v opencode >/dev/null 2>&1 && return
   "$ROOT/install_opencode.sh"
   hash -r || true
@@ -120,8 +126,8 @@ run_opencode() {
   fi
 
   local result url selected config
-  prepare_gateway || exit $?
-  result="$(write_config)" || exit $?
+  prepare_gateway || pause_on_error $? || exit $?
+  result="$(write_config)" || pause_on_error $? || exit $?
   [[ -n "$result" ]] || {
     printf 'ERROR: no se recibió configuración de OpenCode.\n' >&2
     exit 1

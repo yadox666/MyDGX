@@ -107,6 +107,10 @@ ejecuta al arrancar y después aproximadamente cada hora.
 | `GATEWAY_LITELLM_PORT` | `4001` | Puerto interno del adaptador LiteLLM (Responses y Anthropic). |
 | `GATEWAY_CORS_ORIGINS` | vacío | Orígenes de navegador permitidos, separados por comas. |
 
+La búsqueda web del gateway no tiene variable de entorno. Está activada por
+defecto y se cambia en **Configuración → Gateway**. OpenCode la usa en el
+siguiente arranque.
+
 Host, puerto, timeout y tamaño también se cambian desde *Configuración*. Lo
 guardado en la interfaz tiene prioridad sobre `.env`.
 

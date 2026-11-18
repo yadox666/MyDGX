@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import io
 import json
 import math
 import sqlite3
@@ -959,6 +960,12 @@ class CollectorTests(unittest.TestCase):
         ])
         self.assertEqual(groups[0]["size"], 21)
         self.assertTrue(groups[0]["complete"])
+        main_groups = hf_gguf_groups([
+            SimpleNamespace(rfilename="dspark-DeepSeek-V4.1-Flash-Q8_0.gguf", size=7),
+            SimpleNamespace(rfilename="MTP/mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf", size=2),
+            SimpleNamespace(rfilename="UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00001.gguf", size=80),
+        ])
+        self.assertEqual([group["files"] for group in main_groups], [["UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00001.gguf"]])
         self.assertEqual(hf_mmproj_files([
             SimpleNamespace(rfilename="mmproj-model-f16.gguf", size=3),
         ])[0]["name"], "mmproj-model-f16.gguf")
@@ -1432,6 +1439,351 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(identity["device_variant"], "dell")
         self.assertEqual(identity["device_vendor"], "Dell")
         self.assertEqual(identity["device_model"], "Dell Pro Max GB10")
+
+
+QWEN35_MOE_SHAPE = {
+    "block_count": 40, "embedding_length": 2048, "attention.head_count": 16, "attention.head_count_kv": 2,
+    "attention.key_length": 256, "attention.value_length": 256, "full_attention_interval": 4,
+    "ssm.conv_kernel": 4, "ssm.state_size": 128, "ssm.group_count": 16, "ssm.inner_size": 4096,
+}
+
+
+def write_test_gguf(
+    path: Path, context_length: int, architecture: str = "qwen35moe", extra: "dict[str, Any] | None" = None,
+) -> None:
+    def text(value: str) -> bytes:
+        data = value.encode("utf-8")
+        return struct.pack("<Q", len(data)) + data
+
+    def entry(key: str, value: Any) -> bytes:
+        if isinstance(value, float):
+            return text(key) + struct.pack("<If", 6, value)
+        if isinstance(value, list):
+            return text(key) + struct.pack("<IIQ", 9, 4, len(value)) + struct.pack(f"<{len(value)}I", *value)
+        return text(key) + struct.pack("<II", 4, value)
+
+    tokens = [f"token-{index}" for index in range(2000)]
+    entries = [
+        text("general.architecture") + struct.pack("<I", 8) + text(architecture),
+        text("tokenizer.ggml.tokens") + struct.pack("<IIQ", 9, 8, len(tokens)) + b"".join(text(t) for t in tokens),
+        text("tokenizer.ggml.scores") + struct.pack("<IIQ", 9, 6, 3) + struct.pack("<fff", 0.1, 0.2, 0.3),
+        entry(f"{architecture}.context_length", context_length),
+        *(entry(key if key.startswith("general.") else f"{architecture}.{key}", value) for key, value in (extra or {}).items()),
+    ]
+    path.write_bytes(b"GGUF" + struct.pack("<IQQ", 3, 0, len(entries)) + b"".join(entries))
+
+
+class SpeculativeDecodingTests(unittest.TestCase):
+    def test_file_role_uses_name_header_and_tensor_count(self) -> None:
+        main = {"general.architecture": "qwen35moe", "split.tensors.count": 800}
+        cases = [
+            ("mmproj-Model-F16.gguf", {}, "mmproj"),
+            ("dspark-DeepSeek-V4.1-Flash-Q8_0.gguf", {}, "draft-dspark"),
+            ("MTP/mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf", {}, "draft-mtp"),
+            ("Model-assistant.gguf", {"general.architecture": "dflash"}, "draft-dflash"),
+            ("helper.gguf", {"general.architecture": "qwen35moe", "gguf.tensor_count": 40,
+                             "qwen35moe.nextn_predict_layers": 1}, "draft-mtp"),
+            ("tiny.gguf", {"general.architecture": "llama", "gguf.tensor_count": 30}, "draft-simple"),
+            ("Model-IQ1_S.gguf", {"general.architecture": "qwen35moe", "split.tensors.count": 800}, "main"),
+        ]
+        for filename, metadata, expected in cases:
+            with self.subTest(filename=filename):
+                self.assertEqual(main_module.gguf_file_role(filename, metadata, main), expected)
+
+    def test_named_drafter_prefers_dspark_and_q8(self) -> None:
+        siblings = [
+            SimpleNamespace(rfilename="MTP/mtp-Model-Q4_K_M.gguf", size=2),
+            SimpleNamespace(rfilename="dspark-Model-Q4_K_M.gguf", size=4),
+            SimpleNamespace(rfilename="dspark-Model-Q8_0.gguf", size=7),
+            SimpleNamespace(rfilename="Model-Q4_K_M.gguf", size=80),
+        ]
+        drafter = main_module.hf_named_drafter(siblings)
+        self.assertEqual((drafter["spec_type"], drafter["files"]), ("draft-dspark", ["dspark-Model-Q8_0.gguf"]))
+        self.assertIsNone(main_module.hf_named_drafter(siblings[3:]))
+
+    def test_partial_header_from_ranged_download(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Model.gguf"
+            write_test_gguf(path, 65_536, extra={"block_count": 40})
+            data = path.read_bytes()
+        cut = data[: len(data) - 4]
+        metadata = main_module.parse_gguf_header(io.BytesIO(cut), partial=True)
+        self.assertEqual(metadata["general.architecture"], "qwen35moe")
+        self.assertEqual(metadata["qwen35moe.context_length"], 65_536)
+        with self.assertRaises(ValueError):
+            main_module.parse_gguf_header(io.BytesIO(cut))
+
+    def test_card_setup_wins_when_its_drafter_is_local(self) -> None:
+        card = "```bash\nllama-server -m Model-Q4_K_M.gguf --spec-type draft-mtp --spec-draft-n-max 3\n```"
+        candidates = [
+            {"spec_type": "draft-dspark", "draft_filename": "dspark-Model-Q8_0.gguf", "size": 7,
+             "quantization": "Q8_0", "architecture": "dflash", "embedded": False},
+            {"spec_type": "draft-mtp", "draft_filename": "", "size": 0, "quantization": "",
+             "architecture": "qwen35moe", "embedded": True},
+        ]
+        with patch.object(main_module, "local_card_texts", return_value=[card]):
+            self.assertEqual(
+                main_module.choose_speculative("author/Model-GGUF", candidates),
+                ({"spec_type": "draft-mtp", "draft_filename": "", "spec_draft_n_max": 3}, "ficha"),
+            )
+        with patch.object(main_module, "local_card_texts", return_value=[]):
+            setup, origin = main_module.choose_speculative("author/Model-GGUF", candidates)
+        self.assertEqual((setup["spec_type"], setup["draft_filename"], origin), ("draft-dspark", "dspark-Model-Q8_0.gguf", "archivo"))
+        with patch.object(main_module, "local_card_texts", return_value=[]):
+            self.assertEqual(main_module.choose_speculative("author/Model-GGUF", []), ({}, ""))
+
+    def test_speculative_args_need_flag_and_drafter(self) -> None:
+        model = {"spec_type": "draft-dspark", "draft_filename": "dspark-Model-Q8_0.gguf", "spec_draft_n_max": 4}
+        draft = Path("/models/dspark-Model-Q8_0.gguf")
+        with patch.object(main_module, "llama_supports_flag", return_value=True), \
+                patch.object(main_module, "resolve_draft_file", return_value=draft):
+            self.assertEqual(main_module.speculative_args("llama-server", model), [
+                "--spec-type", "draft-dspark", "--spec-draft-model", str(draft),
+                "--spec-draft-ngl", "all", "--spec-draft-n-max", "4",
+            ])
+        with patch.object(main_module, "llama_supports_flag", return_value=True), \
+                patch.object(main_module, "resolve_draft_file", return_value=None):
+            self.assertEqual(main_module.speculative_args("llama-server", model), [])
+            self.assertEqual(
+                main_module.speculative_args("llama-server", {"spec_type": "draft-mtp"}),
+                ["--spec-type", "draft-mtp"],
+            )
+        with patch.object(main_module, "llama_supports_flag", return_value=False):
+            self.assertEqual(main_module.speculative_args("llama-server", model), [])
+
+
+class QuickContextTests(unittest.TestCase):
+    def setUp(self) -> None:
+        main_module._gguf_metadata_cached.cache_clear()
+
+    def quick_config(
+        self, home: Path, native: int, readme: str = "", task: str = "chat", requested: "int | None" = None,
+    ) -> dict[str, Any]:
+        snapshot = home / "hub" / "models--author--Model-GGUF" / "snapshots" / "abc"
+        snapshot.mkdir(parents=True)
+        write_test_gguf(snapshot / "Model-Q4_K_M.gguf", native)
+        if readme:
+            (snapshot / "README.md").write_text(readme, encoding="utf-8")
+        config = {
+            "name": "x", "model_alias": "author-model-gguf-global", "engine": "llama.cpp", "task": task,
+            "model_repo": "author/Model-GGUF", "model_filename": "Model-Q4_K_M.gguf",
+            "context_size": 8192, "estimated_memory_mb": 20_000,
+        }
+        with patch.object(main_module.settings, "hf_home", str(home)):
+            return main_module.quick_model_config(config, "author/Model-GGUF", requested)
+
+    def test_default_uses_the_slider_or_the_encender_context(self) -> None:
+        for requested, expected in ((65_536, 65_536), (None, 81_920)):
+            with self.subTest(requested=requested), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                snapshot = home / "hub" / "models--author--Model-GGUF" / "snapshots" / "abc"
+                snapshot.mkdir(parents=True)
+                write_test_gguf(snapshot / "Model-Q4_K_M.gguf", 131_072)
+                base = {
+                    "name": "x", "model_alias": "author-model-gguf-global", "engine": "llama.cpp", "task": "chat",
+                    "model_repo": "author/Model-GGUF", "model_filename": "Model-Q4_K_M.gguf",
+                    "context_size": 8192, "estimated_memory_mb": 20_000,
+                }
+                with patch.object(main_module.settings, "hf_home", str(home)), \
+                        patch.object(main_module, "persistent_model_config", return_value=base):
+                    config = asyncio.run(main_module.managed_model_config("huggingface", "author/Model-GGUF", requested))
+                self.assertEqual(config["context_size"], expected)
+                self.assertEqual(config["model_alias"], "author-model-gguf-global")
+
+    def test_manual_context_caps_the_slider_and_sets_the_default(self) -> None:
+        overrides = {"context_max": 65_536, "context_size": 40_000}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(main_module, "model_overrides", return_value=overrides):
+            config = self.quick_config(Path(directory), 131_072)
+            self.assertEqual(config["context_size"], 39_936)
+            with patch.object(main_module.settings, "hf_home", directory):
+                self.assertEqual(main_module.quick_context_range(config)["context_max"], 65_536)
+
+    def test_quick_uses_requested_context_within_limits(self) -> None:
+        for requested, expected in ((65_000, 64_512), (1024, 32_768), (900_000, 131_072)):
+            with self.subTest(requested=requested), tempfile.TemporaryDirectory() as directory:
+                config = self.quick_config(Path(directory), 131_072, requested=requested)
+                self.assertEqual(config["context_size"], expected)
+
+    def test_quick_context_range_spans_agent_minimum_to_native(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config = self.quick_config(home, 131_072)
+            with patch.object(main_module.settings, "hf_home", str(home)):
+                context = main_module.quick_context_range(config)
+        self.assertEqual((context["context_min"], context["context_max"]), (32_768, 131_072))
+
+    def test_card_context_below_agent_minimum_is_an_example_not_a_ceiling(self) -> None:
+        readme = "```\nllama-server -m x.gguf -c 16384 --jinja\n```\n"
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config = self.quick_config(home, 1_048_576, readme)
+            with patch.object(main_module.settings, "hf_home", str(home)):
+                context = main_module.quick_context_range(config)
+        self.assertEqual(config["context_size"], 32_768)
+        self.assertEqual((context["context_min"], context["context_max"]), (32_768, 1_048_576))
+
+    def test_slider_reaches_native_when_card_recommends_less(self) -> None:
+        readme = "```\nllama-server -m x.gguf --ctx-size 131072\n```\n"
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config = self.quick_config(home, 1_048_576, readme)
+            with patch.object(main_module.settings, "hf_home", str(home)):
+                context = main_module.quick_context_range(config)
+        self.assertEqual(config["context_size"], 81_920)
+        self.assertEqual(context["context_max"], 1_048_576)
+
+    def test_reads_native_context_from_gguf_header(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "m.gguf"
+            write_test_gguf(path, 262_144)
+            self.assertEqual(main_module.gguf_context_length(path), 262_144)
+            path.write_bytes(b"NOPE" + b"\0" * 32)
+            self.assertIsNone(main_module.gguf_context_length(path))
+
+    def test_quick_uses_midpoint_of_agent_minimum_and_author_maximum(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.quick_config(Path(directory), 262_144, "```\nllama-server --jinja --ctx-size 262144 -fa on\n```\n")
+        self.assertEqual(config["context_size"], 147_456)
+        self.assertEqual(config["estimated_memory_mb"], 20_000 + 147_456 // 32 - 1024)
+
+    def test_quick_falls_back_to_native_context_without_card(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.quick_config(Path(directory), 131_072)
+        self.assertEqual(config["context_size"], 81_920)
+
+    def test_quick_never_exceeds_native_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.quick_config(Path(directory), 16_384, "```\nllama-server -m x.gguf --ctx-size 262144\n```\n")
+        self.assertEqual(config["context_size"], 16_384)
+
+    def test_quick_keeps_context_for_other_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.quick_config(Path(directory), 262_144, task="embeddings")
+        self.assertEqual(config["context_size"], 8192)
+
+    def card_settings(self, readme: str) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = Path(directory) / "hub" / "models--author--Model-GGUF" / "snapshots" / "abc"
+            snapshot.mkdir(parents=True)
+            (snapshot / "README.md").write_text(readme, encoding="utf-8")
+            with patch.object(main_module.settings, "hf_home", directory):
+                return main_module.local_card_launch_settings("author/Model-GGUF")
+
+    def test_card_sampling_and_kv_cache_from_author_commands(self) -> None:
+        readme = (
+            "Try `--temp 1.5` inline.\n\n```bash\nllama-server -hf author/Model-GGUF:Q4 \\\n"
+            "  -ngl 99 --jinja --ctx-size 262144 \\\n  --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0\n```\n\n"
+            "```bash\nllama-server -hf author/Model-GGUF:Q4 -fa on -ctk q8_0 -ctv q8_0 \\\n"
+            "  --temp 0.9 --top-k 40\n```\n"
+        )
+        self.assertEqual(self.card_settings(readme), {
+            "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0.0,
+            "repeat_penalty": 1.0, "cache_type_k": "q8_0", "cache_type_v": "q8_0",
+        })
+
+    def test_card_settings_reject_out_of_range_and_unknown_values(self) -> None:
+        readme = "```\nllama-server -m x.gguf --temp 9 --top-p=0.8 --repeat-penalty 1.05 -ctk 'q8_0;id'\n```\n"
+        self.assertEqual(self.card_settings(readme), {"top_p": 0.8, "repeat_penalty": 1.05})
+
+    def test_prose_presets_from_base_card_follow_the_reasoning_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            hub = Path(directory) / "hub"
+            own = hub / "models--author--Model-GGUF" / "snapshots" / "abc"
+            base = hub / "models--org--Model" / "snapshots" / "def"
+            own.mkdir(parents=True)
+            base.mkdir(parents=True)
+            (own / "README.md").write_text(
+                "---\nbase_model:\n- org/Model\n---\nRun `nuclei -rl 2 -c 1000` against targets.\n", encoding="utf-8",
+            )
+            (base / "README.md").write_text(
+                "We report max_tokens=32768, temperature=1.0 for evals.\n"
+                "- Thinking Mode: `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0.0`, `presence_penalty=0.0`, `repetition_penalty=1.0`\n"
+                "- Instruct (or non-thinking) mode: `temperature=0.7`, `top_p=0.80`, `top_k=20`, `min_p=0.0`, `presence_penalty=1.5`, `repetition_penalty=1.0`\n",
+                encoding="utf-8",
+            )
+            with patch.object(main_module.settings, "hf_home", directory):
+                thinking = main_module.local_card_launch_settings("author/Model-GGUF")
+                direct = main_module.local_card_launch_settings("author/Model-GGUF", reasoning_off=True)
+                context = main_module.local_card_context("author/Model-GGUF")
+        self.assertEqual(thinking, {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 0.0, "repeat_penalty": 1.0})
+        self.assertEqual(direct["temperature"], 0.7)
+        self.assertEqual(direct["presence_penalty"], 1.5)
+        self.assertIsNone(context)
+
+    def test_weight_counts_a_symlinked_snapshot_file_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            blob = Path(directory) / "blob"
+            blob.write_bytes(b"\0" * (3 * 1024 * 1024))
+            link = Path(directory) / "model.gguf"
+            link.symlink_to(blob)
+            with patch.object(main_module, "cached_hf_file", return_value=blob):
+                weight = main_module.model_weight_mb({"model_file": str(link), "model_repo": "a/b", "model_filename": "model.gguf"})
+        self.assertEqual(weight, 3)
+
+    def test_card_without_server_command_keeps_defaults(self) -> None:
+        self.assertEqual(self.card_settings("Use temperature 0.6 and top_k 20."), {})
+        self.assertEqual(self.card_settings("We report results at temperature=1.0."), {})
+
+    def test_single_recommended_value_counts(self) -> None:
+        settings = self.card_settings("**Note**: We recommond using a low temperature, such as `temperature=0.15`.")
+        self.assertEqual(settings, {"temperature": 0.15, "repeat_penalty": 1.0})
+
+    def test_kv_cache_counts_only_attention_blocks_and_cache_type(self) -> None:
+        metadata = {"general.architecture": "qwen35moe", **{f"qwen35moe.{k}": v for k, v in QWEN35_MOE_SHAPE.items()}}
+        # 10 attention blocks × 2 KV heads × (256 + 256) = 20 KiB/token at f16, plus ~63 MiB of SSM state.
+        self.assertEqual(main_module.gguf_kv_cache_mb(metadata, 147_456), 2943)
+        self.assertEqual(main_module.gguf_kv_cache_mb(metadata, 147_456, cache_type_k="q8_0", cache_type_v="q8_0"), 1593)
+
+    def test_kv_cache_for_dense_model_scales_with_slots_only_per_slot(self) -> None:
+        metadata = {
+            "general.architecture": "llama", "llama.block_count": 80, "llama.embedding_length": 8192,
+            "llama.attention.head_count": 64, "llama.attention.head_count_kv": 8,
+        }
+        self.assertEqual(main_module.gguf_kv_cache_mb(metadata, 32_768, parallel=2), 10_240)
+        self.assertEqual(main_module.gguf_kv_cache_mb(metadata, 32_768, parallel=2, per_slot=True), 20_480)
+        self.assertIsNone(main_module.gguf_kv_cache_mb({"general.architecture": "llama"}, 32_768))
+
+    def test_kv_cache_sliding_window_layers_keep_only_the_window(self) -> None:
+        pattern = [index % 6 != 5 for index in range(60)]
+        metadata = {
+            "general.architecture": "gemma4", "gemma4.block_count": 60, "gemma4.embedding_length": 5376,
+            "gemma4.attention.head_count": 32,
+            "gemma4.attention.head_count_kv": [16 if is_swa else 4 for is_swa in pattern],
+            "gemma4.attention.key_length": 512, "gemma4.attention.value_length": 512,
+            "gemma4.attention.key_length_swa": 256, "gemma4.attention.value_length_swa": 256,
+            "gemma4.attention.sliding_window": 1024, "gemma4.attention.sliding_window_pattern": pattern,
+        }
+        # 10 full layers × 4 heads × 512 × 2 (K+V) × f16 = 80 KiB/token; 50 SWA layers × 16 × 256 × 2 × 2 over 1536 tokens.
+        self.assertEqual(main_module.gguf_kv_cache_mb(metadata, 262_144), 20_480 + 1200)
+
+    def test_gguf_sampling_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "m.gguf"
+            write_test_gguf(path, 262_144, extra={
+                "general.sampling.temp": 0.6, "general.sampling.top_p": 0.95,
+                "general.sampling.top_k": 20, "general.sampling.min_p": 0.0,
+            })
+            self.assertEqual(main_module.gguf_sampling_settings(path), {
+                "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "repeat_penalty": 1.0,
+            })
+
+    def test_quick_memory_estimate_uses_header_kv_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            snapshot = home / "hub" / "models--author--Model-GGUF" / "snapshots" / "abc"
+            snapshot.mkdir(parents=True)
+            write_test_gguf(snapshot / "Model-Q4_K_M.gguf", 262_144, extra=QWEN35_MOE_SHAPE)
+            config = {
+                "name": "x", "model_alias": "m-global", "engine": "llama.cpp", "task": "chat",
+                "model_repo": "author/Model-GGUF", "model_filename": "Model-Q4_K_M.gguf",
+                "context_size": 8192, "estimated_memory_mb": 1, "cache_type_k": "q8_0", "cache_type_v": "q8_0",
+            }
+            with patch.object(main_module.settings, "hf_home", str(home)), \
+                    patch.object(main_module, "model_weight_mb", return_value=20_000):
+                config = main_module.quick_model_config(config, "author/Model-GGUF")
+        self.assertEqual(config["context_size"], 147_456)
+        self.assertEqual(config["estimated_memory_mb"], math.ceil(20_000 * 1.12) + 1024 + 1593)
 
 
 class BenchmarkTests(unittest.TestCase):
@@ -4558,12 +4910,14 @@ class ProfileApiTests(unittest.TestCase):
                     "model_ref": "primary",
                     "model_file": "/models/primary.gguf",
                     "port": 18080,
+                    "port_auto": False,
                     "additional_models": [{
                         "name": "Segundo",
                         "engine": "llama.cpp",
                         "model_ref": "second",
                         "model_file": "/models/second.gguf",
                         "port": 18081,
+                        "port_auto": False,
                         "context_size": 16384,
                         "estimated_memory_mb": 12288,
                     }],
@@ -4593,6 +4947,7 @@ class ProfileApiTests(unittest.TestCase):
                         "model_file": f"/models/{model}.gguf",
                         "model_alias": model,
                         "port": 18080,
+                        "port_auto": False,
                     })
                     self.assertEqual(response.status_code, 200)
                     ids.append(response.json()["id"])
@@ -4609,6 +4964,56 @@ class ProfileApiTests(unittest.TestCase):
             self.assertEqual(assignments[0]["from"], 18080)
             self.assertEqual(assignments[0]["to"], 18081)
         db.path = original_path
+
+    def test_automatic_ports_never_overlap_other_profiles_or_each_other(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory, \
+                    patch("backend.main.local_port_available", side_effect=lambda port: port != 18081):
+                db.path = Path(directory) / "auto-ports.db"
+                with TestClient(app) as client:
+                    def create(name: str, extra: list[dict[str, Any]]) -> dict[str, Any]:
+                        response = client.post("/api/profiles", json={
+                            "name": name, "engine": "llama.cpp", "model_ref": name.casefold(),
+                            "model_file": f"/models/{name}.gguf", "additional_models": extra,
+                        })
+                        self.assertEqual(response.status_code, 200, response.text)
+                        listing = client.get("/api/profiles").json()["profiles"]
+                        return next(item for item in listing if item["id"] == response.json()["id"])
+
+                    first = create("Uno", [])
+                    second = create("Dos", [
+                        {"name": "Dos B", "engine": "llama.cpp", "model_ref": "dos-b", "model_file": "/models/b.gguf"},
+                        {"name": "Dos C", "engine": "llama.cpp", "model_ref": "dos-c", "model_file": "/models/c.gguf", "port": 18080},
+                    ])
+                    first_ports = [model["port"] for model in first["models"]]
+                    second_ports = [model["port"] for model in second["models"]]
+                    others = {
+                        model["port"]
+                        for item in client.get("/api/profiles").json()["profiles"]
+                        if item["id"] != second["id"]
+                        for model in item["models"]
+                    }
+                    self.assertEqual(len(set(second_ports)), 3)
+                    self.assertFalse(others.intersection(second_ports))
+                    self.assertIn(first_ports[0], others)
+                    self.assertNotIn(18081, [*first_ports, *second_ports])
+                    self.assertTrue(all(port in main_module.AUTO_MODEL_PORTS for port in [*first_ports, *second_ports]))
+                    self.assertTrue(first["port_auto"])
+
+                    edited = {key: second[key] for key in ("name", "engine", "model_ref", "model_file", "port", "port_auto")}
+                    edited["additional_models"] = [
+                        {key: model[key] for key in ("name", "engine", "model_ref", "model_file", "port", "port_auto")}
+                        for model in second["models"][1:]
+                    ]
+                    with patch("backend.main.local_port_available", return_value=False):
+                        response = client.put(f"/api/profiles/{second['id']}", json=edited)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    again = next(item for item in client.get("/api/profiles").json()["profiles"] if item["id"] == second["id"])
+                    # Its own ports stay even while its running models hold them.
+                    self.assertEqual([model["port"] for model in again["models"]], second_ports)
+        finally:
+            db.path = original_path
 
     def test_profile_rejects_duplicate_aliases_case_insensitively(self) -> None:
         payload = ProfilePayload(
@@ -5389,6 +5794,249 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(response.status_code, 400)
         settings.gateway_api_key = original_key
         db.path = original_path
+
+    def test_gateway_web_search_is_on_by_default_and_filters_results(self) -> None:
+        original_path = db.path
+        original_key = settings.gateway_api_key
+        settings.gateway_api_key = None
+        captured: dict[str, Any] = {}
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self) -> dict[str, Any]:
+                return {
+                    "results": [
+                        {"title": "<b>Spark</b>", "url": "https://example.com/a", "content": "hola  <i>mundo</i>"},
+                        {"title": "local", "url": "http://127.0.0.1/secret", "content": "no"},
+                        {"title": "lan", "url": "http://10.1.1.1/x", "content": "no"},
+                        {"title": "ok", "url": "https://docs.example.org/b", "content": "segundo"},
+                    ]
+                }
+
+        class FakeClient:
+            def __init__(self, *_args: Any, **kwargs: Any) -> None:
+                captured["kwargs"] = kwargs
+
+            async def __aenter__(self) -> "GatewayTests.FakeClient":
+                return self
+
+            async def __aexit__(self, *_args: Any) -> bool:
+                return False
+
+            async def get(self, url: str, params: Any = None) -> Any:
+                captured["url"] = url
+                captured["params"] = params
+                return FakeResponse()
+
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "search.db"
+                with TestClient(app) as client:
+                    config = client.get("/api/gateway/config")
+                    self.assertEqual(config.status_code, 200)
+                    self.assertTrue(config.json()["web_search"])
+                with patch("backend.gateway.httpx.AsyncClient", FakeClient), TestClient(gateway_app) as gateway:
+                    self.assertTrue(gateway.get("/health").json()["web_search"])
+                    response = gateway.post("/v1/search", json={"query": "  dgx   spark  ", "limit": 9})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(captured["params"]["q"], "dgx spark")
+                self.assertEqual(captured["params"]["format"], "json")
+                self.assertFalse(captured["kwargs"]["follow_redirects"])
+                self.assertTrue(captured["url"].endswith("/search"))
+                body = response.json()
+                self.assertEqual(
+                    [item["url"] for item in body["results"]],
+                    ["https://example.com/a", "https://docs.example.org/b"],
+                )
+                self.assertEqual(body["results"][0]["title"], "Spark")
+                self.assertEqual(body["results"][0]["snippet"], "hola mundo")
+                self.assertNotIn("query", body)
+                self.assertNotIn("127.0.0.1", response.text)
+                with TestClient(app) as client:
+                    saved = client.put("/api/gateway/config", json={
+                        "enabled": True,
+                        "host": "127.0.0.1",
+                        "port": 4000,
+                        "request_timeout_seconds": 600,
+                        "max_request_mb": 32,
+                        "web_search": False,
+                    })
+                    self.assertEqual(saved.status_code, 200)
+                    self.assertFalse(client.get("/api/gateway/config").json()["web_search"])
+                with TestClient(gateway_app) as gateway:
+                    self.assertFalse(gateway.get("/health").json()["web_search"])
+                    denied = gateway.post("/v1/search", json={"query": "secreto-que-no-debe-loguearse"})
+                self.assertEqual(denied.status_code, 403)
+                self.assertNotIn("secreto-que-no-debe-loguearse", denied.text)
+        finally:
+            settings.gateway_api_key = original_key
+            db.path = original_path
+
+    def test_gateway_web_search_hides_upstream_failures(self) -> None:
+        original_key = settings.gateway_api_key
+        settings.gateway_api_key = None
+
+        class FakeClient:
+            def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                pass
+
+            async def __aenter__(self) -> "GatewayTests.FakeClient":
+                return self
+
+            async def __aexit__(self, *_args: Any) -> bool:
+                return False
+
+            async def get(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise httpx.ConnectError("http://127.0.0.1:8888/search?q=secreto-interno")
+
+        try:
+            with (
+                patch("backend.gateway.gateway_runtime_config", return_value={
+                    "enabled": True,
+                    "host": "127.0.0.1",
+                    "port": 4000,
+                    "request_timeout_seconds": 600,
+                    "max_request_mb": 32,
+                    "web_search": True,
+                }),
+                patch("backend.gateway.httpx.AsyncClient", FakeClient),
+                TestClient(gateway_app) as gateway,
+            ):
+                response = gateway.post("/v1/search", json={"query": "secreto-interno"})
+            self.assertEqual(response.status_code, 503)
+            self.assertNotIn("secreto-interno", response.text)
+            self.assertEqual(response.json()["error"]["code"], "search_unavailable")
+        finally:
+            settings.gateway_api_key = original_key
+
+    def test_opencode_enables_searxng_tool_without_storing_the_key(self) -> None:
+        import importlib.util
+
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location(
+            "opencode_workspace_under_test", root / "scripts" / "opencode_workspace.py"
+        )
+        self.assertIsNotNone(spec and spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        model = {"id": "model", "context": 65536, "tools": True, "reasoning": False, "vision": False}
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / ".opencode").mkdir()
+            path = module.write_config(
+                workspace, "http://127.0.0.1:14000/v1", [model], model, False, "1.2.3", True,
+            )
+            config = json.loads(path.read_text(encoding="utf-8"))
+            encoded = json.dumps(config)
+            self.assertIn("searxng", config["mcp"])
+            self.assertNotIn("playwright", config["mcp"])
+            self.assertEqual(config["tools"]["websearch"], False)
+            self.assertEqual(config["tools"]["webfetch"], False)
+            self.assertEqual(config["permission"]["websearch"], "deny")
+            self.assertEqual(config["permission"]["searxng_*"], "allow")
+            self.assertEqual(config["agent"]["plan"]["permission"]["searxng_*"], "allow")
+            environment = config["mcp"]["searxng"]["environment"]
+            self.assertEqual(environment["MYDGX_GATEWAY_API_KEY"], "{env:MYDGX_GATEWAY_API_KEY}")
+            self.assertEqual(environment["MYDGX_GATEWAY_URL"], "http://127.0.0.1:14000/v1")
+            self.assertTrue(str(config["mcp"]["searxng"]["command"][1]).endswith("opencode_searxng_mcp.py"))
+            self.assertNotIn("local-mydgx-gateway", encoded)
+            disabled = module.write_config(
+                workspace, "http://127.0.0.1:14000/v1", [model], model, False, "1.2.3", False,
+            )
+            self.assertNotIn("mcp", json.loads(disabled.read_text(encoding="utf-8")))
+
+    def test_claude_code_enables_searxng_without_storing_the_key(self) -> None:
+        import importlib.util
+        import sys
+
+        root = Path(__file__).resolve().parents[1]
+        scripts = str(root / "scripts")
+        sys.path.insert(0, scripts)
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "claude_code_workspace_under_test", root / "scripts" / "claude_code_workspace.py"
+            )
+            module = importlib.util.module_from_spec(spec)
+            assert spec is not None and spec.loader is not None
+            spec.loader.exec_module(module)
+            model = {"id": "model", "context": 65536, "tools": True, "reasoning": False, "vision": False}
+            with tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                settings = module.write_config(workspace, "http://127.0.0.1:14000/v1", model, False, True)
+                mcp_path = module.write_mcp(workspace, "http://127.0.0.1:14000/v1", False, True)
+                config = json.loads(settings.read_text(encoding="utf-8"))
+                mcp = json.loads(mcp_path.read_text(encoding="utf-8"))
+                encoded = json.dumps({"settings": config, "mcp": mcp})
+                self.assertIn("mcp__searxng", config["permissions"]["allow"])
+                self.assertIn("WebSearch", config["permissions"]["deny"])
+                self.assertIn("WebFetch", config["permissions"]["deny"])
+                self.assertNotIn("playwright", mcp["mcpServers"])
+                server = mcp["mcpServers"]["searxng"]
+                self.assertEqual(server["env"]["MYDGX_GATEWAY_URL"], "http://127.0.0.1:14000/v1")
+                self.assertEqual(server["env"]["MYDGX_GATEWAY_API_KEY"], "${MYDGX_GATEWAY_API_KEY}")
+                self.assertTrue(str(server["args"][0]).endswith("opencode_searxng_mcp.py"))
+                self.assertNotIn("local-mydgx-gateway", encoded)
+                self.assertNotIn("sk-", encoded)
+                self.assertIsNone(module.write_mcp(workspace, "http://127.0.0.1:14000/v1", False, False))
+                disabled = json.loads(
+                    module.write_config(workspace, "http://127.0.0.1:14000/v1", model, False, False).read_text(encoding="utf-8")
+                )
+                self.assertNotIn("mcp__searxng", disabled["permissions"]["allow"])
+        finally:
+            if scripts in sys.path:
+                sys.path.remove(scripts)
+
+    def test_searxng_mcp_returns_snippets_and_fixed_errors(self) -> None:
+        import importlib.util
+        import io
+        import os
+        import urllib.error
+        import urllib.request
+
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location(
+            "opencode_searxng_mcp_under_test", root / "scripts" / "opencode_searxng_mcp.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec is not None and spec.loader is not None
+        spec.loader.exec_module(module)
+
+        class FakeResponse(io.BytesIO):
+            def __enter__(self) -> "GatewayTests.FakeResponse":
+                return self
+
+            def __exit__(self, *_args: Any) -> bool:
+                return False
+
+        def fake_urlopen(request: urllib.request.Request, timeout: int = 0) -> FakeResponse:
+            self.assertEqual(request.full_url, "http://127.0.0.1:14000/v1/search")
+            self.assertEqual(request.get_header("Authorization"), "Bearer local-test-key")
+            self.assertIn(b"dgx spark", request.data or b"")
+            self.assertNotIn(b"local-test-key", request.data or b"")
+            return FakeResponse(json.dumps({
+                "results": [{"title": "Uno", "url": "https://example.com", "snippet": "dato"}],
+            }).encode())
+
+        environment = {
+            "MYDGX_GATEWAY_URL": "http://127.0.0.1:14000/v1",
+            "MYDGX_GATEWAY_API_KEY": "local-test-key",
+        }
+        with patch.dict(os.environ, environment), patch.object(module.urllib.request, "urlopen", fake_urlopen):
+            text = module.gateway_search("dgx spark")
+        self.assertIn("https://example.com", text)
+        self.assertNotIn("local-test-key", text)
+
+        def unavailable(request: urllib.request.Request, timeout: int = 0) -> Any:
+            raise urllib.error.HTTPError(request.full_url, 503, "no", {}, None)
+
+        with patch.dict(os.environ, environment), patch.object(module.urllib.request, "urlopen", unavailable):
+            failure = module.gateway_search("super-secret")
+        self.assertEqual(failure, "Búsqueda no disponible.")
+        self.assertNotIn("super-secret", failure)
+        listed = module.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        self.assertEqual(listed["result"]["tools"][0]["name"], "web_search")
 
     def test_gateway_lists_only_loaded_models_from_active_profile(self) -> None:
         original_path = db.path

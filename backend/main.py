@@ -6045,6 +6045,17 @@ def hf_requires_unsupported_reap_runtime(repo_id: str, filenames: Iterable[str] 
     return any(HF_UNSUPPORTED_REAP_PATTERN.search(value) for value in (repo_id, *filenames))
 
 
+def hf_info_requires_unsupported_reap_runtime(info: Any) -> bool:
+    evidence = [
+        *(str(tag) for tag in (getattr(info, "tags", None) or [])),
+        *(
+            str(getattr(sibling, "rfilename", "") or "")
+            for sibling in (getattr(info, "siblings", None) or [])
+        ),
+    ]
+    return hf_requires_unsupported_reap_runtime(str(getattr(info, "id", "") or ""), evidence)
+
+
 def gguf_tensor_count(metadata: dict[str, Any]) -> int:
     return int(metadata.get("split.tensors.count") or metadata.get("gguf.tensor_count") or 0)
 
@@ -7485,10 +7496,7 @@ def hf_spark_recommendation(
         None,
     )
     siblings = list(getattr(info, "siblings", None) or [])
-    unsupported_reap = hf_requires_unsupported_reap_runtime(
-        repo_id,
-        [*tags, *(str(getattr(sibling, "rfilename", "") or "") for sibling in siblings)],
-    )
+    unsupported_reap = hf_info_requires_unsupported_reap_runtime(info)
     formats = hf_model_formats(siblings)
     mmproj_files = hf_mmproj_files(siblings)
     groups = hf_gguf_groups(siblings)
@@ -8151,6 +8159,7 @@ async def search_models(
             str(model.id): model
             for model in [*trending_candidates, *popular_candidates]
             if str(model.id) not in earlier
+            and not hf_info_requires_unsupported_reap_runtime(model)
         }.values())[:pool_size]
         catalog_matches: list[dict[str, Any]] = []
         if alignment == "uncensored":
@@ -8196,6 +8205,8 @@ async def search_models(
                     model.id,
                     files_metadata=True,
                 )
+                if hf_info_requires_unsupported_reap_runtime(info):
+                    return None
                 info.trending_score = trending_scores.get(str(model.id), 0)
                 result = hf_spark_recommendation(info, task, size, runtime)
                 catalog_item = catalog_by_repo.get(str(model.id).casefold())
@@ -8279,6 +8290,7 @@ async def search_all_huggingface(
         models = list({
             str(model.id): model
             for model in [*trending, *popular]
+            if not hf_info_requires_unsupported_reap_runtime(model)
         }.values())[:pool_size]
         eligible = []
         for model in models:
@@ -8297,6 +8309,8 @@ async def search_all_huggingface(
         def analyze(model: Any) -> dict[str, Any] | None:
             try:
                 info = api.model_info(model.id, files_metadata=True)
+                if hf_info_requires_unsupported_reap_runtime(info):
+                    return None
                 info.trending_score = trending_scores.get(str(model.id), 0)
                 return hf_spark_recommendation(info, task, "any", "any")
             except Exception:

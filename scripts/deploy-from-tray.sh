@@ -132,7 +132,7 @@ mydgx_port="$(./.venv/bin/python -c 'from backend.main import settings; print(se
 ./scripts/install-openwebui.sh \
   "$ROOT" \
   "$gateway_port" \
-  "${MYDGX_OPENWEBUI_VERSION:-0.13.3}" \
+  "${MYDGX_OPENWEBUI_VERSION:-0.13.4}" \
   "$searxng_query_url" \
   "$comfyui_workflow" \
   "$comfyui_nodes" \

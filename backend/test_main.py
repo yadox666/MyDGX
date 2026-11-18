@@ -305,6 +305,35 @@ class DatabaseTests(unittest.TestCase):
         self.assertFalse(first_analysed & set(analysed))
         self.assertFalse({item["id"] for item in first} & {item["id"] for item in second})
 
+    def test_huggingface_recommendations_hide_reap_by_id_or_filename(self) -> None:
+        listed = [
+            SimpleNamespace(id="org/normal-GGUF", tags=["gguf"]),
+            SimpleNamespace(id="org/model-REAP192-GGUF", tags=["gguf"]),
+            SimpleNamespace(id="org/generic-GGUF", tags=["gguf"]),
+        ]
+
+        def info(repo: str, **_kwargs):
+            filename = "weights-REAP192-Q4.gguf" if repo == "org/generic-GGUF" else "weights-Q4_K_M.gguf"
+            return SimpleNamespace(id=repo, tags=["gguf"], siblings=[SimpleNamespace(rfilename=filename)])
+
+        def recommendation(model, *_args):
+            return {
+                "id": model.id, "recommendation_status": "Compatible", "recommended_score": 80,
+                "downloads": 1, "uncensored": False, "tasks": ["chat"], "input_modalities": ["text"],
+                "formats": ["gguf"], "recommended_engines": ["llama.cpp"],
+            }
+
+        with patch("backend.main.HfApi") as api, \
+                patch("backend.main.hf_spark_recommendation", side_effect=recommendation), \
+                patch.object(main_module.settings, "mydgx_dashboard_password", None), \
+                patch.object(main_module.settings, "mydgx_api_key", None), \
+                patch.object(main_module.settings, "host", "127.0.0.1"), \
+                TestClient(app) as client:
+            api.return_value.list_models.return_value = listed
+            api.return_value.model_info.side_effect = info
+            results = client.get("/api/models/search", params={"limit": 10}).json()
+        self.assertEqual([item["id"] for item in results], ["org/normal-GGUF"])
+
     def test_nvcc_version_is_read_from_the_release_line_not_the_last_line(self) -> None:
         output = (
             "nvcc: NVIDIA (R) Cuda compiler driver\n"
@@ -998,6 +1027,11 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue(main_module.hf_requires_unsupported_reap_runtime("org/DeepSeek-REAP192-GGUF"))
         self.assertTrue(main_module.hf_requires_unsupported_reap_runtime("org/model", ["weights-REAP-192-Q4.gguf"]))
         self.assertFalse(main_module.hf_requires_unsupported_reap_runtime("org/Reaper-Instruct-GGUF"))
+        self.assertTrue(main_module.hf_info_requires_unsupported_reap_runtime(SimpleNamespace(
+            id="org/generic-deepseek",
+            tags=["gguf"],
+            siblings=[SimpleNamespace(rfilename="weights-REAP192-Q4.gguf")],
+        )))
         info = SimpleNamespace(
             sha="abc",
             tags=["gguf"],

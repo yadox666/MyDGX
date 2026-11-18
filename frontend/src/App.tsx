@@ -12,6 +12,7 @@ import {
   Download,
   ExternalLink,
   Eye,
+  FileArchive,
   Film,
   Gauge,
   Globe,
@@ -45,6 +46,7 @@ import {
   TriangleAlert,
   Trash2,
   Trophy,
+  Upload,
   X,
   Zap,
 } from "lucide-react";
@@ -2826,6 +2828,391 @@ function Dashboard({
   );
 }
 
+type ModelImportLimits = {
+  max_zip_bytes: number;
+  max_model_bytes: number;
+  free_bytes: number;
+  max_upload_now_bytes: number;
+  namespace: string;
+};
+
+type ModelImportTest = {
+  status: "pending" | "running" | "passed" | "failed" | "queued" | "skipped";
+  message?: string;
+  job_id?: string;
+  run_id?: string;
+  score?: number | null;
+  tokens_per_second?: number | null;
+  ttft_ms?: number | null;
+  reliability_percent?: number | null;
+  peak_memory_bytes?: number | null;
+  estimated_memory_mb?: number | null;
+  acceptance_rate?: number | null;
+};
+
+type ModelImportResult = {
+  repo_id: string;
+  files: Array<{ name: string; size: number; role: string; architecture: string; quantization: string; native_context?: number | null; runtime_supported?: boolean | null }>;
+  warnings: string[];
+  manifest: { name?: string; task?: string; settings?: Record<string, unknown> };
+  launch: { model_filename?: string; mmproj_filename?: string; context_size?: number; estimated_memory_mb?: number; spec_type?: string; draft_filename?: string };
+  test: ModelImportTest;
+};
+
+const MODEL_IMPORT_STEPS = [
+  { title: "Subir el ZIP", detail: "Tu navegador envía el archivo al DGX" },
+  { title: "Comprobar el contenido", detail: "Rutas seguras, archivos permitidos y mydgx.json" },
+  { title: "Extraer a la biblioteca", detail: "Copia los GGUF y comprueba que no están dañados" },
+  { title: "Analizar el modelo", detail: "Arquitectura, contexto, partes y memoria necesaria" },
+  { title: "Probar", detail: "Lo arranca como «Encender» y ejecuta un benchmark corto" },
+];
+
+const MODEL_IMPORT_TEMPLATE = `{
+  "name": "Mi-Modelo-8B",
+  "description": "Para qué sirve, de dónde sale y cómo se entrenó.",
+  "license": "apache-2.0",
+  "base_model": "autor/modelo-original",
+  "tags": ["español", "código"],
+  "task": "chat",
+  "settings": {
+    "context_size": 32768,
+    "temperature": 0.7,
+    "top_p": 0.9
+  }
+}
+`;
+
+function ModelImportView({ notify, onImported, onShowInstalled }: {
+  notify: (message: string, error?: boolean) => void;
+  onImported: () => void;
+  onShowInstalled: (repoId: string) => void;
+}) {
+  const [limits, setLimits] = useState<ModelImportLimits | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [runTest, setRunTest] = useState(true);
+  const [upload, setUpload] = useState<{ sent: number; total: number } | null>(null);
+  const [uploadError, setUploadError] = useState("");
+  const [jobId, setJobId] = useState(() => localStorage.getItem("mydgx-model-import-job") || "");
+  const [job, setJob] = useState<Job | null>(null);
+  const [benchmarkJob, setBenchmarkJob] = useState<Job | null>(null);
+  const [result, setResult] = useState<ModelImportResult | null>(null);
+  const [lastStep, setLastStep] = useState(0);
+  const request = useRef<XMLHttpRequest | null>(null);
+  const announced = useRef("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const importedRef = useRef(onImported);
+  importedRef.current = onImported;
+
+  useEffect(() => {
+    api<ModelImportLimits>("/api/models/import/limits").then(setLimits).catch(() => setLimits(null));
+  }, [jobId]);
+
+  const active = Boolean(job && activeJobStatuses.has(job.status));
+  useEffect(() => {
+    if (!jobId) return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const current = await api<Job>(`/api/jobs/${jobId}`);
+        if (stopped) return;
+        setJob(current);
+        const step = /Paso (\d)\/5/.exec(current.message)?.[1];
+        if (step) setLastStep(Number(step) - 1);
+        if (current.progress >= 77 || current.status === "completed") {
+          const found = await api<ModelImportResult>(`/api/jobs/${jobId}/result`).catch(() => null);
+          if (!stopped && found) {
+            setResult(found);
+            if (found.test.job_id && found.test.status === "running") {
+              setBenchmarkJob(await api<Job>(`/api/jobs/${found.test.job_id}`).catch(() => null));
+            }
+          }
+        }
+        if (current.status === "completed" && announced.current !== jobId) {
+          announced.current = jobId;
+          importedRef.current();
+        }
+      } catch {
+        if (!stopped) setJob(null);
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 2000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [jobId]);
+
+  useEffect(() => {
+    if (job && !activeJobStatuses.has(job.status)) setBenchmarkJob(null);
+  }, [job]);
+
+  function chooseFile(candidate: File | undefined) {
+    if (!candidate) return;
+    setUploadError("");
+    if (!candidate.name.toLowerCase().endsWith(".zip")) {
+      setFile(null);
+      setUploadError("Elige un archivo .zip (mira el paso 3 para crearlo).");
+      return;
+    }
+    setFile(candidate);
+  }
+
+  function startUpload() {
+    if (!file) return;
+    if (limits && file.size > limits.max_upload_now_bytes) {
+      setUploadError(`El ZIP ocupa ${bytes(file.size)} y ahora caben ${bytes(limits.max_upload_now_bytes)}: libera espacio en Almacenamiento.`);
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    request.current = xhr;
+    setUploadError("");
+    setResult(null);
+    setJob(null);
+    setLastStep(0);
+    setUpload({ sent: 0, total: file.size });
+    xhr.open("POST", `/api/models/import/upload?filename=${encodeURIComponent(file.name)}&run_test=${runTest}`);
+    const key = getApiKey();
+    if (key) xhr.setRequestHeader("X-MyDGX-Key", key);
+    xhr.setRequestHeader("Content-Type", "application/zip");
+    xhr.upload.onprogress = (event) => setUpload({ sent: event.loaded, total: event.total || file.size });
+    xhr.onload = () => {
+      request.current = null;
+      setUpload(null);
+      let body: { job_id?: string; detail?: string } = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
+      if (xhr.status === 401 && xhr.getResponseHeader("X-MyDGX-Auth-Required") === "password") {
+        window.dispatchEvent(new Event("mydgx-auth-required"));
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && body.job_id) {
+        localStorage.setItem("mydgx-model-import-job", body.job_id);
+        setJobId(body.job_id);
+        setFile(null);
+        notify("ZIP subido; comprobando el modelo");
+      } else {
+        setUploadError(body.detail || `La subida falló (HTTP ${xhr.status})`);
+      }
+    };
+    xhr.onerror = () => { request.current = null; setUpload(null); setUploadError("Se perdió la conexión durante la subida. Vuelve a intentarlo."); };
+    xhr.onabort = () => { request.current = null; setUpload(null); setUploadError("Subida cancelada."); };
+    xhr.send(file);
+  }
+
+  async function cancelImport() {
+    if (request.current) { request.current.abort(); return; }
+    const target = benchmarkJob && activeJobStatuses.has(benchmarkJob.status) ? benchmarkJob.id : jobId;
+    try {
+      await api(`/api/jobs/${target}/cancel`, { method: "POST" });
+      notify("Cancelación solicitada");
+    } catch (error) {
+      notify((error as Error).message, true);
+    }
+  }
+
+  function reset() {
+    localStorage.removeItem("mydgx-model-import-job");
+    setJobId("");
+    setJob(null);
+    setResult(null);
+    setUploadError("");
+    setLastStep(0);
+  }
+
+  function downloadTemplate() {
+    const url = URL.createObjectURL(new Blob([MODEL_IMPORT_TEMPLATE], { type: "application/json" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "mydgx.json";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const failed = job?.status === "failed" || job?.status === "cancelled";
+  const done = job?.status === "completed";
+  const test = result?.test;
+  const stepState = (index: number): "done" | "running" | "error" | "waiting" => {
+    if (upload) return index === 0 ? "running" : "waiting";
+    if (!job) return uploadError && index === 0 ? "error" : "waiting";
+    if (done) {
+      if (index < 4) return "done";
+      return test?.status === "passed" ? "done" : test?.status === "failed" ? "error" : "waiting";
+    }
+    if (failed) return index < lastStep ? "done" : index === lastStep ? "error" : "waiting";
+    return index < lastStep ? "done" : index === lastStep ? "running" : "waiting";
+  };
+  const uploadPercent = upload ? Math.round((upload.sent / Math.max(upload.total, 1)) * 100) : 0;
+  const stepDetail = (index: number) => {
+    if (index === 0 && upload) return `${bytes(upload.sent)} de ${bytes(upload.total)} · ${uploadPercent} %`;
+    if (index === lastStep && job && (active || failed)) return job.message;
+    if (index === 4 && benchmarkJob) return `${Math.round(benchmarkJob.progress)} % · ${benchmarkJob.message}`;
+    if (index === 4 && test && test.status !== "pending" && test.status !== "running") return test.message || "";
+    return MODEL_IMPORT_STEPS[index].detail;
+  };
+  const showProgress = Boolean(upload || job || uploadError);
+  const mainFile = result?.files.find((item) => item.name === result.launch.model_filename) ?? result?.files.find((item) => item.role === "main");
+
+  return <div className="model-import-view">
+    <Card className="model-import-hero">
+      <div className="model-import-hero-icon"><FileArchive size={26} /></div>
+      <div>
+        <span className="card-kicker">IMPORTAR DESDE UN ZIP</span>
+        <h3>Trae un modelo GGUF que ya tienes en tu ordenador</h3>
+        <p>
+          Útil para modelos que no están en Hugging Face, versiones propias o equipos sin internet. MyDGX lo guarda en tu biblioteca
+          como <code>{limits?.namespace ?? "imported"}/nombre</code>, lo comprueba y, si quieres, lo arranca y le pasa un benchmark corto
+          para confirmar que funciona.
+        </p>
+        {limits && <div className="model-import-limits">
+          <span><HardDrive size={13} /> Espacio libre: <b>{bytes(limits.free_bytes)}</b></span>
+          <span><Upload size={13} /> ZIP máximo ahora: <b>{bytes(limits.max_upload_now_bytes)}</b></span>
+          <span><Cpu size={13} /> Modelo principal hasta: <b>{bytes(limits.max_model_bytes)}</b></span>
+        </div>}
+      </div>
+    </Card>
+
+    <div className="model-import-guide">
+      <Card className="model-import-step">
+        <span className="model-import-step-number">1</span>
+        <strong>Reúne los archivos en una carpeta</strong>
+        <ul>
+          <li><b>Obligatorio:</b> el modelo en formato <code>.gguf</code>. Si viene en partes (<code>…-00001-of-00003.gguf</code>), incluye <b>todas</b>.</li>
+          <li><b>Visión (opcional):</b> el proyector <code>mmproj-….gguf</code>.</li>
+          <li><b>Más velocidad (opcional):</b> un drafter <code>mtp-…</code>, <code>dspark-…</code> o <code>eagle3-….gguf</code>.</li>
+          <li><b>Descripción (opcional):</b> <code>README.md</code> y <code>LICENSE</code>.</li>
+        </ul>
+        <small>Solo se admite GGUF (el formato de llama.cpp). Safetensors, PyTorch u otros archivos se ignoran.</small>
+      </Card>
+      <Card className="model-import-step">
+        <span className="model-import-step-number">2</span>
+        <strong>Añade <code>mydgx.json</code> si quieres fijar ajustes</strong>
+        <p>Es opcional: sin él MyDGX elige contexto y parámetros automáticamente. Todos los campos son opcionales.</p>
+        <pre className="model-import-template">{MODEL_IMPORT_TEMPLATE}</pre>
+        <small>
+          <b>task</b>: <code>chat</code> o <code>vision</code>. <b>settings</b> admite lo mismo que el editor de ajustes del modelo:
+          <code> context_size</code>, <code>context_max</code>, <code>temperature</code>, <code>top_p</code>, <code>top_k</code>, <code>min_p</code>,
+          <code> repeat_penalty</code>, <code>model_filename</code>, <code>mmproj_filename</code>, <code>spec_type</code>, <code>draft_filename</code>…
+        </small>
+        <button type="button" className="button secondary compact" onClick={downloadTemplate}><Download size={14} /> Descargar plantilla</button>
+      </Card>
+      <Card className="model-import-step">
+        <span className="model-import-step-number">3</span>
+        <strong>Comprime la carpeta en un ZIP</strong>
+        <p><b>Finder:</b> clic derecho sobre la carpeta → <i>Comprimir</i>.</p>
+        <p><b>Terminal</b> (más rápido, no recomprime los GGUF):</p>
+        <pre className="model-import-template">{"cd ~/Downloads/mi-modelo\nzip -0 -r ../mi-modelo.zip ."}</pre>
+        <small>Sin contraseña y sin enlaces simbólicos. Da igual si los archivos están en la raíz o dentro de una carpeta.</small>
+      </Card>
+    </div>
+
+    <Card className="model-import-upload">
+      <span className="model-import-step-number">4</span>
+      <strong>Sube el ZIP</strong>
+      <label
+        className={`model-import-drop${dragging ? " dragging" : ""}${file ? " ready" : ""}`}
+        onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => { event.preventDefault(); setDragging(false); chooseFile(event.dataTransfer.files?.[0]); }}
+      >
+        <input ref={inputRef} type="file" accept=".zip,application/zip" disabled={Boolean(upload) || active} onChange={(event) => { chooseFile(event.target.files?.[0]); event.target.value = ""; }} />
+        <FileArchive size={28} />
+        {file ? <span><b>{file.name}</b> · {bytes(file.size)}</span> : <span>Arrastra aquí el ZIP o <u>elige un archivo</u></span>}
+      </label>
+      <label className="model-import-option">
+        <input type="checkbox" checked={runTest} onChange={(event) => setRunTest(event.target.checked)} disabled={Boolean(upload)} />
+        <span>
+          <b>Probar al terminar</b> (recomendado): arranca el modelo y ejecuta un benchmark corto.
+          Mientras dura (unos minutos) el chat y los perfiles quedan en pausa.
+        </span>
+      </label>
+      <div className="model-import-actions">
+        <button type="button" className="button" disabled={!file || Boolean(upload) || active} onClick={startUpload}><Upload size={15} /> Importar modelo</button>
+        {(upload || active) && <button type="button" className="button secondary" onClick={() => void cancelImport()}><X size={15} /> Cancelar</button>}
+        {(done || failed) && <button type="button" className="button secondary" onClick={reset}><Plus size={15} /> Importar otro</button>}
+      </div>
+      {upload && <div className="model-import-bar"><i style={{ width: `${uploadPercent}%` }} /></div>}
+      {upload && <small>No cierres ni recargues esta pestaña hasta que termine la subida.</small>}
+    </Card>
+
+    {showProgress && <Card className="model-import-progress">
+      <strong>Progreso</strong>
+      <ol className="model-import-timeline">
+        {MODEL_IMPORT_STEPS.map((step, index) => {
+          const state = stepState(index);
+          const skipped = index === 4 && done && test && ["skipped", "queued"].includes(test.status);
+          return <li key={step.title} className={`state-${skipped ? "skipped" : state}`}>
+            <span className="model-import-dot">
+              {state === "done" ? <CheckCircle2 size={16} /> : state === "error" ? <TriangleAlert size={16} /> : state === "running" ? <RefreshCw size={14} className="spin" /> : index + 1}
+            </span>
+            <div><b>{step.title}</b><small>{stepDetail(index)}</small></div>
+          </li>;
+        })}
+      </ol>
+      {(uploadError || failed) && <div className="model-import-error">
+        <TriangleAlert size={16} />
+        <div>
+          <b>{job?.status === "cancelled" ? "Importación cancelada" : "No se pudo importar"}</b>
+          <span>{uploadError || job?.message}</span>
+          <small>Corrige el ZIP siguiendo los pasos 1 a 3 y vuelve a subirlo. No se ha guardado nada a medias.</small>
+        </div>
+      </div>}
+    </Card>}
+
+    {result && <Card className={`model-import-result${test?.status === "failed" ? " warn" : ""}`}>
+      <div className="model-import-result-head">
+        <span className={`model-import-verdict ${test?.status ?? "pending"}`}>
+          {test?.status === "passed" ? <CheckCircle2 size={22} /> : test?.status === "failed" ? <TriangleAlert size={22} /> : <PackageCheck size={22} />}
+        </span>
+        <div>
+          <strong>{test?.status === "passed" ? "Listo: el modelo arranca y responde"
+            : test?.status === "failed" ? "Importado, pero la prueba falló"
+            : test?.status === "running" ? "Importado · probándolo ahora"
+            : "Modelo importado"}</strong>
+          <small>Disponible en Instalados como <code>{result.repo_id}</code></small>
+        </div>
+        <button type="button" className="button secondary compact" onClick={() => onShowInstalled(result.repo_id)}><HardDrive size={14} /> Ver en Instalados</button>
+      </div>
+
+      {test && ["passed", "failed"].includes(test.status) && <div className="model-import-metrics">
+        <div><span>Score MyDGX</span><b>{test.score == null ? "—" : Math.round(test.score)}<small>/100</small></b></div>
+        <div><span>Velocidad</span><b>{test.tokens_per_second == null ? "—" : test.tokens_per_second.toFixed(1)}<small> tok/s</small></b></div>
+        <div><span>Primera palabra</span><b>{test.ttft_ms == null ? "—" : (test.ttft_ms / 1000).toFixed(2)}<small> s</small></b></div>
+        <div title="Memoria unificada máxima de todo el equipo durante la prueba, incluidos otros programas"><span>Memoria pico del equipo</span><b>{test.peak_memory_bytes ? bytes(test.peak_memory_bytes) : "—"}</b>{test.estimated_memory_mb ? <small>el modelo, ~{bytes(test.estimated_memory_mb * 1024 ** 2)} con el contexto de la prueba</small> : null}</div>
+        <div><span>Respuestas válidas</span><b>{test.reliability_percent == null ? "—" : Math.round(test.reliability_percent)}<small> %</small></b></div>
+        {test.acceptance_rate != null && <div><span>Aceptación del drafter</span><b>{Math.round(test.acceptance_rate * 100)}<small> %</small></b></div>}
+      </div>}
+      {test?.status === "failed" && <div className="model-import-error">
+        <TriangleAlert size={16} />
+        <div>
+          <b>Qué ha pasado</b>
+          <span>{test.message || "El benchmark no obtuvo respuestas válidas"}</span>
+          <small>El modelo sigue instalado. Prueba a bajar el contexto en el editor de ajustes del modelo (icono de deslizadores) o revisa Logs.</small>
+        </div>
+      </div>}
+      {test && ["queued", "skipped"].includes(test.status) && <small className="model-import-note">{test.message}</small>}
+
+      <div className="model-import-launch">
+        <span><b>Archivo que usa «Encender»:</b> {result.launch.model_filename}</span>
+        <span><b>Contexto:</b> {shortContext(result.launch.context_size)}{mainFile?.native_context ? ` de ${shortContext(mainFile.native_context)} nativos` : ""}</span>
+        {result.launch.estimated_memory_mb ? <span><b>Memoria estimada:</b> {bytes(result.launch.estimated_memory_mb * 1024 ** 2)}</span> : null}
+        {result.launch.mmproj_filename && <span><b>Visión:</b> {result.launch.mmproj_filename}</span>}
+        {result.launch.spec_type && <span><b>Especulativa:</b> {SPEC_LABELS[result.launch.spec_type] ?? result.launch.spec_type} · {result.launch.draft_filename}</span>}
+        {result.manifest.settings && Object.keys(result.manifest.settings).length > 0 && <span><b>Ajustes de mydgx.json:</b> {Object.entries(result.manifest.settings).map(([key, value]) => `${key}=${String(value)}`).join(", ")}</span>}
+      </div>
+
+      <table className="model-import-files">
+        <thead><tr><th>Archivo</th><th>Uso</th><th>Arquitectura</th><th>Cuant.</th><th>Contexto</th><th>Tamaño</th></tr></thead>
+        <tbody>{result.files.map((item) => <tr key={item.name}>
+          <td>{item.name}</td>
+          <td>{roleLabel(item.role)}</td>
+          <td>{item.architecture || "—"}{item.runtime_supported === false && <TriangleAlert size={12} aria-label="llama.cpp no la reconoce" />}</td>
+          <td>{item.quantization || "—"}</td>
+          <td>{shortContext(item.native_context ?? undefined)}</td>
+          <td>{bytes(item.size)}</td>
+        </tr>)}</tbody>
+      </table>
+      {result.warnings.length > 0 && <ul className="model-import-warnings">{result.warnings.map((warning) => <li key={warning}><Info size={13} /> {warning}</li>)}</ul>}
+    </Card>}
+  </div>;
+}
+
 function ModelsView({
   models,
   overview,
@@ -2841,9 +3228,9 @@ function ModelsView({
   refresh: () => void;
   notify: (message: string, error?: boolean) => void;
 }) {
-  const [tab, setTab] = useState<"installed" | "catalog" | "ollama">(() => {
+  const [tab, setTab] = useState<"installed" | "catalog" | "ollama" | "import">(() => {
     const stored = localStorage.getItem("mydgx-models-tab");
-    return stored === "catalog" || stored === "ollama" ? stored : "installed";
+    return stored === "catalog" || stored === "ollama" || stored === "import" ? stored : "installed";
   });
   const [catalogMode, setCatalogMode] = useState<"spark" | "all" | "favorites">(() => {
     const stored = localStorage.getItem("mydgx-models-catalog");
@@ -3352,9 +3739,16 @@ function ModelsView({
         <button className={tab === "installed" ? "active" : ""} onClick={() => setTab("installed")}><HardDrive size={14} /> Instalados <b className="tab-count">{localModelCount}</b></button>
         <button className={tab === "catalog" ? "active" : ""} onClick={() => setTab("catalog")}><Sparkles size={14} /> Explorar Hugging Face</button>
         <button className={tab === "ollama" ? "active" : ""} onClick={() => setTab("ollama")}><Bot size={14} /> Descargar con Ollama{ollamaJobs.some((job) => activeJobStatuses.has(job.status)) && <b className="tab-count live">●</b>}</button>
+        <button className={tab === "import" ? "active" : ""} onClick={() => setTab("import")}><FileArchive size={14} /> Importar ZIP{jobs.some((job) => job.kind === "models.import" && activeJobStatuses.has(job.status)) && <b className="tab-count live">●</b>}</button>
       </div>
 
-      {tab === "ollama" ? (
+      {tab === "import" ? (
+        <ModelImportView
+          notify={notify}
+          onImported={refresh}
+          onShowInstalled={(repoId) => { setLocalQuery(repoId); setLocalFilter("all"); setTab("installed"); }}
+        />
+      ) : tab === "ollama" ? (
         <div className="ollama-pull-view">
           <Card className="ollama-hero">
             <div className="ollama-hero-icon"><Bot size={26} /></div>

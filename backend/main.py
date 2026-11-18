@@ -110,6 +110,7 @@ class Settings(BaseSettings):
     tts_url: str = "http://127.0.0.1:9010"
     riva_url: str = "http://127.0.0.1:8002"
     multimodal_max_upload_mb: int = 64
+    model_import_max_gb: int = 512
     device_variant_override: str = ""
     assistant_enabled: bool = True
     assistant_model: str = "llama3.2:3b"
@@ -2659,7 +2660,9 @@ def _llama_knows_architecture(binary: str, mtime_ns: int, architecture: str) -> 
     """llama.cpp keeps architecture names as C strings; one missing from the binary and its libraries is unsupported."""
     needle = b"\0" + architecture.encode() + b"\0"
     root = Path(binary).resolve()
-    candidates = [root, *root.parent.glob("libllama*.so*"), *(root.parent.parent / "lib").glob("libllama*.so*")]
+    candidates = [root]
+    for folder in (root.parent, root.parent.parent / "lib"):
+        candidates += [*folder.glob("libllama*.so*"), *folder.glob("libllama*.dylib")]
     searched = False
     for path in candidates:
         try:
@@ -4145,11 +4148,20 @@ async def lifespan(_: FastAPI):
         SELECT id,status,cancel_requested FROM jobs
         WHERE kind IN (
             'huggingface.download','huggingface.files.download',
-            'huggingface.integrity','ollama.pull','ollama.update'
+            'huggingface.integrity','ollama.pull','ollama.update','models.import'
         )
           AND status IN ('queued','running','cancelling')
         """
     )
+    with suppress(OSError):
+        for leftover in [
+            *huggingface_cache_dir().glob(".mydgx-import-*"),
+            *(Path(settings.hf_home).expanduser() / "mydgx-imports").glob("*.zip"),
+        ]:
+            if leftover.is_dir():
+                shutil.rmtree(leftover, ignore_errors=True)
+            else:
+                leftover.unlink(missing_ok=True)
     for stale in stale_download_jobs:
         cancelled = bool(stale.get("cancel_requested")) or stale["status"] == "cancelling"
         db.update_job(
@@ -8981,6 +8993,516 @@ async def preflight_hf_download(payload: HfFilesDownloadRequest) -> dict[str, An
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"No se pudo consultar Hugging Face: {type(exc).__name__}") from exc
+
+
+MODEL_IMPORT_NAMESPACE = "imported"
+MODEL_IMPORT_MANIFEST = "mydgx.json"
+MODEL_IMPORT_TEXT_FILES = {"readme.md", "license", "license.md", "license.txt", MODEL_IMPORT_MANIFEST}
+MODEL_IMPORT_IGNORED = re.compile(r"(?i)(^|/)(__MACOSX/|\._|\.DS_Store$|Thumbs\.db$)")
+MODEL_IMPORT_TASKS = {"chat": "text-generation", "vision": "image-text-to-text"}
+MODEL_IMPORT_SPACE_MARGIN = 2 * 1024 ** 3
+_model_import_lock = asyncio.Lock()
+
+
+class ModelImportError(RuntimeError):
+    """A problem with the uploaded ZIP, worded for the person who built it."""
+
+
+def model_import_staging_dir() -> Path:
+    path = Path(settings.hf_home).expanduser() / "mydgx-imports"
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return path
+
+
+def model_import_limits() -> dict[str, Any]:
+    hub = huggingface_cache_dir()
+    hub.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(hub).free
+    return {
+        "max_zip_bytes": int(settings.model_import_max_gb) * 1024 ** 3,
+        "max_model_bytes": model_download_memory_limit_bytes(),
+        "free_bytes": free,
+        # The ZIP and its extracted copy coexist until the ZIP is deleted.
+        "max_upload_now_bytes": max(0, min(int(settings.model_import_max_gb) * 1024 ** 3, (free - MODEL_IMPORT_SPACE_MARGIN) // 2)),
+        "namespace": MODEL_IMPORT_NAMESPACE,
+    }
+
+
+def model_import_slug(value: str) -> str:
+    text = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-._")
+    text = re.sub(r"-{2,}", "-", text)[:80].strip("-._")
+    return text or "modelo"
+
+
+def unique_import_repo(slug: str) -> str:
+    hub = huggingface_cache_dir()
+    candidate, index = slug, 2
+    while (hub / f"models--{MODEL_IMPORT_NAMESPACE}--{candidate}").exists():
+        candidate = f"{slug[:76]}-{index}"
+        index += 1
+    return f"{MODEL_IMPORT_NAMESPACE}/{candidate}"
+
+
+def model_import_manifest(raw: bytes) -> dict[str, Any]:
+    """Validate mydgx.json; every field is optional and `settings` takes the model editor's keys."""
+    if len(raw) > 64 * 1024:
+        raise ModelImportError(f"{MODEL_IMPORT_MANIFEST} supera 64 KB")
+    try:
+        data = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ModelImportError(f"{MODEL_IMPORT_MANIFEST} no es JSON válido: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ModelImportError(f"{MODEL_IMPORT_MANIFEST} debe ser un objeto JSON {{…}}")
+    known = {"name", "description", "license", "base_model", "tags", "task", "settings"}
+    unknown = sorted(set(data) - known)
+    manifest: dict[str, Any] = {"unknown_keys": unknown}
+    for key, limit in (("name", 80), ("license", 80), ("base_model", 200), ("description", 20_000)):
+        value = data.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or len(value) > limit:
+            raise ModelImportError(f"«{key}» debe ser texto de hasta {limit} caracteres")
+        manifest[key] = value.strip()
+    tags = data.get("tags", [])
+    if not isinstance(tags, list) or len(tags) > 20 or not all(isinstance(tag, str) and 0 < len(tag) <= 40 for tag in tags):
+        raise ModelImportError("«tags» debe ser una lista de hasta 20 textos cortos")
+    manifest["tags"] = [re.sub(r"[^\w .+-]", "", tag).strip() for tag in tags if tag.strip()]
+    task = data.get("task", "chat")
+    if task not in MODEL_IMPORT_TASKS:
+        raise ModelImportError(f"«task» debe ser {' o '.join(repr(item) for item in MODEL_IMPORT_TASKS)}")
+    manifest["task"] = task
+    raw_settings = data.get("settings", {})
+    if not isinstance(raw_settings, dict):
+        raise ModelImportError("«settings» debe ser un objeto JSON")
+    allowed = set(ModelSettingsPayload.model_fields) - {"model_id"}
+    if extra := sorted(set(raw_settings) - allowed):
+        raise ModelImportError(f"«settings» no admite: {', '.join(extra)}")
+    try:
+        parsed = ModelSettingsPayload(model_id=f"{MODEL_IMPORT_NAMESPACE}/check", **raw_settings)
+    except Exception as exc:
+        first = getattr(exc, "errors", lambda: [{}])()[0]
+        location = ".".join(str(item) for item in first.get("loc", []))
+        raise ModelImportError(f"«settings.{location}»: {first.get('msg', 'valor no válido')}") from exc
+    manifest["settings"] = parsed.model_dump(exclude={"model_id"}, exclude_none=True)
+    return manifest
+
+
+def model_import_entries(archive: Any) -> tuple[list[tuple[Any, str]], list[str]]:
+    """ZIP members to extract with their safe relative paths, plus the names that are ignored."""
+    members: list[tuple[Any, str]] = []
+    ignored: list[str] = []
+    seen: set[str] = set()
+    for info in archive.infolist():
+        name = info.filename
+        if info.is_dir() or MODEL_IMPORT_IGNORED.search(name):
+            continue
+        if info.flag_bits & 0x1:
+            raise ModelImportError("El ZIP está cifrado con contraseña; créalo sin contraseña")
+        if (info.external_attr >> 16) & 0o170000 == 0o120000:
+            raise ModelImportError(f"{name}: el ZIP contiene enlaces simbólicos; comprime los archivos reales")
+        parts = name.split("/")
+        if (
+            "\\" in name or "\x00" in name or name.startswith("/") or re.match(r"^[A-Za-z]:", name)
+            or any(part in {"", ".", ".."} for part in parts) or len(name) > 300 or len(parts) > 4
+        ):
+            raise ModelImportError(f"Ruta no permitida dentro del ZIP: {name[:120]}")
+        members.append((info, name))
+    if not members:
+        raise ModelImportError("El ZIP está vacío")
+    tops = {name.split("/", 1)[0] for _, name in members}
+    if len(tops) == 1 and all("/" in name for _, name in members):
+        prefix = f"{tops.pop()}/"
+        members = [(info, name[len(prefix):]) for info, name in members]
+    kept: list[tuple[Any, str]] = []
+    for info, name in members:
+        lower = name.casefold()
+        if lower in seen:
+            raise ModelImportError(f"{name} aparece dos veces en el ZIP")
+        seen.add(lower)
+        if lower.endswith(".gguf") or ("/" not in name and lower in MODEL_IMPORT_TEXT_FILES):
+            kept.append((info, name))
+        else:
+            ignored.append(name)
+    if not any(name.casefold().endswith(".gguf") for _, name in kept):
+        raise ModelImportError("El ZIP no contiene ningún archivo .gguf")
+    for info, name in kept:
+        if info.file_size > 100 * 1024 ** 2 and info.compress_size and info.file_size / info.compress_size > 50:
+            raise ModelImportError(f"{name}: compresión anómala; vuelve a crear el ZIP con «zip -0»")
+    return kept, ignored
+
+
+def extract_model_import(job_id: str, zip_path: Path, display_name: str) -> dict[str, Any]:
+    """Validate the ZIP and place it in the Hugging Face cache as `imported/<name>`; return what was found."""
+    import zipfile
+
+    stage: Path | None = None
+    final: Path | None = None
+    try:
+        try:
+            archive = zipfile.ZipFile(zip_path)
+        except zipfile.BadZipFile as exc:
+            raise ModelImportError("El archivo no es un ZIP válido o la subida quedó incompleta") from exc
+        with archive:
+            members, ignored = model_import_entries(archive)
+            manifest: dict[str, Any] = {"tags": [], "task": "chat", "settings": {}, "unknown_keys": []}
+            manifest_entry = next((info for info, name in members if name.casefold() == MODEL_IMPORT_MANIFEST), None)
+            if manifest_entry is not None:
+                manifest = model_import_manifest(archive.read(manifest_entry))
+            total = sum(info.file_size for info, _ in members)
+            limits = model_import_limits()
+            if total + MODEL_IMPORT_SPACE_MARGIN > limits["free_bytes"]:
+                raise ModelImportError(
+                    f"Hacen falta {format_download_size(total)} libres para extraer el modelo y quedan "
+                    f"{format_download_size(limits['free_bytes'])}"
+                )
+            repo_id = unique_import_repo(model_import_slug(manifest.get("name") or Path(display_name).stem))
+            commit = hashlib.sha256(f"{repo_id}:{job_id}".encode()).hexdigest()[:40]
+            hub = huggingface_cache_dir()
+            stage = hub / f".mydgx-import-{job_id}"
+            snapshot = stage / "snapshots" / commit
+            snapshot.mkdir(parents=True, mode=0o755)
+            (stage / "refs").mkdir()
+            (stage / "refs" / "main").write_text(commit, encoding="utf-8")
+            written = 0
+            last_update = 0.0
+            for info, name in members:
+                target = snapshot / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                copied = 0
+                with archive.open(info) as source, target.open("wb") as destination:
+                    while chunk := source.read(8 * 1024 * 1024):
+                        copied += len(chunk)
+                        if copied > info.file_size:
+                            raise ModelImportError(f"{name}: el contenido no coincide con el tamaño declarado")
+                        destination.write(chunk)
+                        written += len(chunk)
+                        if time.monotonic() - last_update > 1:
+                            last_update = time.monotonic()
+                            if db.job_cancel_requested(job_id):
+                                raise ModelImportError("Importación cancelada")
+                            db.update_job(
+                                job_id, "running", 45 + written / max(total, 1) * 30,
+                                f"Paso 3/5 · Extrayendo {format_download_size(written)} de {format_download_size(total)}",
+                            )
+            invalid = []
+            for _, name in members:
+                if not name.casefold().endswith(".gguf"):
+                    continue
+                with (snapshot / name).open("rb") as handle:
+                    if handle.read(4) != b"GGUF":
+                        invalid.append(name)
+                        continue
+                    handle.seek(0)
+                    try:
+                        parse_gguf_header(handle)
+                    except (ValueError, struct.error):
+                        invalid.append(name)
+            if invalid:
+                raise ModelImportError(f"No son GGUF válidos (¿archivo dañado o incompleto?): {', '.join(invalid[:5])}")
+            final = hub / f"models--{repo_id.replace('/', '--')}"
+            stage.rename(final)
+            stage = None
+        db.update_job(job_id, "running", 77, "Paso 4/5 · Analizando el modelo")
+        return analyze_model_import(repo_id, commit, final, manifest, ignored)
+    except BaseException:
+        if final is not None and final.exists():
+            shutil.rmtree(final, ignore_errors=True)
+        raise
+    finally:
+        if stage is not None:
+            shutil.rmtree(stage, ignore_errors=True)
+
+
+def analyze_model_import(
+    repo_id: str, commit: str, directory: Path, manifest: dict[str, Any], ignored: list[str],
+) -> dict[str, Any]:
+    snapshot = directory / "snapshots" / commit
+    siblings = [
+        SimpleNamespace(rfilename=str(path.relative_to(snapshot)), size=path.stat().st_size)
+        for path in sorted(snapshot.rglob("*")) if path.is_file()
+    ]
+    gguf_names = [item.rfilename for item in siblings if item.rfilename.casefold().endswith(".gguf")]
+    incomplete = [group for group in hf_gguf_groups(siblings) if not group["complete"]]
+    main_groups = local_main_gguf_groups(repo_id, siblings)
+    if not main_groups:
+        detail = (
+            f"; a «{Path(incomplete[0]['name']).name}» le faltan partes ({len(incomplete[0]['files'])} de {incomplete[0]['expected_shards']})"
+            if incomplete else ""
+        )
+        raise ModelImportError(f"No hay un modelo principal completo{detail}. Incluye todos los archivos -0000N-of-0000M.gguf")
+    main_metadata = local_gguf_metadata(repo_id, main_groups[0]["files"][0])
+    for group in main_groups:
+        ensure_model_download_size(int(group.get("resident_size", group["size"])), Path(str(group["name"])).name)
+    files = []
+    warnings = [f"Ignorado (no se usa): {name}" for name in ignored[:20]]
+    for name in gguf_names:
+        metadata = local_gguf_metadata(repo_id, name)
+        role = gguf_file_role(name, metadata, main_metadata)
+        architecture = str(metadata.get("general.architecture") or "")
+        files.append({
+            "name": name,
+            "size": next(item.size for item in siblings if item.rfilename == name),
+            "role": role,
+            "architecture": architecture,
+            "quantization": GGUF_FILE_TYPES.get(metadata.get("general.file_type")) or (
+                match.group(1).upper() if (match := QUANTIZATION_PATTERN.search(name)) else ""
+            ),
+            "native_context": integer_value(gguf_arch_value(metadata, "context_length")),
+            "runtime_supported": llama_knows_architecture(architecture) if architecture and role == "main" else None,
+        })
+        if role == "main" and architecture and llama_knows_architecture(architecture) is False:
+            warnings.append(f"{name}: el llama.cpp instalado no reconoce la arquitectura «{architecture}»")
+    available = {item.rfilename for item in siblings}
+    for key in ("model_filename", "mmproj_filename", "draft_filename"):
+        value = manifest["settings"].get(key)
+        if value and value not in available:
+            raise ModelImportError(f"«settings.{key}» indica {value}, que no está en el ZIP")
+    if manifest["task"] == "vision" and not hf_mmproj_files(siblings):
+        warnings.append("task es «vision» pero falta el proyector mmproj-*.gguf: se usará como modelo de texto")
+    if manifest["unknown_keys"]:
+        warnings.append(f"{MODEL_IMPORT_MANIFEST}: claves desconocidas ignoradas: {', '.join(manifest['unknown_keys'])}")
+    readme = snapshot / "README.md"
+    if not readme.is_file():
+        front = [
+            f"pipeline_tag: {MODEL_IMPORT_TASKS[manifest['task']]}",
+            *( [f"license: {json.dumps(manifest['license'])}"] if manifest.get("license") else [] ),
+            *( [f"base_model: {json.dumps(manifest['base_model'])}"] if manifest.get("base_model") else [] ),
+            "tags:", "- gguf", "- mydgx-import", *(f"- {json.dumps(tag)}" for tag in manifest["tags"]),
+        ]
+        body = manifest.get("description") or (
+            "Modelo importado en MyDGX desde un ZIP. Añade un README.md o una «description» "
+            f"en {MODEL_IMPORT_MANIFEST} para describirlo."
+        )
+        readme.write_text("---\n" + "\n".join(front) + f"\n---\n\n# {repo_id.split('/', 1)[1]}\n\n{body}\n", encoding="utf-8")
+    description = normalize_model_description(readme.read_text(encoding="utf-8", errors="replace"))
+    db.execute(
+        """
+        INSERT INTO model_descriptions(source,source_id,revision,description,metadata_json,fetched_at)
+        VALUES('huggingface',?,?,?,?,?)
+        ON CONFLICT(source,source_id) DO UPDATE SET revision=excluded.revision,
+            description=excluded.description,metadata_json=excluded.metadata_json,fetched_at=excluded.fetched_at
+        """,
+        (
+            repo_id, commit, description,
+            json.dumps({
+                "_mydgx_description_source": "import",
+                **{key: manifest[key] for key in ("license", "base_model") if manifest.get(key)},
+                "tags": manifest["tags"],
+            }, ensure_ascii=False),
+            utc_now(),
+        ),
+    )
+    if manifest["settings"]:
+        overrides = all_model_overrides()
+        overrides[f"huggingface:{repo_id}".casefold()] = manifest["settings"]
+        db.execute(
+            """
+            INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+            """,
+            (MODEL_OVERRIDES_KEY, json.dumps(overrides, sort_keys=True), utc_now()),
+        )
+    _quick_config_cache.pop(f"huggingface:{repo_id}".casefold(), None)
+    launch = with_launch_context(persistent_model_config("huggingface", repo_id))
+    requested_context = int(manifest["settings"].get("context_size") or 0)
+    if requested_context and int(launch.get("context_size") or 0) != requested_context:
+        warnings.append(
+            f"settings.context_size={requested_context}: Encender usará {launch.get('context_size')} "
+            "(el mínimo que necesitan los agentes o el máximo del modelo)"
+        )
+    return {
+        "repo_id": repo_id,
+        "revision": commit,
+        "files": files,
+        "warnings": warnings,
+        "manifest": {key: value for key, value in manifest.items() if key != "unknown_keys"},
+        "launch": {
+            "model_filename": launch.get("model_filename"),
+            "mmproj_filename": launch.get("mmproj_filename") or "",
+            "context_size": launch.get("context_size"),
+            "estimated_memory_mb": launch.get("estimated_memory_mb"),
+            "spec_type": launch.get("spec_type") or "",
+            "draft_filename": Path(str(launch.get("draft_filename") or "")).name,
+        },
+        "test": {"status": "pending"},
+    }
+
+
+def save_model_import_result(job_id: str, result: dict[str, Any]) -> None:
+    db.execute(
+        "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
+        (job_id, json.dumps(result, ensure_ascii=False, default=str), utc_now()),
+    )
+
+
+async def model_import_smoke_test(job_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Launch the imported model the way Encender would and run a one-repetition benchmark."""
+    repo_id = result["repo_id"]
+    artifact = next(
+        (
+            item for item in await asyncio.to_thread(local_gguf_benchmark_artifacts)
+            if item["repo_id"] == repo_id and item["files"][0] == result["launch"]["model_filename"]
+        ),
+        None,
+    )
+    if artifact is None:
+        return {"status": "skipped", "message": "No se encontró el archivo que usaría Encender"}
+    target = f"gguf:{artifact['key']}"
+    if db.rows("SELECT id FROM jobs WHERE kind='benchmark.run' AND status IN ('queued','running','cancelling') LIMIT 1"):
+        queued = await asyncio.to_thread(enqueue_automatic_benchmark, target, "model.import")
+        return {
+            "status": "queued" if queued else "skipped",
+            "message": "Había otro benchmark en marcha; la prueba se ejecutará después, en Benchmarks",
+        }
+    protocol = VISION_BENCHMARK_PROTOCOL_ID if result["launch"]["mmproj_filename"] else BENCHMARK_PROTOCOL_ID
+    run_id = str(uuid.uuid4())
+    benchmark_job = db.create_job("benchmark.run", target)
+    result["test"] = {"status": "running", "job_id": benchmark_job, "run_id": run_id}
+    save_model_import_result(job_id, result)
+    db.update_job(job_id, "running", 82, "Paso 5/5 · Arrancando el modelo y ejecutando el benchmark")
+    outcome = await run_benchmark_job(
+        benchmark_job, run_id, BenchmarkRunRequest(target=target, protocol_id=protocol, repetitions=1),
+        parent_job_id=job_id,
+    )
+    rows = db.rows("SELECT status,valid,score,invalid_reason,summary_json,runtime_json FROM benchmark_runs WHERE id=?", (run_id,))
+    job_rows = db.rows("SELECT message FROM jobs WHERE id=?", (benchmark_job,))
+    if not rows:
+        return {
+            "status": "failed", "job_id": benchmark_job, "run_id": run_id,
+            "message": (job_rows[0]["message"] if job_rows else "") or f"El benchmark terminó como {outcome}",
+        }
+    run = rows[0]
+    summary = json.loads(run["summary_json"] or "{}")
+    runtime = json.loads(run["runtime_json"] or "{}")
+    speculative = summary.get("speculative") or {}
+    return {
+        "status": "passed" if run["status"] == "completed" and run["valid"] else "failed",
+        "job_id": benchmark_job,
+        "run_id": run_id,
+        "message": run["invalid_reason"] or (job_rows[0]["message"] if job_rows else ""),
+        "score": run["score"],
+        "tokens_per_second": (summary.get("output_tokens_per_second") or {}).get("mean"),
+        "ttft_ms": (summary.get("ttft_ms") or {}).get("p50"),
+        "reliability_percent": summary.get("reliability_percent"),
+        "peak_memory_bytes": (summary.get("resources") or {}).get("max_memory_bytes"),
+        "estimated_memory_mb": runtime.get("estimated_memory_mb"),
+        "acceptance_rate": speculative.get("acceptance_rate"),
+    }
+
+
+async def process_model_import(job_id: str, zip_path: Path, display_name: str, run_test: bool) -> None:
+    result: dict[str, Any] | None = None
+    try:
+        db.update_job(job_id, "running", 41, "Paso 2/5 · Comprobando el contenido del ZIP")
+        result = await asyncio.to_thread(extract_model_import, job_id, zip_path, display_name)
+        await asyncio.to_thread(zip_path.unlink, True)
+        save_model_import_result(job_id, result)
+        db.audit("model.import", result["repo_id"], True, f"{len(result['files'])} GGUF")
+        if not run_test:
+            result["test"] = {"status": "skipped", "message": "Prueba desactivada al subir"}
+        elif not settings.benchmark_enabled:
+            result["test"] = {"status": "skipped", "message": "Los benchmarks están desactivados en este equipo"}
+        else:
+            try:
+                result["test"] = await model_import_smoke_test(job_id, result)
+            except Exception as exc:
+                result["test"] = {**result.get("test", {}), "status": "failed", "message": redact_log_text(str(exc), 300)}
+        save_model_import_result(job_id, result)
+        test = result["test"]["status"]
+        db.update_job(job_id, "completed", 100, {
+            "passed": "Importado y probado: el modelo arranca y responde",
+            "failed": "Importado, pero la prueba falló: revisa el resultado",
+            "queued": "Importado · prueba en cola en Benchmarks",
+        }.get(test, "Importado sin prueba"))
+    except ModelImportError as exc:
+        db.update_job(job_id, "cancelled" if "cancelada" in str(exc) else "failed", 0, str(exc))
+        db.audit("model.import", display_name, False, redact_log_text(str(exc), 200))
+    except ModelDownloadValidationError as exc:
+        db.update_job(job_id, "failed", 0, exc.detail)
+    except Exception as exc:
+        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: importación no completada")
+        db.log("error", "models", "model.import.failed", redact_log_text(str(exc), 500), entity_type="job", entity_id=job_id)
+    finally:
+        with suppress(OSError):
+            zip_path.unlink(missing_ok=True)
+
+
+@app.get("/api/models/import/limits", dependencies=secure)
+async def model_import_limits_route() -> dict[str, Any]:
+    return await asyncio.to_thread(model_import_limits)
+
+
+@app.post("/api/models/import/upload", dependencies=secure)
+async def upload_model_import(
+    request: Request,
+    background: BackgroundTasks,
+    filename: str = Query(min_length=1, max_length=200),
+    run_test: bool = Query(default=True),
+) -> dict[str, str]:
+    """Stream a ZIP to disk (raw request body), then validate, extract and optionally test it in the background."""
+    if not filename.casefold().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Sube un archivo .zip")
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared <= 0:
+        raise HTTPException(status_code=411, detail="Falta el tamaño de la subida (Content-Length)")
+    limits = await asyncio.to_thread(model_import_limits)
+    if declared > limits["max_upload_now_bytes"]:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"El ZIP ocupa {format_download_size(declared)}; ahora caben hasta "
+                f"{format_download_size(limits['max_upload_now_bytes'])} (se necesita el doble de espacio libre al extraer)"
+            ),
+        )
+    if _model_import_lock.locked() or db.rows(
+        "SELECT id FROM jobs WHERE kind='models.import' AND status IN ('queued','running','cancelling') LIMIT 1"
+    ):
+        raise HTTPException(status_code=409, detail="Ya hay una importación en curso")
+    display = Path(filename).name
+    async with _model_import_lock:
+        job_id = db.create_job("models.import", display)
+        zip_path = model_import_staging_dir() / f"{job_id}.zip"
+        received = 0
+        pending: list[bytes] = []
+        pending_size = 0
+        last_update = 0.0
+        try:
+            descriptor = os.open(zip_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
+                async for chunk in request.stream():
+                    received += len(chunk)
+                    if received > declared:
+                        raise HTTPException(status_code=400, detail="La subida es mayor que el tamaño declarado")
+                    pending.append(chunk)
+                    pending_size += len(chunk)
+                    if pending_size >= 8 * 1024 * 1024:
+                        await asyncio.to_thread(handle.write, b"".join(pending))
+                        pending, pending_size = [], 0
+                    if time.monotonic() - last_update > 1:
+                        last_update = time.monotonic()
+                        db.update_job(
+                            job_id, "running", received / declared * 40,
+                            f"Paso 1/5 · Subiendo {format_download_size(received)} de {format_download_size(declared)}",
+                        )
+                if pending:
+                    await asyncio.to_thread(handle.write, b"".join(pending))
+            if received != declared:
+                raise HTTPException(status_code=400, detail="La subida se cortó antes de terminar")
+        except BaseException as exc:
+            with suppress(OSError):
+                zip_path.unlink(missing_ok=True)
+            message = exc.detail if isinstance(exc, HTTPException) else "La subida se interrumpió"
+            db.update_job(job_id, "failed", 0, str(message))
+            if isinstance(exc, HTTPException):
+                raise
+            raise HTTPException(status_code=400, detail=message) from exc
+    db.update_job(job_id, "running", 40, "Subida completa")
+    background.add_task(process_model_import, job_id, zip_path, display, run_test)
+    return {"job_id": job_id}
 
 
 async def verify_hf_integrity(job_id: str, repo_id: str) -> None:
@@ -15371,6 +15893,7 @@ async def run_benchmark_job(
     telemetry_stop = asyncio.Event()
     telemetry_task: asyncio.Task[None] | None = None
     run_created = False
+    gguf_runtime_key = ""
     outcome = "failed"
     async with _benchmark_lock:
         _benchmark_active_job_id = job_id
@@ -15434,6 +15957,12 @@ async def run_benchmark_job(
                     )
                     outcome = "duplicate"
                     return outcome
+            if request.target.startswith("gguf:") and suite_progress is None:
+                db.update_job(job_id, "running", 3, f"Arrancando {model['name']}")
+                gguf_runtime_key = f"benchmark-run:{job_id}"
+                await launch_profile_model(
+                    BENCHMARK_GGUF_PROFILE, model, int(model["_benchmark_context"]), gguf_runtime_key,
+                )
             runtime["isolation"] = {
                 "strict": request.strict_isolation,
                 "automatic": automatic,
@@ -15631,6 +16160,8 @@ async def run_benchmark_job(
             telemetry_stop.set()
             if telemetry_task:
                 await telemetry_task
+            if gguf_runtime_key:
+                await stop_model_process(gguf_runtime_key)
             set_benchmark_gate(None)
             _benchmark_active_job_id = None
             _job_cancel_events.pop(job_id, None)
@@ -18858,6 +19389,7 @@ async def job(job_id: str) -> dict[str, Any]:
 CANCELLABLE_JOB_KINDS = frozenset({
     "ollama.pull", "ollama.update", "huggingface.files.download",
     "huggingface.integrity", "benchmark.run", "benchmark.suite", "profile.prepare-start",
+    "models.import",
 })
 
 

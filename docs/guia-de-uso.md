@@ -149,6 +149,30 @@ Dos modos:
   compara el pico de memoria real con la estimada y muestra la tasa de
   aceptación del drafter.
 - Descarga de Ollama por nombre exacto (`qwen3:32b`, `gpt-oss:120b`...).
+- **Importar ZIP**: para modelos GGUF que ya tienes en tu ordenador (versiones
+  propias, modelos que no están en Hugging Face o equipos sin internet). La
+  pestaña explica cada paso:
+  1. Reúne en una carpeta el `.gguf` (todas las partes si viene en
+     `-00001-of-0000N`). Opcionalmente añade el `mmproj-….gguf` para visión, un
+     drafter (`mtp-`, `dspark-`, `eagle3-`…), un `README.md` y un `LICENSE`.
+     Safetensors y otros archivos se ignoran.
+  2. Opcional: añade un `mydgx.json` con `name`, `description`, `license`,
+     `base_model`, `tags`, `task` (`chat` o `vision`) y `settings`. Los
+     `settings` son los mismos campos que el editor de ajustes del modelo
+     (`context_size`, `temperature`, `model_filename`, `spec_type`…). La pestaña
+     ofrece una plantilla para descargar.
+  3. Comprime la carpeta. Vale con Finder o con `zip -0 -r ../mi-modelo.zip .`
+     (sin recomprimir el GGUF), pero sin contraseña ni enlaces simbólicos.
+  4. Arrástralo a la pestaña. Con **Probar al terminar**, MyDGX arranca el
+     modelo como *Encender* y le pasa un benchmark corto.
+
+  El progreso muestra los cinco pasos: subir, comprobar, extraer, analizar y
+  probar. Al final aparece un veredicto con el Score, la velocidad, el tiempo
+  hasta la primera palabra, la memoria pico del equipo frente a la estimada del
+  modelo y las respuestas válidas, además de
+  la tabla de archivos y los avisos. El modelo queda en **Instalados** como
+  `imported/<nombre>`. Si la prueba falla, sigue instalado y se puede ajustar.
+  Si hay otro benchmark en marcha, la prueba se encola en **Benchmarks**.
 - Un modelo cargado por un perfil no se puede borrar: detén antes ese perfil o
   apágalo.
 

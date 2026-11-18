@@ -1569,6 +1569,136 @@ def write_test_gguf(
     path.write_bytes(b"GGUF" + struct.pack("<IQQ", 3, 0, len(entries)) + b"".join(entries))
 
 
+class ModelImportTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.original_db = db.path
+        self.original_hf_home = main_module.settings.hf_home
+        db.path = self.root / "import.db"
+        db.initialize()
+        main_module.settings.hf_home = str(self.root / "hf")
+        self.arch = patch("backend.main.llama_knows_architecture", return_value=True)
+        self.arch.start()
+
+    def tearDown(self) -> None:
+        self.arch.stop()
+        main_module.settings.hf_home = self.original_hf_home
+        db.path = self.original_db
+        self.directory.cleanup()
+
+    def make_zip(self, entries: dict[str, bytes], name: str = "Mi Modelo.zip") -> Path:
+        import zipfile
+
+        path = self.root / name
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
+            for member, data in entries.items():
+                archive.writestr(member, data)
+        return path
+
+    def gguf(self, context: int = 32_768, architecture: str = "llama") -> bytes:
+        path = self.root / f"tmp-{context}-{architecture}.gguf"
+        write_test_gguf(path, context, architecture, extra={"block_count": 4})
+        return path.read_bytes()
+
+    def run_import(self, zip_path: Path) -> dict[str, Any]:
+        job_id = db.create_job("models.import", zip_path.name)
+        return main_module.extract_model_import(job_id, zip_path, zip_path.name)
+
+    def test_folder_zip_becomes_a_cached_model_with_manifest_settings(self) -> None:
+        manifest = {
+            "name": "Mi Modelo Ñandú", "description": "Un modelo de prueba", "license": "apache-2.0",
+            "tags": ["español"], "settings": {"context_size": 16384, "temperature": 0.4},
+        }
+        zip_path = self.make_zip({
+            "carpeta/Mi-Modelo-Q4_K_M.gguf": self.gguf(),
+            "carpeta/mydgx.json": json.dumps(manifest).encode(),
+            "carpeta/notas.txt": b"no se usa",
+            "__MACOSX/carpeta/._Mi-Modelo-Q4_K_M.gguf": b"resource fork",
+        })
+        result = self.run_import(zip_path)
+        self.assertEqual(result["repo_id"], "imported/Mi-Modelo-Nandu")
+        self.assertEqual([item["role"] for item in result["files"]], ["main"])
+        self.assertEqual(result["launch"]["model_filename"], "Mi-Modelo-Q4_K_M.gguf")
+        launch_context = result["launch"]["context_size"]
+        self.assertEqual(launch_context != 16384, any("settings.context_size=16384" in item for item in result["warnings"]))
+        self.assertIn("Ignorado (no se usa): notas.txt", result["warnings"])
+        listed = {item["repo_id"]: item for item in main_module.local_hf_models()}
+        self.assertIn("imported/Mi-Modelo-Nandu", listed)
+        self.assertEqual(
+            main_module.model_overrides("huggingface:imported/Mi-Modelo-Nandu"),
+            {"context_size": 16384, "temperature": 0.4},
+        )
+        self.assertIn("Un modelo de prueba", main_module.saved_model_description("imported/Mi-Modelo-Nandu")["description"])
+        artifacts = [item for item in main_module.local_gguf_benchmark_artifacts() if item["repo_id"] == result["repo_id"]]
+        self.assertEqual(len(artifacts), 1)
+        again = self.run_import(self.make_zip({"Mi-Modelo-Q4_K_M.gguf": self.gguf()}, "Mi Modelo Ñandú.zip"))
+        self.assertEqual(again["repo_id"], "imported/Mi-Modelo-Nandu-2")
+        self.assertEqual(list((self.root / "hf" / "hub").glob(".mydgx-import-*")), [])
+
+    def test_smoke_test_benchmark_is_not_blocked_by_its_own_import_job(self) -> None:
+        zip_path = self.make_zip({"Modelo-Q8_0.gguf": self.gguf()})
+        job_id = db.create_job("models.import", zip_path.name)
+        result = main_module.extract_model_import(job_id, zip_path, zip_path.name)
+        calls: list[dict[str, Any]] = []
+
+        async def fake_run(benchmark_job: str, run_id: str, request: Any, **kwargs: Any) -> str:
+            calls.append(kwargs)
+            await main_module.assert_benchmark_isolation(
+                benchmark_job, {}, True, parent_job_id=kwargs.get("parent_job_id"),
+            )
+            return "completed"
+
+        with patch("backend.main.run_benchmark_job", side_effect=fake_run), \
+                patch("backend.main.benchmark_runtime_busy", AsyncMock(return_value="")), \
+                patch("backend.main.benchmark_ollama_residents", AsyncMock(return_value=[])):
+            asyncio.run(main_module.model_import_smoke_test(job_id, result))
+        self.assertEqual(calls, [{"parent_job_id": job_id}])
+
+    def test_unsafe_or_incomplete_zips_are_rejected_without_leftovers(self) -> None:
+        cases = {
+            "traversal": ({"../fuera.gguf": self.gguf()}, "Ruta no permitida"),
+            "no_gguf": ({"README.md": b"# hola"}, "ningún archivo .gguf"),
+            "not_gguf": ({"Model-Q4_K_M.gguf": b"no soy un gguf" * 10}, "No son GGUF válidos"),
+            "missing_shard": ({"Model-Q4_K_M-00001-of-00002.gguf": self.gguf()}, "faltan partes"),
+            "bad_manifest": ({"Model.gguf": self.gguf(), "mydgx.json": b"{\"settings\": {\"context_size\": 10}}"}, "settings.context_size"),
+            "missing_file": ({"Model.gguf": self.gguf(), "mydgx.json": b"{\"settings\": {\"mmproj_filename\": \"mmproj.gguf\"}}"}, "no está en el ZIP"),
+        }
+        for label, (entries, message) in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(main_module.ModelImportError) as raised:
+                    self.run_import(self.make_zip(entries, f"{label}.zip"))
+                self.assertIn(message, str(raised.exception))
+        hub = self.root / "hf" / "hub"
+        self.assertEqual([item.name for item in hub.iterdir()] if hub.exists() else [], [])
+
+    def test_symlinks_and_encrypted_members_are_refused(self) -> None:
+        import zipfile
+
+        path = self.root / "link.zip"
+        with zipfile.ZipFile(path, "w") as archive:
+            info = zipfile.ZipInfo("Model.gguf")
+            info.external_attr = (0o120777 << 16)
+            archive.writestr(info, "/etc/passwd")
+        with self.assertRaisesRegex(main_module.ModelImportError, "enlaces simbólicos"):
+            self.run_import(path)
+
+    def test_upload_streams_the_zip_and_rejects_what_does_not_fit(self) -> None:
+        client = TestClient(main_module.app)
+        body = self.make_zip({"Tiny-Q8_0.gguf": self.gguf()}).read_bytes()
+        with patch("backend.main.process_model_import", new=AsyncMock()) as process:
+            response = client.post("/api/models/import/upload?filename=tiny.zip&run_test=false", content=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        job_id = response.json()["job_id"]
+        staged = Path(process.await_args.args[1])
+        self.assertEqual(staged.read_bytes(), body)
+        self.assertEqual(staged.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(db.rows("SELECT kind FROM jobs WHERE id=?", (job_id,))[0]["kind"], "models.import")
+        self.assertEqual(client.post("/api/models/import/upload?filename=x.tar", content=b"x").status_code, 400)
+        with patch("backend.main.model_import_limits", return_value={"max_upload_now_bytes": 10}):
+            self.assertEqual(client.post("/api/models/import/upload?filename=big.zip", content=body).status_code, 413)
+
+
 class SpeculativeDecodingTests(unittest.TestCase):
     def test_file_role_uses_name_header_and_tensor_count(self) -> None:
         main = {"general.architecture": "qwen35moe", "split.tensors.count": 800}
@@ -1959,7 +2089,8 @@ class QuickContextTests(unittest.TestCase):
                 "context_size": 8192, "estimated_memory_mb": 1, "cache_type_k": "q8_0", "cache_type_v": "q8_0",
             }
             with patch.object(main_module.settings, "hf_home", str(home)), \
-                    patch.object(main_module, "model_weight_mb", return_value=20_000):
+                    patch.object(main_module, "model_weight_mb", return_value=20_000), \
+                    patch("backend.main.psutil.virtual_memory", return_value=SimpleNamespace(total=128 * 1024**3)):
                 config = main_module.quick_model_config(config, "author/Model-GGUF")
         self.assertEqual(config["context_size"], 147_456)
         self.assertEqual(config["estimated_memory_mb"], math.ceil(20_000 * 1.12) + 1024 + 1593)
@@ -3061,6 +3192,45 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(len(samples), 6)
             self.assertEqual(sum(item["phase"] == "warmup" for item in samples), 3)
         db.path = original_path
+
+    def test_standalone_gguf_benchmark_starts_and_stops_its_own_server(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            db.path = Path(directory) / "gguf-run.db"
+            db.initialize()
+            job_id = db.create_job("benchmark.run", "gguf:abc")
+            model = {
+                "id": "gguf-abc", "name": "author/Model · Q8_0", "engine": "llama.cpp",
+                "model_ref": "benchmark-gguf-abc", "model_alias": "benchmark-gguf-abc", "task": "chat",
+                "port": main_module.BENCHMARK_GGUF_PORT, "context_size": 8192,
+                "_benchmark_target": "gguf:abc", "_benchmark_context": 8192,
+            }
+            events: list[str] = []
+
+            async def launch(profile: dict[str, Any], launched: dict[str, Any], context: int, key: str) -> None:
+                events.append(f"launch {profile['id']} {context} {key}")
+
+            async def stop(key: str) -> None:
+                events.append(f"stop {key}")
+
+            runtime = {"engine": "llama.cpp", "model_ref": "benchmark-gguf-abc"}
+            with (
+                patch("backend.main.resolve_benchmark_target", new=AsyncMock(return_value=model)),
+                patch("backend.main.assert_benchmark_isolation", new=AsyncMock()),
+                patch("backend.main.register_benchmark_model", new=AsyncMock(return_value="bm-test")),
+                patch("backend.main.register_benchmark_environment", return_value="env-test"),
+                patch("backend.main.benchmark_runtime_config", return_value=(runtime, "h" * 64)),
+                patch("backend.main.benchmark_co_resident_models", return_value=[]),
+                patch("backend.main.launch_profile_model", side_effect=launch),
+                patch("backend.main.stop_model_process", side_effect=stop),
+                patch("backend.main.collect_benchmark_telemetry", new=AsyncMock()),
+            ):
+                asyncio.run(main_module.run_benchmark_job(
+                    job_id, "run-gguf", main_module.BenchmarkRunRequest(target="gguf:abc", repetitions=1),
+                ))
+        db.path = original_path
+        key = f"benchmark-run:{job_id}"
+        self.assertEqual(events, [f"launch benchmark-gguf 8192 {key}", f"stop {key}"])
 
     def test_benchmark_export_import_round_trip_and_checksum(self) -> None:
         original_path = db.path

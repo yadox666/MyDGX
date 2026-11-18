@@ -73,6 +73,7 @@ ejecuta al arrancar y después aproximadamente cada hora.
 | `HF_HOME` | `~/.cache/huggingface` | Caché de modelos. |
 | `HF_TOKEN` | vacío | **Secreto.** Para repositorios privados o con acceso restringido y mayor cuota. |
 | `HF_DOWNLOAD_WORKERS` | `4` | Descargas paralelas de archivos. |
+| `MODEL_IMPORT_MAX_GB` | `512` | Tamaño máximo de un ZIP en **Modelos → Importar ZIP**. Además, el ZIP y su extracción deben caber en el disco con 2 GiB de margen. |
 
 ## llama.cpp
 

@@ -60,9 +60,9 @@ enum OEMDataError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidVolume:
-            return "Selecciona un volumen montado, escribible y etiquetado exactamente OEMDATA."
+            return String(localized: "Selecciona un volumen montado, escribible y etiquetado exactamente OEMDATA.")
         case let .unsafeExistingFile(name):
-            return "No se sobrescribirá \(name) porque no es un archivo regular seguro."
+            return String(localized: "No se sobrescribirá \(name) porque no es un archivo regular seguro.")
         }
     }
 }

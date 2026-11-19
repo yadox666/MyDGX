@@ -1,0 +1,1 @@
+"NSLocalNetworkUsageDescription" = "MyDGX necesita acceder a tu red local para encontrar tu DGX Spark, conectarse a él por SSH y abrir el túnel seguro hacia el Dashboard.";

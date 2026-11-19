@@ -31,7 +31,8 @@ fi
 
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$ROOT_DIR/Resources/NVIDIAIcon.png" "$APP_DIR/Contents/Resources/NVIDIAIcon.png"
-cp "$ROOT_DIR/Resources/DGXTrayIcon.png" "$APP_DIR/Contents/Resources/DGXTrayIcon.png"
+cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
+cp -R "$ROOT_DIR/Resources/en.lproj" "$ROOT_DIR/Resources/es.lproj" "$APP_DIR/Contents/Resources/"
 cp "$ROOT_DIR/../../frontend/public/brand/dgx-spark.png" \
     "$APP_DIR/Contents/Resources/NVIDIADGXSpark.png"
 cp "$ROOT_DIR/../../frontend/public/brand/asus-ascent-gx10.png" \

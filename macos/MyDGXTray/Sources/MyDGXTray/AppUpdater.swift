@@ -304,17 +304,17 @@ enum UpdateError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .githubUnavailable:
-            return "No se pudo consultar GitHub. Comprueba la conexión a Internet."
+            return String(localized: "No se pudo consultar GitHub. Comprueba la conexión a Internet.")
         case .downloadFailed:
-            return "No se pudo descargar la actualización."
+            return String(localized: "No se pudo descargar la actualización.")
         case .badChecksumFile:
-            return "La release no tiene un checksum SHA-256 válido."
+            return String(localized: "La release no tiene un checksum SHA-256 válido.")
         case .checksumMismatch:
-            return "La descarga no coincide con su checksum SHA-256; se ha descartado."
+            return String(localized: "La descarga no coincide con su checksum SHA-256; se ha descartado.")
         case .invalidBundle:
-            return "El paquete descargado no es una MyDGXTray válida y firmada."
+            return String(localized: "El paquete descargado no es una MyDGXTray válida y firmada.")
         case .notWritable(let path):
-            return "No se puede escribir en \(path). Mueve MyDGXTray a Aplicaciones y vuelve a intentarlo."
+            return String(localized: "No se puede escribir en \(path). Mueve MyDGXTray a Aplicaciones y vuelve a intentarlo.")
         }
     }
 }

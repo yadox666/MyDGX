@@ -6,8 +6,11 @@ struct SettingsView: View {
     @ObservedObject private var updater = AppUpdater.shared
     @State private var draft: MyDGXConfiguration
     @State private var selectedID: String?
-    @State private var apiKey = ""
+    /// API keys typed but not saved yet, by profile id; switching profiles keeps them.
+    @State private var apiKeys: [String: String] = [:]
     @State private var message = ""
+    @State private var messageIsError = false
+    @State private var language = AppLanguage.selected
     @State private var showNetworkDiscovery = false
     /// Profile ids last seen in the saved config; only ids outside this set count as new.
     @State private var savedIDs: Set<String>
@@ -73,18 +76,25 @@ struct SettingsView: View {
                     }
                     .disabled(draft.connections.count <= 1 || selectedProfile == nil)
                     .help("Eliminar perfil")
-                    Button {
-                        model.openSetupWizard()
-                    } label: {
-                        Image(systemName: "wand.and.stars")
-                            .frame(width: 24, height: 14)
-                    }
-                    .help("Asistente de instalación Spark: añadir e instalar otro Spark")
                     Spacer()
                 }
                 .padding(8)
 
                 Divider()
+
+                Button {
+                    model.openSetupWizard()
+                } label: {
+                    Label("Asistente de instalación Spark", systemImage: "wand.and.stars")
+                        .font(.callout.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 34)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(.blue)
+                .padding([.horizontal, .top], 10)
+                .help("Asistente de instalación Spark: añadir e instalar otro Spark")
 
                 Button {
                     showNetworkDiscovery = true
@@ -120,7 +130,7 @@ struct SettingsView: View {
             NetworkDiscoveryView(configuration: draft) { updated in
                 try model.save(configuration: updated, apiKey: nil)
                 draft = model.configuration
-                message = "Detección de red completada"
+                show(String(localized: "Detección de red completada"))
             }
         }
         .onReceive(model.$configuration) { updated in
@@ -132,9 +142,9 @@ struct SettingsView: View {
             }
             let known = Set(draft.connections.map(\.id)).union(previous)
             if let added = updated.connections.first(where: { !known.contains($0.id) }) {
-                draft = updated
+                draft.connections += updated.connections.filter { !known.contains($0.id) }
                 selectedID = added.id
-                message = "Perfil \(added.alias) creado por el asistente"
+                show(String(localized: "Perfil \(added.alias) creado por el asistente"))
                 return
             }
             for detected in updated.connections {
@@ -145,6 +155,28 @@ struct SettingsView: View {
                 draft.connections[index].detectedDeviceVariant = detected.detectedDeviceVariant
             }
         }
+        .onAppear {
+            model.settingsEditor = SettingsEditor(
+                hasChanges: { hasChanges },
+                save: { save() },
+                discard: { discard() }
+            )
+            model.settingsChanged(hasChanges)
+        }
+        .onChange(of: hasChanges) { model.settingsChanged($0) }
+    }
+
+    private var hasChanges: Bool {
+        draft != model.configuration || apiKeys.values.contains { !$0.isEmpty }
+    }
+
+    private func discard() {
+        draft = model.configuration
+        apiKeys = [:]
+        if !draft.connections.contains(where: { $0.id == selectedID }) {
+            selectedID = draft.activeConnectionID
+        }
+        show("")
     }
 
     private var selectedProfile: ConnectionProfile? {
@@ -187,6 +219,24 @@ struct SettingsView: View {
                 Text("macOS puede solicitar autorización en Ajustes del Sistema → Ítems de inicio.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Picker("Idioma", selection: $language) {
+                    ForEach(AppLanguage.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .onChange(of: language) { $0.save() }
+                if language.effective != AppLanguage.active {
+                    HStack {
+                        Text("El idioma cambiará al reiniciar MyDGXTray. El túnel SSH y la configuración se conservan.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Reiniciar ahora") {
+                            if model.settingsMayClose() { AppLanguage.relaunch() }
+                        }
+                            .disabled(model.operationInProgress)
+                    }
+                }
                 UpdateRow(updater: updater, model: model)
             }
 
@@ -199,8 +249,8 @@ struct SettingsView: View {
                 }
                 Button(
                     profile.wrappedValue.id == draft.activeConnectionID
-                        ? "Perfil activo"
-                        : "Usar este equipo"
+                        ? String(localized: "Perfil activo")
+                        : String(localized: "Usar este equipo")
                 ) {
                     draft.activeConnectionID = profile.wrappedValue.id
                 }
@@ -227,10 +277,13 @@ struct SettingsView: View {
             }
 
             Section("Autenticación y certificados") {
-                SecureField("Clave API (vacío conserva la actual)", text: $apiKey)
+                SecureField("Clave API (vacío conserva la actual)", text: Binding(
+                    get: { apiKeys[profile.wrappedValue.id] ?? "" },
+                    set: { apiKeys[profile.wrappedValue.id] = $0.isEmpty ? nil : $0 }
+                ))
                 TextField("Identificador de credencial", text: profile.apiKeyAccount)
                 pathField(
-                    title: "Certificado CA",
+                    title: String(localized: "Certificado CA"),
                     value: profile.caCertificatePath,
                     canChooseDirectories: false
                 )
@@ -249,7 +302,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 pathField(
-                    title: "Clave privada",
+                    title: String(localized: "Clave privada"),
                     value: profile.ssh.identityFile,
                     canChooseDirectories: false
                 )
@@ -274,8 +327,8 @@ struct SettingsView: View {
             Section("Despliegue") {
                 pathField(
                     title: SupportLayout.bundledSource == nil
-                        ? "Proyecto local"
-                        : "Proyecto local (vacío: versión \(SupportLayout.bundledSourceVersion) incluida)",
+                        ? String(localized: "Proyecto local")
+                        : String(localized: "Proyecto local (vacío: versión \(SupportLayout.bundledSourceVersion) incluida)"),
                     value: profile.deployment.sourcePath,
                     canChooseDirectories: true
                 )
@@ -315,8 +368,8 @@ struct SettingsView: View {
                 )
                 .help(
                     model.gitHubUpdateSource(profile.wrappedValue) == nil
-                        ? "Indica en Proyecto local un clon git de MyDGX"
-                        : "Despliega en Terminal el último commit de origin/main, con copia de seguridad y vuelta atrás"
+                        ? String(localized: "Indica en Proyecto local un clon git de MyDGX")
+                        : String(localized: "Despliega en Terminal el último commit de origin/main, con copia de seguridad y vuelta atrás")
                 )
                 if let deployment = model.deploymentStatus {
                     DeploymentProgressView(status: deployment) {
@@ -339,8 +392,8 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if model.operationInProgress
-                    || model.statusMessage.localizedCaseInsensitiveContains("copia") {
-                    Text(model.operationInProgress ? "Creando copia…" : model.statusMessage)
+                    || model.statusMessage.localizedCaseInsensitiveContains(String(localized: "copia", comment: "Word shared by every backup status message")) {
+                    Text(model.operationInProgress ? String(localized: "Creando copia…") : model.statusMessage)
                         .font(.caption)
                 }
             }
@@ -348,13 +401,7 @@ struct SettingsView: View {
             HStack {
                 Text(message)
                     .font(.caption)
-                    .foregroundStyle(
-                        message == "Configuración guardada"
-                            || message.hasSuffix(" eliminado")
-                            || message.hasPrefix("Despliegue iniciado")
-                                ? .green
-                                : .red
-                    )
+                    .foregroundStyle(messageIsError ? .red : .green)
                 Spacer()
                 Button {
                     model.requestRefresh()
@@ -368,8 +415,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .onChange(of: selectedID) { _ in
-            apiKey = ""
-            message = ""
+            show("")
         }
     }
 
@@ -378,6 +424,11 @@ struct SettingsView: View {
             get: { value.wrappedValue ?? "" },
             set: { value.wrappedValue = $0.isEmpty ? nil : $0 }
         )
+    }
+
+    private func show(_ text: String, error: Bool = false) {
+        message = text
+        messageIsError = error
     }
 
     private func pathField(
@@ -401,20 +452,18 @@ struct SettingsView: View {
 
     private func addProfile() {
         var profile = ConnectionProfile()
-        profile.alias = "Nuevo equipo \(draft.connections.count + 1)"
+        profile.alias = String(localized: "Nuevo equipo \(draft.connections.count + 1)")
         draft.connections.append(profile)
         selectedID = profile.id
-        apiKey = ""
     }
 
     private func duplicateProfile() {
         guard var copy = selectedProfile else { return }
         copy.id = UUID().uuidString
-        copy.alias = "\(copy.alias) copia"
+        copy.alias = String(localized: "\(copy.alias) copia", comment: "Alias of a duplicated device profile")
         copy.apiKeyAccount = UUID().uuidString
         draft.connections.append(copy)
         selectedID = copy.id
-        apiKey = ""
     }
 
     private func deleteProfile() {
@@ -425,21 +474,21 @@ struct SettingsView: View {
         }
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = "¿Eliminar \(profile.alias)?"
-        alert.informativeText = """
+        alert.messageText = String(localized: "¿Eliminar \(profile.alias)?")
+        alert.informativeText = String(localized: """
         El equipo se quitará de MyDGX inmediatamente. \
         No se borrarán claves SSH, copias de seguridad ni datos del equipo remoto.
-        """
-        let deleteButton = alert.addButton(withTitle: "Eliminar equipo")
+        """)
+        let deleteButton = alert.addButton(withTitle: String(localized: "Eliminar equipo"))
         deleteButton.hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancelar")
+        alert.addButton(withTitle: String(localized: "Cancelar"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         if model.configuration.connections.contains(where: { $0.id == selectedID }) {
             do {
                 try model.deleteConnection(id: selectedID)
             } catch {
-                message = error.localizedDescription
+                show(error.localizedDescription, error: true)
                 return
             }
         }
@@ -449,24 +498,25 @@ struct SettingsView: View {
             draft.activeConnectionID = model.configuration.activeConnectionID
         }
         self.selectedID = draft.connections.first?.id
-        apiKey = ""
-        message = "\(profile.alias) eliminado"
+        apiKeys[selectedID] = nil
+        show(String(localized: "\(profile.alias) eliminado"))
     }
 
     @discardableResult
     private func save() -> Bool {
         do {
-            guard let profile = selectedProfile else { return false }
-            try model.save(
-                configuration: draft,
-                apiKey: apiKey.isEmpty ? nil : apiKey,
-                apiKeyAccount: profile.apiKeyAccount
-            )
-            apiKey = ""
-            message = "Configuración guardada"
+            _ = try draft.validated()
+            for (id, key) in apiKeys where !key.isEmpty {
+                guard let account = draft.connections.first(where: { $0.id == id })?.apiKeyAccount else { continue }
+                try CredentialStore.write(key, account: account)
+                apiKeys[id] = nil
+            }
+            try model.save(configuration: draft, apiKey: nil)
+            apiKeys = [:]
+            show(String(localized: "Configuración guardada"))
             return true
         } catch {
-            message = error.localizedDescription
+            show(error.localizedDescription, error: true)
             return false
         }
     }
@@ -474,31 +524,31 @@ struct SettingsView: View {
     private func confirmDeploy(_ profile: ConnectionProfile) {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "¿Desplegar MyDGX en \(profile.alias)?"
-        alert.informativeText = """
+        alert.messageText = String(localized: "¿Desplegar MyDGX en \(profile.alias)?")
+        alert.informativeText = String(localized: """
         Se sincronizará \(model.deploymentSourceDescription(profile)) con \
         \(profile.deployment.remoteDirectory), excluyendo secretos, datos y dependencias locales. \
         Después se preparará y reiniciará MyDGX.
-        """
-        alert.addButton(withTitle: "Guardar y desplegar")
-        alert.addButton(withTitle: "Cancelar")
+        """)
+        alert.addButton(withTitle: String(localized: "Guardar y desplegar"))
+        alert.addButton(withTitle: String(localized: "Cancelar"))
         guard alert.runModal() == .alertFirstButtonReturn, save() else { return }
-        message = "Despliegue iniciado; consulta el progreso en esta sección."
+        show(String(localized: "Despliegue iniciado; consulta el progreso en esta sección."))
         model.deployConnection(id: profile.id)
     }
 
     private func confirmGitHubDeploy(_ profile: ConnectionProfile) {
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "¿Actualizar \(profile.alias) desde GitHub?"
-        alert.informativeText = """
+        alert.messageText = String(localized: "¿Actualizar \(profile.alias) desde GitHub?")
+        alert.informativeText = String(localized: """
         Se desplegará el último commit de main en origin, no los cambios locales sin publicar. \
         Se hace copia de seguridad, se reinician los servicios y, si algo falla, se restaura la versión anterior.
-        """
-        alert.addButton(withTitle: "Guardar y actualizar")
-        alert.addButton(withTitle: "Cancelar")
+        """)
+        alert.addButton(withTitle: String(localized: "Guardar y actualizar"))
+        alert.addButton(withTitle: String(localized: "Cancelar"))
         guard alert.runModal() == .alertFirstButtonReturn, save() else { return }
-        message = "Actualización abierta en Terminal."
+        show(String(localized: "Actualización abierta en Terminal."))
         model.openGitHubDeployment(for: profile.id)
     }
 }
@@ -560,19 +610,19 @@ struct UpdateRow: View {
 
     private var checkedSuffix: String {
         guard let date = updater.lastChecked else { return "" }
-        return " (comprobado a las \(date.formatted(date: .omitted, time: .shortened)))"
+        return String(localized: " (comprobado a las \(date.formatted(date: .omitted, time: .shortened)))")
     }
 
     private func confirmInstall(_ release: AppUpdater.Release) {
         let alert = NSAlert()
-        alert.messageText = "¿Actualizar MyDGXTray a \(release.version)?"
-        alert.informativeText = """
+        alert.messageText = String(localized: "¿Actualizar MyDGXTray a \(release.version)?")
+        alert.informativeText = String(localized: """
         Se descargará \(release.archiveName) desde GitHub, se comprobará su SHA-256 y su firma, \
         y la versión \(updater.currentVersion) irá a la Papelera. MyDGXTray se reiniciará; \
         el túnel SSH y la configuración se conservan.
-        """
-        alert.addButton(withTitle: "Actualizar y reiniciar")
-        alert.addButton(withTitle: "Cancelar")
+        """)
+        alert.addButton(withTitle: String(localized: "Actualizar y reiniciar"))
+        alert.addButton(withTitle: String(localized: "Cancelar"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { await updater.install(release) }
     }

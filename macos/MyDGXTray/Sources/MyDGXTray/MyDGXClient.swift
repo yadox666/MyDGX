@@ -185,15 +185,15 @@ enum ClientError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL:
-            return "La URL de MyDGX no es válida."
+            return String(localized: "La URL de MyDGX no es válida.")
         case .invalidResponse:
-            return "MyDGX devolvió una respuesta no válida."
+            return String(localized: "MyDGX devolvió una respuesta no válida.")
         case .invalidIdentifier:
-            return "El identificador del perfil no es válido."
+            return String(localized: "El identificador del perfil no es válido.")
         case .invalidCertificate:
-            return "El certificado CA configurado no es válido."
+            return String(localized: "El certificado CA configurado no es válido.")
         case let .http(code, detail):
-            return detail ?? "MyDGX devolvió HTTP \(code)."
+            return detail ?? String(localized: "MyDGX devolvió HTTP \(code).")
         }
     }
 }

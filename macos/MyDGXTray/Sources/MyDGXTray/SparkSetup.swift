@@ -636,35 +636,33 @@ enum SetupError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .hostUnreachable:
-            return "No se pudo contactar con el Spark. Comprueba que está encendido y en la misma red."
+            return String(localized: "No se pudo contactar con el Spark. Comprueba que está encendido y en la misma red.")
         case .hostKeyChanged:
-            return "La identidad del Spark no coincide con la guardada. Si lo has reinstalado, "
-                + "elimina su entrada de ~/.MyDGX/known_hosts y vuelve a intentarlo."
+            return String(localized: "La identidad del Spark no coincide con la guardada. Si lo has reinstalado, elimina su entrada de ~/.MyDGX/known_hosts y vuelve a intentarlo.")
         case .wrongPassword:
-            return "Usuario o contraseña incorrectos."
+            return String(localized: "Usuario o contraseña incorrectos.")
         case .passwordRequired:
-            return "Escribe la contraseña del Spark para autorizar este Mac la primera vez."
+            return String(localized: "Escribe la contraseña del Spark para autorizar este Mac la primera vez.")
         case .passwordLoginDisabled:
-            return "El Spark no acepta contraseña por SSH. Elige tu clave SSH en «Ya tengo una clave»."
+            return String(localized: "El Spark no acepta contraseña por SSH. Elige tu clave SSH en «Ya tengo una clave».")
         case .keyRejected:
-            return "El Spark no aceptó la clave SSH. Escribe la contraseña para instalar una nueva."
+            return String(localized: "El Spark no aceptó la clave SSH. Escribe la contraseña para instalar una nueva.")
         case .wrongSudoPassword:
-            return "La contraseña no permite administrar el Spark (sudo). Revisa la contraseña."
+            return String(localized: "La contraseña no permite administrar el Spark (sudo). Revisa la contraseña.")
         case .sshFailed:
-            return "No se pudo completar la conexión SSH."
+            return String(localized: "No se pudo completar la conexión SSH.")
         case .deployFailed(let detail):
             return detail
         case .notPrivateKey:
-            return "Ese archivo no es una clave SSH privada. Elige, por ejemplo, ~/.ssh/id_ed25519."
+            return String(localized: "Ese archivo no es una clave SSH privada. Elige, por ejemplo, ~/.ssh/id_ed25519.")
         case .publicKeyChosen:
-            return "Has elegido la clave pública (.pub). Elige el archivo sin extensión, que es la clave privada."
+            return String(localized: "Has elegido la clave pública (.pub). Elige el archivo sin extensión, que es la clave privada.")
         case .passphraseRequired:
-            return "Tu clave está protegida con una frase de paso. Escríbela para desbloquearla; "
-                + "se guardará en el Llavero de macOS."
+            return String(localized: "Tu clave está protegida con una frase de paso. Escríbela para desbloquearla; se guardará en el Llavero de macOS.")
         case .wrongPassphrase:
-            return "La frase de paso de la clave no es correcta."
+            return String(localized: "La frase de paso de la clave no es correcta.")
         case .ownKeyNotAuthorized:
-            return "El Spark aún no acepta tu clave. Escribe la contraseña del Spark para autorizarla."
+            return String(localized: "El Spark aún no acepta tu clave. Escribe la contraseña del Spark para autorizarla.")
         }
     }
 }

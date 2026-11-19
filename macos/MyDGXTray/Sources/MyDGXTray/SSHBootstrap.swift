@@ -269,13 +269,13 @@ enum BootstrapError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .incompleteKeyPair:
-            return "Existe solo una parte del par de claves. Retírala o completa el par antes de continuar."
+            return String(localized: "Existe solo una parte del par de claves. Retírala o completa el par antes de continuar.")
         case .keyGenerationFailed:
-            return "No se pudo generar el par de claves Ed25519."
+            return String(localized: "No se pudo generar el par de claves Ed25519.")
         case .missingKeyPair:
-            return "Genera primero el par de claves SSH."
+            return String(localized: "Genera primero el par de claves SSH.")
         case .verificationFailed:
-            return "No se pudo entrar mediante clave pública. Revisa host, usuario, red e instalación de la clave."
+            return String(localized: "No se pudo entrar mediante clave pública. Revisa host, usuario, red e instalación de la clave.")
         }
     }
 }

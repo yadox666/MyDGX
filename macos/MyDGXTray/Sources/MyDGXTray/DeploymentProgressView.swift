@@ -193,10 +193,10 @@ private enum DeployPhase: Int, CaseIterable {
 
     var title: String {
         switch self {
-        case .prepare: return "Preparar"
-        case .sync: return "Copiar"
-        case .install: return "Instalar"
-        case .connect: return "Conectar"
+        case .prepare: return String(localized: "Preparar")
+        case .sync: return String(localized: "Copiar")
+        case .install: return String(localized: "Instalar")
+        case .connect: return String(localized: "Conectar")
         }
     }
 

@@ -29,7 +29,9 @@ struct DevicePhoto: View {
 
     private var displayName: String {
         detectedModel?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-            ?? (kind == .axforge ? "Instancia AxForge" : "Modelo pendiente de detectar")
+            ?? (kind == .axforge
+                ? String(localized: "Instancia AxForge")
+                : String(localized: "Modelo pendiente de detectar"))
     }
 
     private var image: NSImage {

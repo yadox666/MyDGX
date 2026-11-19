@@ -75,7 +75,7 @@ struct MyDGXConfiguration: Codable, Equatable {
         }
 
         var migrated = ConnectionProfile()
-        migrated.alias = "Equipo actual"
+        migrated.alias = String(localized: "Equipo actual")
         migrated.kind = .remote
         migrated.scheme = try container.decodeIfPresent(String.self, forKey: .scheme) ?? "http"
         migrated.apiHost = try container.decodeIfPresent(String.self, forKey: .host) ?? "127.0.0.1"
@@ -102,17 +102,17 @@ enum ConnectionKind: String, Codable, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .local: return "Local"
-        case .lan: return "Red local"
+        case .local: return String(localized: "Local")
+        case .lan: return String(localized: "Red local")
         case .axforge: return "AxForge"
-        case .remote: return "Remoto"
+        case .remote: return String(localized: "Remoto")
         }
     }
 }
 
 struct ConnectionProfile: Codable, Equatable, Identifiable {
     var id = UUID().uuidString
-    var alias = "Mi DGX"
+    var alias = String(localized: "Mi DGX")
     var kind = ConnectionKind.local
     var scheme = "http"
     var apiHost = "127.0.0.1"
@@ -326,25 +326,25 @@ enum ConfigurationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noProfiles:
-            return "Debe existir al menos un perfil de conexión."
+            return String(localized: "Debe existir al menos un perfil de conexión.")
         case .profileNotFound:
-            return "El perfil activo no existe."
+            return String(localized: "El perfil activo no existe.")
         case .duplicateProfile:
-            return "Los alias e identificadores de los perfiles deben ser únicos."
+            return String(localized: "Los alias e identificadores de los perfiles deben ser únicos.")
         case .invalidAlias:
-            return "El alias del equipo no es válido."
+            return String(localized: "El alias del equipo no es válido.")
         case .invalidServer:
-            return "El servidor debe usar http o https y tener una dirección válida."
+            return String(localized: "El servidor debe usar http o https y tener una dirección válida.")
         case .invalidPortOrInterval:
-            return "El puerto o intervalo de actualización no es válido."
+            return String(localized: "El puerto o intervalo de actualización no es válido.")
         case .invalidOpenWebUI:
-            return "La URL de Open WebUI debe ser una dirección http o https válida."
+            return String(localized: "La URL de Open WebUI debe ser una dirección http o https válida.")
         case .invalidSSH:
-            return "La configuración SSH contiene valores no válidos."
+            return String(localized: "La configuración SSH contiene valores no válidos.")
         case .invalidTunnel:
-            return "La configuración del túnel contiene puertos no válidos."
+            return String(localized: "La configuración del túnel contiene puertos no válidos.")
         case .invalidDeployment:
-            return "El directorio remoto de despliegue no es válido."
+            return String(localized: "El directorio remoto de despliegue no es válido.")
         }
     }
 }

@@ -74,7 +74,7 @@ struct SparkSetupWizardView: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(wizard.selected == nil)
             case .connect:
-                Button(wizard.connecting ? "Conectando…" : "Conectar") { wizard.connect() }
+                Button(wizard.connecting ? String(localized: "Conectando…") : String(localized: "Conectar")) { wizard.connect() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(wizard.connecting || wizard.user.isEmpty)
             case .install:
@@ -141,9 +141,8 @@ private struct FindStepView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             StepTitle(
-                title: "Busca tu Spark",
-                detail: "Enciende el Spark y conéctalo a la misma red que este Mac, por cable o Wi-Fi. "
-                    + "MyDGX lo busca solo y detecta la marca, el modelo y el puerto de acceso."
+                title: String(localized: "Busca tu Spark"),
+                detail: String(localized: "Enciende el Spark y conéctalo a la misma red que este Mac, por cable o Wi-Fi. MyDGX lo busca solo y detecta la marca, el modelo y el puerto de acceso.")
             )
 
             if !wizard.localNetworkPrimed {
@@ -158,8 +157,7 @@ private struct FindStepView: View {
                         .font(.headline)
                         .foregroundStyle(.orange)
                     Text(
-                        "Abre Ajustes del Sistema › Privacidad y seguridad › Red local, activa "
-                            + "«MyDGX Tray» y pulsa Buscar otra vez."
+                        "Abre Ajustes del Sistema › Privacidad y seguridad › Red local, activa «MyDGX Tray» y pulsa Buscar otra vez."
                     )
                     .font(.callout)
                     Button("Abrir Ajustes de Red local") { wizard.openLocalNetworkSettings() }
@@ -195,7 +193,7 @@ private struct FindStepView: View {
                     TextField("Puerto", text: $wizard.manualPort, prompt: Text("auto"))
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 72)
-                    Button(wizard.checkingAddress ? "Comprobando…" : "Comprobar") {
+                    Button(wizard.checkingAddress ? String(localized: "Comprobando…") : String(localized: "Comprobar")) {
                         wizard.checkManualAddress()
                     }
                     .disabled(wizard.manualAddress.isEmpty || wizard.checkingAddress)
@@ -208,9 +206,7 @@ private struct FindStepView: View {
             DisclosureGroup("¿Tu Spark es nuevo y aún no lo has encendido?", isExpanded: $showNewSparkHelp) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(
-                        "Primero completa el arranque oficial de NVIDIA: conecta pantalla y teclado (o usa el "
-                            + "Wi-Fi temporal de la guía), crea tu usuario y contraseña, conéctalo a tu red y espera "
-                            + "a que terminen las actualizaciones. Después vuelve aquí."
+                        "Primero completa el arranque oficial de NVIDIA: conecta pantalla y teclado (o usa el Wi-Fi temporal de la guía), crea tu usuario y contraseña, conéctalo a tu red y espera a que terminen las actualizaciones. Después vuelve aquí."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -256,23 +252,23 @@ private struct FindStepView: View {
     }
 
     private var searchTitle: String {
-        if wizard.searching { return "Buscando en tu red…" }
+        if wizard.searching { return String(localized: "Buscando en tu red…") }
         switch wizard.candidates.count {
-        case 0: return "No se encontró ningún Spark"
-        case 1: return "¡Spark encontrado!"
-        default: return "\(wizard.candidates.count) equipos encontrados"
+        case 0: return String(localized: "No se encontró ningún Spark")
+        case 1: return String(localized: "¡Spark encontrado!")
+        default: return String(localized: "\(wizard.candidates.count) equipos encontrados")
         }
     }
 
     private var searchDetail: String {
         if wizard.searching {
             return wizard.candidates.isEmpty
-                ? "Puede tardar unos segundos."
-                : "Ya hay \(wizard.candidates.count) equipo(s). Sigo buscando…"
+                ? String(localized: "Puede tardar unos segundos.")
+                : String(localized: "Ya hay \(wizard.candidates.count) equipo(s). Sigo buscando…")
         }
         return wizard.candidates.isEmpty
-            ? "Comprueba que está encendido, o escribe su dirección abajo."
-            : "Elige tu equipo y pulsa Continuar."
+            ? String(localized: "Comprueba que está encendido, o escribe su dirección abajo.")
+            : String(localized: "Elige tu equipo y pulsa Continuar.")
     }
 }
 
@@ -320,11 +316,10 @@ private struct CandidateRow: View {
                 .scaledToFit()
                 .frame(width: 64, height: 44)
             VStack(alignment: .leading, spacing: 3) {
-                Text("\(candidate.guess.brand) \(candidate.guess.model)")
+                Text(verbatim: "\(candidate.guess.brand) \(candidate.guess.model)")
                     .font(.headline)
                 Text(
-                    [candidate.name, candidate.host].uniqued().joined(separator: " · ")
-                        + " · puerto SSH \(candidate.port)"
+                    String(localized: "\([candidate.name, candidate.host].uniqued().joined(separator: " · ")) · puerto SSH \(candidate.port)")
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -362,9 +357,8 @@ private struct ConnectStepView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             StepTitle(
-                title: "Inicia sesión en el Spark",
-                detail: "Usa el usuario y la contraseña que creaste al encender el Spark por primera vez. "
-                    + "La contraseña solo sirve para autorizar este Mac con una clave segura: no se guarda."
+                title: String(localized: "Inicia sesión en el Spark"),
+                detail: String(localized: "Usa el usuario y la contraseña que creaste al encender el Spark por primera vez. La contraseña solo sirve para autorizar este Mac con una clave segura: no se guarda.")
             )
 
             HStack(alignment: .top, spacing: 24) {
@@ -389,7 +383,9 @@ private struct ConnectStepView: View {
                         Text("Contraseña")
                             .foregroundStyle(.secondary)
                         SecureField(
-                            wizard.useExistingKey ? "Solo si el Spark aún no acepta tu clave" : "Contraseña del Spark",
+                            wizard.useExistingKey
+                                ? String(localized: "Solo si el Spark aún no acepta tu clave")
+                                : String(localized: "Contraseña del Spark"),
                             text: $wizard.password
                         )
                         .textFieldStyle(.roundedBorder)
@@ -405,7 +401,7 @@ private struct ConnectStepView: View {
                             Text("Clave")
                                 .foregroundStyle(.secondary)
                             HStack {
-                                Text(wizard.existingKeyPath.isEmpty ? "Ninguna elegida" : wizard.existingKeyPath)
+                                Text(wizard.existingKeyPath.isEmpty ? String(localized: "Ninguna elegida") : wizard.existingKeyPath)
                                     .font(.caption.monospaced())
                                     .lineLimit(1)
                                     .truncationMode(.middle)
@@ -486,7 +482,9 @@ private struct FactsCard: View {
             }
             row(
                 "MyDGX",
-                facts.mydgxRunning ? "Instalado y funcionando" : (facts.mydgxInstalled ? "Instalado, detenido" : "Aún no instalado"),
+                facts.mydgxRunning
+                    ? String(localized: "Instalado y funcionando")
+                    : (facts.mydgxInstalled ? String(localized: "Instalado, detenido") : String(localized: "Aún no instalado")),
                 "shippingbox"
             )
         }
@@ -495,7 +493,7 @@ private struct FactsCard: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private func row(_ title: String, _ value: String, _ symbol: String) -> some View {
+    private func row(_ title: LocalizedStringKey, _ value: String, _ symbol: String) -> some View {
         GridRow {
             Label(title, systemImage: symbol)
                 .foregroundStyle(.secondary)
@@ -513,13 +511,10 @@ private struct InstallStepView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             StepTitle(
-                title: "Instala MyDGX en el Spark",
+                title: String(localized: "Instala MyDGX en el Spark"),
                 detail: alreadyRunning && !wizard.installing
-                    ? "MyDGX ya funciona en este Spark. Pulsa Conectar para empezar a usarlo, "
-                        + "o Reinstalar para actualizarlo con la versión de esta app."
-                    : "Se instalará el panel MyDGX, el motor de IA optimizado para la GPU GB10, Open WebUI, "
-                        + "ComfyUI y Whisper. La primera vez tarda entre 20 y 40 minutos. "
-                        + "Puedes seguir usando el Mac; no apagues el Spark."
+                    ? String(localized: "MyDGX ya funciona en este Spark. Pulsa Conectar para empezar a usarlo, o Reinstalar para actualizarlo con la versión de esta app.")
+                    : String(localized: "Se instalará el panel MyDGX, el motor de IA optimizado para la GPU GB10, Open WebUI, ComfyUI y Whisper. La primera vez tarda entre 20 y 40 minutos. Puedes seguir usando el Mac; no apagues el Spark.")
             )
 
             if wizard.installing || wizard.installFinished || wizard.logURL != nil {
@@ -672,9 +667,7 @@ private struct DoneStepView: View {
             Text("¡Tu Spark está listo!")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "\(wizard.alias) está conectado a este Mac mediante un túnel seguro. "
-                    + "Encontrarás MyDGX en la barra de menús, junto al reloj: desde ahí puedes ver el "
-                    + "estado, cargar modelos y abrir el Dashboard."
+                "\(wizard.alias) está conectado a este Mac mediante un túnel seguro. Encontrarás MyDGX en la barra de menús, junto al reloj: desde ahí puedes ver el estado, cargar modelos y abrir el Dashboard."
             )
             .multilineTextAlignment(.center)
             .foregroundStyle(.secondary)
@@ -800,8 +793,8 @@ private enum OEMDataPicker {
     @MainActor
     static func run() {
         let panel = NSOpenPanel()
-        panel.title = "Selecciona el volumen OEMDATA"
-        panel.message = "Debe ser un USB FAT32 montado con el nombre exacto OEMDATA."
+        panel.title = String(localized: "Selecciona el volumen OEMDATA")
+        panel.message = String(localized: "Debe ser un USB FAT32 montado con el nombre exacto OEMDATA.")
         panel.directoryURL = URL(fileURLWithPath: "/Volumes", isDirectory: true)
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -813,20 +806,20 @@ private enum OEMDataPicker {
         if !existing.isEmpty {
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "¿Sobrescribir los archivos cloud-init?"
-            alert.informativeText = "Se sustituirán \(existing.joined(separator: " y ")) en \(volume.path)."
-            alert.addButton(withTitle: "Sobrescribir")
-            alert.addButton(withTitle: "Cancelar")
+            alert.messageText = String(localized: "¿Sobrescribir los archivos cloud-init?")
+            alert.informativeText = String(localized: "Se sustituirán \(ListFormatter.localizedString(byJoining: existing)) en \(volume.path).")
+            alert.addButton(withTitle: String(localized: "Sobrescribir"))
+            alert.addButton(withTitle: String(localized: "Cancelar"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         let alert = NSAlert()
         do {
             try OEMDataGenerator.writeSeed(to: volume)
-            alert.messageText = "USB OEMDATA preparado"
-            alert.informativeText = "Expúlsalo de forma segura antes de conectarlo al Spark."
+            alert.messageText = String(localized: "USB OEMDATA preparado")
+            alert.informativeText = String(localized: "Expúlsalo de forma segura antes de conectarlo al Spark.")
         } catch {
             alert.alertStyle = .warning
-            alert.messageText = "No se pudo preparar el USB"
+            alert.messageText = String(localized: "No se pudo preparar el USB")
             alert.informativeText = error.localizedDescription
         }
         alert.runModal()

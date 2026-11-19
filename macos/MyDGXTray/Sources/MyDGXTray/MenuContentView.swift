@@ -23,7 +23,7 @@ struct MenuContentView: View {
         }
         Divider()
         Button {
-            NSApp.terminate(nil)
+            if model.settingsMayClose() { NSApp.terminate(nil) }
         } label: {
             Label("Salir de MyDGX", systemImage: "xmark.circle")
         }
@@ -43,17 +43,18 @@ struct MenuContentView: View {
 
         Text(
             model.overview.map {
-                "RAM libre: \(formatBytes($0.metrics.freeMemory)) / "
-                    + "\(formatBytes($0.metrics.memoryTotal))"
-            } ?? "RAM libre: —"
+                String(
+                    localized: "RAM libre: \(formatBytes($0.metrics.freeMemory)) / \(formatBytes($0.metrics.memoryTotal))"
+                )
+            } ?? String(localized: "RAM libre: —")
         )
 
         if let suite = model.benchmarkSuite {
             Divider()
             Label(
                 suite.status == "restoring"
-                    ? "Restaurando estado anterior"
-                    : "Ejecutando benchmarks",
+                    ? String(localized: "Restaurando estado anterior")
+                    : String(localized: "Ejecutando benchmarks"),
                 systemImage: suite.status == "restoring"
                     ? "arrow.counterclockwise.circle.fill"
                     : "gauge.with.dots.needle.67percent"
@@ -63,7 +64,7 @@ struct MenuContentView: View {
             ProgressView(value: max(0, min(100, suite.progress)), total: 100)
 
             Text(
-                "\(suite.completedModels)/\(suite.totalModels) modelos"
+                String(localized: "\(suite.completedModels)/\(suite.totalModels) modelos")
                     + " · \(Int(suite.progress.rounded()))%"
             )
             if !suite.message.isEmpty {
@@ -80,8 +81,8 @@ struct MenuContentView: View {
                     let availability = model.connectionAvailability[connection.id]
                     let active = connection.id == model.configuration.activeConnectionID
                     let state = availability == nil
-                        ? "Comprobando"
-                        : (availability == true ? "Online" : "Offline")
+                        ? String(localized: "Comprobando")
+                        : (availability == true ? String(localized: "Online") : String(localized: "Offline"))
                     Button {
                         model.activateConnection(id: connection.id)
                     } label: {
@@ -110,11 +111,11 @@ struct MenuContentView: View {
         } label: {
             Label(
                 model.tunnelRunning
-                    ? "Detener conexión y túnel"
+                    ? String(localized: "Detener conexión y túnel")
                     : (
                         model.configuration.activeConnection.tunnel.enabled
-                            ? "Iniciar conexión y túnel"
-                            : "Conectar"
+                            ? String(localized: "Iniciar conexión y túnel")
+                            : String(localized: "Conectar")
                     ),
                 systemImage: model.tunnelRunning ? "network.slash" : "network"
             )
@@ -131,8 +132,9 @@ struct MenuContentView: View {
         Divider()
 
         Text(
-            "Perfiles cargados: \(model.runningUserProfileCount)/2 · "
-                + "\(model.runtime?.runningModels ?? 0) modelo(s)"
+            String(localized: "Perfiles cargados: \(model.runningUserProfileCount)/2")
+                + " · "
+                + String(localized: "\(model.runtime?.runningModels ?? 0) modelo(s)")
         )
 
         ForEach(model.runningProfiles.filter { $0.id == "mydgx-quick" }) { profile in
@@ -150,7 +152,7 @@ struct MenuContentView: View {
         ForEach(model.runningProfiles.filter { $0.id != "mydgx-quick" }) { profile in
             Text(
                 "\(profile.name)"
-                    + (profile.active == 1 ? " · predeterminado" : "")
+                    + (profile.active == 1 ? " · " + String(localized: "predeterminado") : "")
                     + " · \(profileSize(profile))"
             )
             if profile.isReadOnly, let labels = profile.modelLabels, !labels.isEmpty {
@@ -168,13 +170,13 @@ struct MenuContentView: View {
         if let pending = model.pendingProfileName {
             Text(
                 "\(pending) · "
-                    + (model.machineActivity ?? "Preparando perfil…")
+                    + (model.machineActivity ?? String(localized: "Preparando perfil…"))
             )
         } else if let activity = model.machineActivity,
-                  activity.hasPrefix("Error") {
+                  model.machineActivityIsError {
             Text(activity)
         } else if model.runningProfiles.isEmpty {
-            Text(model.machineActivity ?? "Ningún perfil cargado")
+            Text(model.machineActivity ?? String(localized: "Ningún perfil cargado"))
         }
 
         Menu {
@@ -184,7 +186,7 @@ struct MenuContentView: View {
                 } label: {
                     if model.isProfileRunning(profile) {
                         Label(
-                            "\(profile.name) · cargado · \(profileSize(profile))"
+                            String(localized: "\(profile.name) · cargado · \(profileSize(profile))")
                                 + profileAvailabilitySuffix(profile),
                             systemImage: profile.active == 1
                                 ? "checkmark.circle.fill"
@@ -192,7 +194,7 @@ struct MenuContentView: View {
                         )
                     } else if profile.active == 1 {
                         Label(
-                            "\(profile.name) · predeterminado · \(profileSize(profile))"
+                            String(localized: "\(profile.name) · predeterminado · \(profileSize(profile))")
                                 + profileAvailabilitySuffix(profile),
                             systemImage: "checkmark"
                         )
@@ -276,8 +278,8 @@ struct MenuContentView: View {
         } label: {
             Label(
                 model.codingAgentBlockReason == nil
-                    ? "Agentes de código"
-                    : "Agentes de código · sin modelo adecuado",
+                    ? String(localized: "Agentes de código")
+                    : String(localized: "Agentes de código · sin modelo adecuado"),
                 systemImage: "chevron.left.forwardslash.chevron.right"
             )
         }
@@ -300,7 +302,7 @@ struct MenuContentView: View {
         }
 
         Button {
-            NSApp.terminate(nil)
+            if model.settingsMayClose() { NSApp.terminate(nil) }
         } label: {
             Label("Salir de MyDGX", systemImage: "xmark.circle")
         }
@@ -311,13 +313,13 @@ struct MenuContentView: View {
     private func confirmStopProfile(_ profile: InferenceProfile) {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "¿Detener \(profile.name)?"
-        alert.informativeText = """
+        alert.messageText = String(localized: "¿Detener \(profile.name)?")
+        alert.informativeText = String(localized: """
         Se descargarán sus modelos y se parará su app si tiene una. \
         No volverá a arrancar en el próximo inicio.
-        """
-        alert.addButton(withTitle: "Detener perfil")
-        alert.addButton(withTitle: "Cancelar")
+        """)
+        alert.addButton(withTitle: String(localized: "Detener perfil"))
+        alert.addButton(withTitle: String(localized: "Cancelar"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { await model.stopProfile(profile) }
     }
@@ -325,10 +327,10 @@ struct MenuContentView: View {
     private func confirmStopQuickModel(_ quickModel: ProfileModelSummary) {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "¿Apagar \(quickModel.label)?"
-        alert.informativeText = "Se quitará del perfil Quick y liberará su memoria."
-        alert.addButton(withTitle: "Apagar modelo")
-        alert.addButton(withTitle: "Cancelar")
+        alert.messageText = String(localized: "¿Apagar \(quickModel.label)?")
+        alert.informativeText = String(localized: "Se quitará del perfil Quick y liberará su memoria.")
+        alert.addButton(withTitle: String(localized: "Apagar modelo"))
+        alert.addButton(withTitle: String(localized: "Cancelar"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { await model.stopQuickModel(quickModel) }
     }
@@ -336,13 +338,13 @@ struct MenuContentView: View {
     private func confirmShutdown() {
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = "¿Apagar \(model.configuration.activeConnection.alias)?"
-        alert.informativeText = """
+        alert.messageText = String(localized: "¿Apagar \(model.configuration.activeConnection.alias)?")
+        alert.informativeText = String(localized: """
         Se detendrán los modelos y servicios del equipo. La aplicación comprobará \
         después que el apagado se haya completado. ¿Está seguro de que desea continuar?
-        """
-        alert.addButton(withTitle: "Apagar equipo")
-        alert.addButton(withTitle: "Cancelar")
+        """)
+        alert.addButton(withTitle: String(localized: "Apagar equipo"))
+        alert.addButton(withTitle: String(localized: "Cancelar"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { await model.shutdown() }
     }
@@ -362,12 +364,15 @@ struct MenuContentView: View {
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "¿Arrancar \(profile.name)?"
+        alert.messageText = String(localized: "¿Arrancar \(profile.name)?")
         let current = model.runningProfiles.count
         let currentMessage = current == 0
-            ? "No hay perfiles cargados."
-            : "Los \(current) perfil(es) cargados seguirán funcionando."
-        alert.informativeText = """
+            ? String(localized: "No hay perfiles cargados.")
+            : String(localized: "Los \(current) perfil(es) cargados seguirán funcionando.")
+        let defaultMessage = profile.isReadOnly
+            ? ""
+            : String(localized: "Este perfil será el predeterminado para el próximo arranque. ")
+        alert.informativeText = String(localized: """
         \(currentMessage)
 
         Memoria adicional: \(formatGB(plan.incrementalMB))
@@ -375,12 +380,12 @@ struct MenuContentView: View {
         Reserva del sistema: \(formatGB(plan.reserveMB))
         Modelos compartidos: \(plan.sharedModels)
 
-        \(profile.isReadOnly ? "" : "Este perfil será el predeterminado para el próximo arranque. ")La aplicación \
+        \(defaultMessage)La aplicación \
         mostrará y supervisará la descarga y la carga, que pueden tardar más de 15 minutos. \
         ¿Está seguro de que desea continuar?
-        """
-        alert.addButton(withTitle: "Arrancar perfil")
-        alert.addButton(withTitle: "Cancelar")
+        """)
+        alert.addButton(withTitle: String(localized: "Arrancar perfil"))
+        alert.addButton(withTitle: String(localized: "Cancelar"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         await model.activateAndStart(profile)
     }
@@ -389,9 +394,9 @@ struct MenuContentView: View {
         model.lastError = message
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = "No se puede arrancar el perfil"
+        alert.messageText = String(localized: "No se puede arrancar el perfil")
         alert.informativeText = message
-        alert.addButton(withTitle: "Aceptar")
+        alert.addButton(withTitle: String(localized: "Aceptar"))
         alert.runModal()
     }
 
@@ -407,25 +412,25 @@ struct MenuContentView: View {
     private func profileAvailabilitySuffix(_ profile: InferenceProfile) -> String {
         guard let plan = profile.runtimePlan, !plan.fits else { return "" }
         if userProfileCount(plan.profileIDs) > 2 {
-            return " · límite de 2 perfiles"
+            return " · " + String(localized: "límite de 2 perfiles")
         }
         if !plan.aliasConflicts.isEmpty, !plan.portConflicts.isEmpty {
-            return " · alias y puerto en uso"
+            return " · " + String(localized: "alias y puerto en uso")
         }
         if !plan.aliasConflicts.isEmpty {
-            return " · alias en uso"
+            return " · " + String(localized: "alias en uso")
         }
         if let port = plan.portConflicts.first {
-            return " · puerto \(port) ocupado"
+            return " · " + String(localized: "puerto \(port) ocupado")
         }
         if plan.requiredMB > plan.capacityMB {
-            return " · total \(formatGB(plan.requiredMB)) > \(formatGB(plan.capacityMB))"
+            return " · " + String(localized: "total \(formatGB(plan.requiredMB)) > \(formatGB(plan.capacityMB))")
         }
         if plan.incrementalMB + plan.reserveMB > plan.availableMB {
-            return " · necesita \(formatGB(plan.incrementalMB)) + "
-                + "\(formatGB(plan.reserveMB)) reserva"
+            return " · "
+                + String(localized: "necesita \(formatGB(plan.incrementalMB)) + \(formatGB(plan.reserveMB)) reserva")
         }
-        return " · no disponible"
+        return " · " + String(localized: "no disponible")
     }
 
     private func formatBytes(_ bytes: Int64) -> String {

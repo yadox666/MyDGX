@@ -84,9 +84,9 @@ enum CredentialStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidAccount:
-            return "El identificador de la credencial no es válido."
+            return String(localized: "El identificador de la credencial no es válido.")
         case .symbolicLink:
-            return "La credencial no puede ser un enlace simbólico."
+            return String(localized: "La credencial no puede ser un enlace simbólico.")
         }
     }
 }

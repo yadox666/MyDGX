@@ -14,11 +14,20 @@ La columna izquierda ofrece estas acciones:
 - **Duplicar**: copia el perfil seleccionado, pero crea identificadores nuevos
   para el perfil y su archivo de credencial.
 - **−**: elimina el perfil seleccionado. Debe permanecer al menos uno.
-- **Varita**: abre el Asistente de instalación Spark (buscar, conectar, instalar y
-  listo) para añadir otro Spark.
+- **Asistente de instalación Spark** (botón azul, sobre *Buscar DGX en red*): abre
+  el asistente (buscar, conectar, instalar y listo) para añadir otro Spark.
 - **Aplicación › Buscar actualizaciones**: consulta las Releases de GitHub. Si hay
   una versión nueva, **Descargar e instalar** la verifica (SHA-256 y firma), deja
   la versión anterior en la Papelera y reinicia la app.
+- **Aplicación › Idioma**: *Idioma del sistema* (por defecto) sigue el orden de
+  idiomas de macOS: español si va antes que el inglés y, para cualquier otro
+  idioma, inglés. *Español* o *English* fijan el idioma solo para MyDGXTray; es el
+  mismo ajuste que Ajustes del Sistema › General › Idioma y región › Aplicaciones.
+  El cambio se aplica al reiniciar la app (**Reiniciar ahora**); el túnel SSH y la
+  configuración se conservan. Los mensajes que llegan del Spark (nombres de
+  trabajos, errores del servidor) siguen en el idioma del dashboard.
+  Tras añadir o cambiar textos, `scripts/localizations.py` regenera `es.lproj`
+  y avisa de las claves sin traducir en `en.lproj`.
 - **Usar este equipo**: convierte el perfil en el equipo activo. La telemetría,
   enlaces, perfiles de inferencia y acciones remotas usarán este equipo.
 

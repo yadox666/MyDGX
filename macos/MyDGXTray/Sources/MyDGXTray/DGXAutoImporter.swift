@@ -34,7 +34,7 @@ enum DGXAutoImporter {
                 DGXImportProgress(
                     deviceID: device.id,
                     stage: "verifying",
-                    detail: "Comprobando identidad y claves SSH…",
+                    detail: String(localized: "Comprobando identidad y claves SSH…"),
                     completed: index,
                     total: devices.count
                 )
@@ -53,11 +53,11 @@ enum DGXAutoImporter {
                         deviceID: device.id,
                         stage: "existing",
                         detail: !device.portVerified
-                            ? "Ya está configurado · puerto anunciado sin verificar"
+                            ? String(localized: "Ya está configurado · puerto anunciado sin verificar")
                             : (
                                 oldPort == device.port
-                                    ? "Ya está configurado · SSH \(device.port)"
-                                    : "Ya configurado · SSH actualizado \(oldPort) → \(device.port)"
+                                    ? String(localized: "Ya está configurado · SSH \(device.port)")
+                                    : String(localized: "Ya configurado · SSH actualizado \(oldPort) → \(device.port)")
                             ),
                         completed: index + 1,
                         total: devices.count
@@ -84,7 +84,7 @@ enum DGXAutoImporter {
                     DGXImportProgress(
                         deviceID: device.id,
                         stage: "unverified",
-                        detail: "No acepta ninguna clave SSH local",
+                        detail: String(localized: "No acepta ninguna clave SSH local"),
                         completed: index + 1,
                         total: devices.count
                     )
@@ -97,7 +97,7 @@ enum DGXAutoImporter {
                 DGXImportProgress(
                     deviceID: device.id,
                     stage: "identifying",
-                    detail: "Clave verificada; identificando hardware…",
+                    detail: String(localized: "Clave verificada; identificando hardware…"),
                     completed: index,
                     total: devices.count
                 )
@@ -112,7 +112,8 @@ enum DGXAutoImporter {
                 DGXImportProgress(
                     deviceID: device.id,
                     stage: "added",
-                    detail: profile.detectedDeviceModel.map { "Añadido · \($0)" } ?? "Añadido",
+                    detail: profile.detectedDeviceModel.map { String(localized: "Añadido · \($0)") }
+                        ?? String(localized: "Añadido"),
                     completed: index + 1,
                     total: devices.count
                 )

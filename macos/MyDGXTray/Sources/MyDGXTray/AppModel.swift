@@ -10,6 +10,26 @@ private final class SettingsWindow: NSWindow {
     }
 }
 
+/// Lets the settings window ask its SwiftUI form about unsaved edits.
+struct SettingsEditor {
+    let hasChanges: () -> Bool
+    let save: () -> Bool
+    let discard: () -> Void
+}
+
+@MainActor
+private final class SettingsWindowDelegate: NSObject, NSWindowDelegate {
+    private weak var model: AppModel?
+
+    init(model: AppModel) {
+        self.model = model
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        model?.settingsMayClose() ?? true
+    }
+}
+
 @MainActor
 private final class SetupWindowDelegate: NSObject, NSWindowDelegate {
     private let wizard: SparkSetupWizard
@@ -24,10 +44,10 @@ private final class SetupWindowDelegate: NSObject, NSWindowDelegate {
         guard wizard.installing else { return true }
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "¿Detener la instalación?"
-        alert.informativeText = "El Spark conservará lo que ya esté instalado y podrás continuar más tarde."
-        alert.addButton(withTitle: "Seguir instalando")
-        alert.addButton(withTitle: "Detener y cerrar")
+        alert.messageText = String(localized: "¿Detener la instalación?")
+        alert.informativeText = String(localized: "El Spark conservará lo que ya esté instalado y podrás continuar más tarde.")
+        alert.addButton(withTitle: String(localized: "Seguir instalando"))
+        alert.addButton(withTitle: String(localized: "Detener y cerrar"))
         guard alert.runModal() == .alertSecondButtonReturn else { return false }
         wizard.cancelInstall()
         return true
@@ -79,12 +99,15 @@ final class AppModel: ObservableObject {
     @Published private(set) var launchAtLoginEnabled = false
     @Published private(set) var operationInProgress = false
     @Published private(set) var profileJobInProgress = false
-    @Published private(set) var machineActivity: String?
+    @Published private(set) var machineActivity: String? {
+        didSet { machineActivityIsError = false }
+    }
+    private(set) var machineActivityIsError = false
     @Published private(set) var pendingProfileName: String?
     @Published private(set) var deploymentStatus: DeploymentStatus?
     /// Why Claude Code and OpenCode can't open now; nil when a suitable model is loaded.
-    @Published private(set) var codingAgentBlockReason: String? = "Comprobando modelos del gateway…"
-    @Published var statusMessage = "No conectado"
+    @Published private(set) var codingAgentBlockReason: String? = String(localized: "Comprobando modelos del gateway…")
+    @Published var statusMessage = String(localized: "No conectado")
     @Published var lastError: String?
 
     private var pollingTask: Task<Void, Never>?
@@ -95,6 +118,8 @@ final class AppModel: ObservableObject {
     private var tunnelProcess: Process?
     private var tunnelLog: FileHandle?
     private var settingsWindowController: NSWindowController?
+    private var settingsWindowDelegate: SettingsWindowDelegate?
+    var settingsEditor: SettingsEditor?
     private var setupWindowController: NSWindowController?
     private var setupWindowDelegate: SetupWindowDelegate?
     let launchedWithoutConfiguration = !FileManager.default.fileExists(
@@ -173,7 +198,7 @@ final class AppModel: ObservableObject {
     private func prepareForSystemSleep() {
         wakeReconnectTask?.cancel()
         tunnelStateKnown = false
-        statusMessage = "Mac en reposo"
+        statusMessage = String(localized: "Mac en reposo")
     }
 
     private func reconnectAfterSystemWake() {
@@ -190,7 +215,7 @@ final class AppModel: ObservableObject {
             tunnelStateKnown = false
             tunnelRunning = false
             managedTunnelRunning = false
-            statusMessage = "Reconectando tras reactivar el Mac…"
+            statusMessage = String(localized: "Reconectando tras reactivar el Mac…")
             lastError = nil
             await discardStaleTunnel(profile)
 
@@ -203,11 +228,11 @@ final class AppModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
                 guard !Task.isCancelled else { return }
                 if operationInProgress {
-                    statusMessage = "Esperando para reconectar…"
+                    statusMessage = String(localized: "Esperando para reconectar…")
                     continue
                 }
                 guard await selectSSHEndpoint(profile) else {
-                    statusMessage = "Esperando red · intento \(attempt + 1)/\(delays.count)"
+                    statusMessage = String(localized: "Esperando red · intento \(attempt + 1)/\(delays.count)")
                     continue
                 }
                 do {
@@ -215,8 +240,8 @@ final class AppModel: ObservableObject {
                     tunnelStateKnown = true
                     await refresh()
                     AppNotifications.send(
-                        title: "Conexión restaurada",
-                        body: "El túnel de \(profile.alias) se recuperó tras reactivar el Mac."
+                        title: String(localized: "Conexión restaurada"),
+                        body: String(localized: "El túnel de \(profile.alias) se recuperó tras reactivar el Mac.")
                     )
                     return
                 } catch {
@@ -225,10 +250,10 @@ final class AppModel: ObservableObject {
                 }
             }
             tunnelStateKnown = true
-            statusMessage = "No conectado"
+            statusMessage = String(localized: "No conectado")
             AppNotifications.send(
-                title: "No se pudo restaurar la conexión",
-                body: "Abre MyDGX para volver a intentarlo."
+                title: String(localized: "No se pudo restaurar la conexión"),
+                body: String(localized: "Abre MyDGX para volver a intentarlo.")
             )
         }
     }
@@ -271,7 +296,7 @@ final class AppModel: ObservableObject {
 
     var menuBarLabel: String {
         if let suite = benchmarkSuite {
-            return "Benchmarks \(Int(suite.progress.rounded()))%"
+            return String(localized: "Benchmarks \(Int(suite.progress.rounded()))%")
         }
         guard let metrics = overview?.metrics else { return "MyDGX" }
         let gpu = metrics.gpuUtilization.map { "\(Int($0.rounded()))%" } ?? "—"
@@ -292,11 +317,11 @@ final class AppModel: ObservableObject {
             }
             refreshLaunchAtLoginStatus()
             statusMessage = enabled
-                ? "Inicio automático activado"
-                : "Inicio automático desactivado"
+                ? String(localized: "Inicio automático activado")
+                : String(localized: "Inicio automático desactivado")
         } catch {
             refreshLaunchAtLoginStatus()
-            lastError = "No se pudo cambiar el inicio automático: \(error.localizedDescription)"
+            lastError = String(localized: "No se pudo cambiar el inicio automático: \(error.localizedDescription)")
         }
     }
 
@@ -316,7 +341,7 @@ final class AppModel: ObservableObject {
         if tunnelRunning {
             return canStopManagedTunnel
         }
-        return statusMessage != "Apagado" && overview == nil
+        return statusMessage != String(localized: "Apagado") && overview == nil
     }
 
     var canUseAPI: Bool {
@@ -344,7 +369,7 @@ final class AppModel: ObservableObject {
         let ssh = configuration.activeConnection.ssh
         return !ssh.host.isEmpty
             && !ssh.user.isEmpty
-            && (canUseAPI || statusMessage == "Undeployed")
+            && (canUseAPI || statusMessage == String(localized: "Undeployed"))
     }
 
     var canShutdown: Bool {
@@ -393,11 +418,11 @@ final class AppModel: ObservableObject {
         }
         nextAutomaticReconnectAt = Date().addingTimeInterval(15)
         guard selectedSSHEndpoints[profile.id] != nil || connectionAvailability[profile.id] == true else {
-            statusMessage = "Esperando red para reconectar…"
+            statusMessage = String(localized: "Esperando red para reconectar…")
             return
         }
         operationInProgress = true
-        statusMessage = "Red disponible · reconectando…"
+        statusMessage = String(localized: "Red disponible · reconectando…")
         defer { operationInProgress = false }
         do {
             await discardStaleTunnel(profile)
@@ -405,12 +430,12 @@ final class AppModel: ObservableObject {
             nextAutomaticReconnectAt = .distantPast
             await refresh()
             AppNotifications.send(
-                title: "Conexión restaurada",
-                body: "MyDGXTray se reconectó automáticamente a \(profile.alias)."
+                title: String(localized: "Conexión restaurada"),
+                body: String(localized: "MyDGXTray se reconectó automáticamente a \(profile.alias).")
             )
         } catch {
             lastError = error.localizedDescription
-            statusMessage = "Reintentando conexión…"
+            statusMessage = String(localized: "Reintentando conexión…")
         }
     }
 
@@ -424,7 +449,7 @@ final class AppModel: ObservableObject {
             return
         }
         operationInProgress = true
-        statusMessage = "LAN disponible · cambiando ruta…"
+        statusMessage = String(localized: "LAN disponible · cambiando ruta…")
         defer { operationInProgress = false }
         do {
             await discardStaleTunnel(profile)
@@ -432,7 +457,7 @@ final class AppModel: ObservableObject {
             await refresh()
         } catch {
             lastError = error.localizedDescription
-            statusMessage = "No se pudo cambiar a LAN"
+            statusMessage = String(localized: "No se pudo cambiar a LAN")
         }
     }
 
@@ -464,19 +489,19 @@ final class AppModel: ObservableObject {
         runtime = nil
         apiReachable = false
         lastConnectionState = nil
-        let route = onLAN(target) ? "en la red local" : "por internet"
-        statusMessage = "\(target.alias) seleccionado (\(route))"
+        let route = onLAN(target) ? String(localized: "en la red local") : String(localized: "por internet")
+        statusMessage = String(localized: "\(target.alias) seleccionado (\(route))")
         AppNotifications.send(
-            title: "Equipo seleccionado automáticamente",
+            title: String(localized: "Equipo seleccionado automáticamente"),
             body: online(current)
-                ? "\(target.alias) está disponible \(route); MyDGXTray lo usa en lugar de \(current.alias)."
-                : "\(current.alias) no responde; MyDGXTray usa \(target.alias) \(route)."
+                ? String(localized: "\(target.alias) está disponible \(route); MyDGXTray lo usa en lugar de \(current.alias).")
+                : String(localized: "\(current.alias) no responde; MyDGXTray usa \(target.alias) \(route).")
         )
         return true
     }
 
     private func connectOnLaunch() async {
-        statusMessage = "Buscando equipos disponibles…"
+        statusMessage = String(localized: "Buscando equipos disponibles…")
         await refreshConnectionAvailability()
         selectReachableProfile()
         let profile = configuration.activeConnection
@@ -486,19 +511,19 @@ final class AppModel: ObservableObject {
             return
         }
         operationInProgress = true
-        statusMessage = "Conectando…"
+        statusMessage = String(localized: "Conectando…")
         defer { operationInProgress = false }
         do {
             try await startTunnel(profile)
         } catch {
             lastError = error.localizedDescription
-            statusMessage = "No conectado"
+            statusMessage = String(localized: "No conectado")
         }
     }
 
     func requestRefresh() {
         guard !isRefreshing else { return }
-        statusMessage = "Actualizando…"
+        statusMessage = String(localized: "Actualizando…")
         manualRefreshTask?.cancel()
         manualRefreshTask = Task {
             await refresh()
@@ -536,23 +561,23 @@ final class AppModel: ObservableObject {
             }
             if pendingProfileName == nil,
                profileResponse.runtime.running,
-               machineActivity?.hasPrefix("Error al cargar") == true,
+               machineActivityIsError,
                let loadedProfile = profileResponse.profiles.first(where: { $0.active == 1 }) {
-                machineActivity = "Perfil cargado: \(loadedProfile.name)"
+                machineActivity = String(localized: "Perfil cargado: \(loadedProfile.name)")
                 lastProfileJobPhase = nil
                 notifyProfilePhase(.profileLoaded, profile: loadedProfile)
             }
             if let suite = newOverview.benchmarkSuite, suite.isActive {
                 statusMessage = suite.status == "restoring"
-                    ? "Restaurando estado · Benchmarks"
-                    : "Ejecutando benchmarks · \(Int(suite.progress.rounded()))%"
-                machineActivity = "Suite de benchmarks · \(suite.message)"
+                    ? String(localized: "Restaurando estado · Benchmarks")
+                    : String(localized: "Ejecutando benchmarks · \(Int(suite.progress.rounded()))%")
+                machineActivity = "\(String(localized: "Suite de benchmarks")) · \(suite.message)"
             } else {
                 let route = activeTunnelEndpoints[configuration.activeConnectionID]?.isPublic == true
-                    ? "Internet"
-                    : "LAN"
-                statusMessage = "Conectado a \(newOverview.host.hostname) · \(route)"
-                if machineActivity?.hasPrefix("Suite de benchmarks") == true {
+                    ? String(localized: "Internet")
+                    : String(localized: "LAN")
+                statusMessage = String(localized: "Conectado a \(newOverview.host.hostname) · \(route)")
+                if machineActivity?.hasPrefix(String(localized: "Suite de benchmarks")) == true {
                     machineActivity = nil
                 }
             }
@@ -565,7 +590,7 @@ final class AppModel: ObservableObject {
             overview = nil
             profiles = []
             runtime = nil
-            setCodingAgentBlockReason("MyDGX no está conectado.")
+            setCodingAgentBlockReason(String(localized: "MyDGX no está conectado."))
             let healthAvailable: Bool
             if let client = try? MyDGXClient(configuration: configuration),
                (try? await client.health()) != nil {
@@ -581,12 +606,12 @@ final class AppModel: ObservableObject {
                     remoteDirectory: profile.deployment.remoteDirectory
                 ) {
                     try? CredentialStore.write(importedKey, account: profile.apiKeyAccount)
-                    statusMessage = "Clave API importada · conectando…"
+                    statusMessage = String(localized: "Clave API importada · conectando…")
                     lastError = nil
                     return
                 }
-                statusMessage = "Autenticación requerida"
-                lastError = "MyDGX está disponible, pero MyDGXTray necesita una clave API en ~/.MyDGX/credentials."
+                statusMessage = String(localized: "Autenticación requerida")
+                lastError = String(localized: "MyDGX está disponible, pero MyDGXTray necesita una clave API en ~/.MyDGX/credentials.")
                 notifyConnectionState(.connected)
                 return
             }
@@ -603,18 +628,16 @@ final class AppModel: ObservableObject {
             } else {
                 poweredOff = false
             }
+            let undeployed = !poweredOff
+                && configuration.activeConnection.tunnel.enabled && tunnelState.managed
             statusMessage = poweredOff
-                ? "Apagado"
-                : (
-                    configuration.activeConnection.tunnel.enabled && tunnelState.managed
-                        ? "Undeployed"
-                        : "No conectado"
-                )
+                ? String(localized: "Apagado")
+                : (undeployed ? String(localized: "Undeployed") : String(localized: "No conectado"))
             lastError = error.localizedDescription
             notifyConnectionState(
                 poweredOff
                     ? .poweredOff
-                    : (statusMessage == "Undeployed" ? .undeployed : .disconnected)
+                    : (undeployed ? .undeployed : .disconnected)
             )
         }
     }
@@ -669,7 +692,7 @@ final class AppModel: ObservableObject {
         selectedSSHEndpoints = endpoints
         if overview != nil {
             latest[configuration.activeConnectionID] = true
-        } else if statusMessage == "Apagado" {
+        } else if statusMessage == String(localized: "Apagado") {
             latest[configuration.activeConnectionID] = false
         }
         connectionAvailability = latest
@@ -787,7 +810,7 @@ final class AppModel: ObservableObject {
                 await refresh()
             } catch {
                 lastError = error.localizedDescription
-                statusMessage = "Conexión fallida"
+                statusMessage = String(localized: "Conexión fallida")
             }
         }
     }
@@ -809,7 +832,9 @@ final class AppModel: ObservableObject {
             managedTunnelRunning = false
             tunnelRunning = false
             tunnelStateKnown = true
-            statusMessage = status == 0 ? "Túnel detenido · \(profile.alias)" : "Túnel detenido"
+            statusMessage = status == 0
+                ? String(localized: "Túnel detenido · \(profile.alias)")
+                : String(localized: "Túnel detenido")
             notifyConnectionState(.disconnected)
         }
     }
@@ -829,11 +854,11 @@ final class AppModel: ObservableObject {
             defer { operationInProgress = false }
             do {
                 let destination = try await backup(profile)
-                statusMessage = "Copia guardada · \(destination.lastPathComponent)"
+                statusMessage = String(localized: "Copia guardada · \(destination.lastPathComponent)")
                 lastError = nil
             } catch {
                 lastError = error.localizedDescription
-                statusMessage = "Falló la copia de seguridad"
+                statusMessage = String(localized: "Falló la copia de seguridad")
             }
         }
     }
@@ -847,12 +872,12 @@ final class AppModel: ObservableObject {
         operationInProgress = true
         deploymentStatus = DeploymentStatus(
             progress: 0.02,
-            phase: "Preparando despliegue",
-            detail: "Validando el perfil y el proyecto local.",
+            phase: String(localized: "Preparando despliegue"),
+            detail: String(localized: "Validando el perfil y el proyecto local."),
             error: nil,
             completed: false
         )
-        statusMessage = "Desplegando MyDGX · \(profile.alias)"
+        statusMessage = String(localized: "Desplegando MyDGX · \(profile.alias)")
         lastError = nil
         operationTask = Task {
             defer { operationInProgress = false }
@@ -863,25 +888,25 @@ final class AppModel: ObservableObject {
                 if profile.id == configuration.activeConnectionID, profile.tunnel.enabled {
                     updateDeployment(
                         progress: 0.99,
-                        phase: "Conectando",
-                        detail: "Iniciando la conexión y los túneles seguros."
+                        phase: String(localized: "Conectando"),
+                        detail: String(localized: "Iniciando la conexión y los túneles seguros.")
                     )
                     try await startTunnel(profile)
                 }
-                statusMessage = "Despliegue completado · \(profile.alias)"
+                statusMessage = String(localized: "Despliegue completado · \(profile.alias)")
                 deploymentStatus = DeploymentStatus(
                     progress: 1,
-                    phase: "Despliegue completado",
+                    phase: String(localized: "Despliegue completado"),
                     detail: profile.id == configuration.activeConnectionID && profile.tunnel.enabled
-                        ? "MyDGX se desplegó y la conexión quedó iniciada."
-                        : "MyDGX se sincronizó, preparó y reinició correctamente.",
+                        ? String(localized: "MyDGX se desplegó y la conexión quedó iniciada.")
+                        : String(localized: "MyDGX se sincronizó, preparó y reinició correctamente."),
                     error: nil,
                     completed: true
                 )
                 lastError = nil
                 AppNotifications.send(
-                    title: "Despliegue completado",
-                    body: "MyDGX está preparado en \(profile.alias)."
+                    title: String(localized: "Despliegue completado"),
+                    body: String(localized: "MyDGX está preparado en \(profile.alias).")
                 )
                 if profile.id == configuration.activeConnectionID {
                     await refresh()
@@ -890,18 +915,22 @@ final class AppModel: ObservableObject {
                 let diagnostic = deploymentDiagnostic(profile: profile)
                 lastError = diagnostic ?? error.localizedDescription
                 statusMessage = deploymentCompleted
-                    ? "Desplegado · Falló la conexión"
-                    : "Falló el despliegue"
+                    ? String(localized: "Desplegado · Falló la conexión")
+                    : String(localized: "Falló el despliegue")
                 deploymentStatus = DeploymentStatus(
                     progress: deploymentStatus?.progress ?? 0,
-                    phase: deploymentCompleted ? "Error de conexión" : "Error de despliegue",
-                    detail: deploymentStatus?.detail ?? "La operación no se completó.",
+                    phase: deploymentCompleted
+                        ? String(localized: "Error de conexión")
+                        : String(localized: "Error de despliegue"),
+                    detail: deploymentStatus?.detail ?? String(localized: "La operación no se completó."),
                     error: lastError,
                     completed: false
                 )
                 AppNotifications.send(
-                    title: deploymentCompleted ? "Error de conexión" : "Error de despliegue",
-                    body: "Revisa Preferencias para ver el diagnóstico de \(profile.alias)."
+                    title: deploymentCompleted
+                        ? String(localized: "Error de conexión")
+                        : String(localized: "Error de despliegue"),
+                    body: String(localized: "Revisa Preferencias para ver el diagnóstico de \(profile.alias).")
                 )
             }
         }
@@ -915,15 +944,47 @@ final class AppModel: ObservableObject {
 
         let controller = NSHostingController(rootView: SettingsView(model: self))
         let window = SettingsWindow(contentViewController: controller)
-        window.title = "Preferencias de MyDGX"
+        window.title = String(localized: "Preferencias de MyDGX")
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.hidesOnDeactivate = false
         window.center()
+        let delegate = SettingsWindowDelegate(model: self)
+        window.delegate = delegate
+        settingsWindowDelegate = delegate
         settingsWindowController = NSWindowController(window: window)
         presentSettingsWindow(window)
+    }
+
+    func settingsChanged(_ hasChanges: Bool) {
+        settingsWindowController?.window?.isDocumentEdited = hasChanges
+    }
+
+    /// Asks before unsaved preferences are lost; false keeps the window (and the app) open.
+    func settingsMayClose() -> Bool {
+        guard let editor = settingsEditor, editor.hasChanges() else { return true }
+        if let window = settingsWindowController?.window {
+            presentSettingsWindow(window)
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(localized: "¿Guardar los cambios de Preferencias?")
+        alert.informativeText = String(localized: "Si no los guardas, se perderán y MyDGX seguirá usando la configuración anterior.")
+        alert.addButton(withTitle: String(localized: "Guardar"))
+        let discardButton = alert.addButton(withTitle: String(localized: "Descartar cambios"))
+        discardButton.hasDestructiveAction = true
+        alert.addButton(withTitle: String(localized: "Cancelar"))
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return editor.save()
+        case .alertSecondButtonReturn:
+            editor.discard()
+            return true
+        default:
+            return false
+        }
     }
 
     func openSetupWizard() {
@@ -934,7 +995,7 @@ final class AppModel: ObservableObject {
         let wizard = SparkSetupWizard(model: self)
         let controller = NSHostingController(rootView: SparkSetupWizardView(wizard: wizard))
         let window = SettingsWindow(contentViewController: controller)
-        window.title = "Asistente de instalación Spark"
+        window.title = String(localized: "Asistente de instalación Spark")
         window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
@@ -1000,7 +1061,7 @@ final class AppModel: ObservableObject {
 
     func openDashboard() {
         guard let url = configuration.dashboardURL else {
-            lastError = "La URL del dashboard no es válida."
+            lastError = String(localized: "La URL del dashboard no es válida.")
             return
         }
         NSWorkspace.shared.open(url)
@@ -1008,7 +1069,7 @@ final class AppModel: ObservableObject {
 
     func openOpenWebUI() {
         guard let url = configuration.resolvedOpenWebUIURL else {
-            lastError = "La URL de Open WebUI no es válida."
+            lastError = String(localized: "La URL de Open WebUI no es válida.")
             return
         }
         let profile = configuration.activeConnection
@@ -1033,7 +1094,7 @@ final class AppModel: ObservableObject {
                 throw RemoteActionError.tunnelFailed
             } catch {
                 lastError = error.localizedDescription
-                statusMessage = "Open WebUI no disponible"
+                statusMessage = String(localized: "Open WebUI no disponible")
             }
         }
     }
@@ -1041,7 +1102,7 @@ final class AppModel: ObservableObject {
     func openComfyUI() {
         let profile = configuration.activeConnection
         guard let url = profile.resolvedComfyUIURL else {
-            lastError = "La URL de ComfyUI no es válida."
+            lastError = String(localized: "La URL de ComfyUI no es válida.")
             return
         }
         guard profile.tunnel.enabled else {
@@ -1066,7 +1127,7 @@ final class AppModel: ObservableObject {
                 throw RemoteActionError.tunnelFailed
             } catch {
                 lastError = error.localizedDescription
-                statusMessage = "ComfyUI no disponible"
+                statusMessage = String(localized: "ComfyUI no disponible")
             }
         }
     }
@@ -1106,7 +1167,7 @@ final class AppModel: ObservableObject {
                 throw RemoteActionError.webAppUnavailable(app.alias, app.port)
             } catch {
                 lastError = error.localizedDescription
-                statusMessage = "\(app.alias) no disponible"
+                statusMessage = String(localized: "\(app.alias) no disponible")
             }
         }
     }
@@ -1189,7 +1250,7 @@ final class AppModel: ObservableObject {
     private func codingAgentReadinessProblem() async -> String {
         let port = configuration.activeConnection.tunnel.localGatewayPort
         guard let url = URL(string: "http://127.0.0.1:\(port)/v1/models") else {
-            return "El puerto local del gateway no es válido."
+            return String(localized: "El puerto local del gateway no es válido.")
         }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
         request.timeoutInterval = 4
@@ -1197,27 +1258,26 @@ final class AppModel: ObservableObject {
         do {
             let (data, response) = try await Self.probeSession.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                return "El gateway no publica modelos: no hay ningún perfil cargado."
+                return String(localized: "El gateway no publica modelos: no hay ningún perfil cargado.")
             }
             list = try JSONDecoder().decode(GatewayModelList.self, from: data)
         } catch {
-            return "El gateway de MyDGX no responde por el túnel."
+            return String(localized: "El gateway de MyDGX no responde por el túnel.")
         }
         let minimum = Self.codingAgentMinContext
         let text = list.data.filter { ["chat", "vision"].contains($0.task ?? "chat") }
         if text.isEmpty {
-            return "No hay ningún modelo de texto cargado. Carga un perfil con un modelo de chat."
+            return String(localized: "No hay ningún modelo de texto cargado. Carga un perfil con un modelo de chat.")
         }
         let roomy = text.filter { ($0.contextLength ?? 0) >= minimum }
         if roomy.isEmpty {
             let loaded = text
                 .map { "\($0.id) (\(($0.contextLength ?? 0) / 1024)k)" }
                 .joined(separator: ", ")
-            return "Ningún modelo de texto llega a \(minimum / 1024)k de contexto (cargados: \(loaded)). "
-                + "Sube el contexto del perfil o carga otro modelo."
+            return String(localized: "Ningún modelo de texto llega a \(minimum / 1024)k de contexto (cargados: \(loaded)). Sube el contexto del perfil o carga otro modelo.")
         }
         if !roomy.contains(where: { $0.capabilities?.tools ?? true }) {
-            return "Los modelos con contexto suficiente no admiten tool calling (llama.cpp sin --jinja)."
+            return String(localized: "Los modelos con contexto suficiente no admiten tool calling (llama.cpp sin --jinja).")
         }
         return ""
     }
@@ -1236,7 +1296,7 @@ final class AppModel: ObservableObject {
             let problem = await codingAgentReadinessProblem()
             setCodingAgentBlockReason(problem.isEmpty ? nil : problem)
             guard problem.isEmpty else {
-                lastError = "\(agent.title) no se puede abrir: \(problem)"
+                lastError = String(localized: "\(agent.title) no se puede abrir: \(problem)")
                 return
             }
             launchCodingAgent(agent, active: active)
@@ -1308,7 +1368,7 @@ final class AppModel: ObservableObject {
     func deploymentSourceDescription(_ profile: ConnectionProfile) -> String {
         let configured = Self.configuredSourcePath(profile)
         if !configured.isEmpty { return configured }
-        return "la versión \(SupportLayout.bundledSourceVersion) incluida en MyDGXTray"
+        return String(localized: "la versión \(SupportLayout.bundledSourceVersion) incluida en MyDGXTray")
     }
 
     private static func configuredSourcePath(_ profile: ConnectionProfile) -> String {
@@ -1343,7 +1403,7 @@ final class AppModel: ObservableObject {
                 launcherName: "mydgx-first-deploy-\(profile.id).command",
                 completion: "Primer despliegue terminado. MyDGXTray importará la clave API y conectará automáticamente."
             )
-            statusMessage = "Primer despliegue abierto en Terminal"
+            statusMessage = String(localized: "Primer despliegue abierto en Terminal")
             lastError = nil
         } catch {
             lastError = error.localizedDescription
@@ -1373,7 +1433,7 @@ final class AppModel: ObservableObject {
                 launcherName: "mydgx-github-deploy-\(profile.id).command",
                 completion: "Actualización desde GitHub terminada."
             )
-            statusMessage = "Actualización desde GitHub abierta en Terminal"
+            statusMessage = String(localized: "Actualización desde GitHub abierta en Terminal")
             lastError = nil
         } catch {
             lastError = error.localizedDescription
@@ -1438,7 +1498,7 @@ final class AppModel: ObservableObject {
                     consecutivePollingFailures = 0
                 } catch {
                     consecutivePollingFailures += 1
-                    machineActivity = "Recuperando seguimiento · intento \(consecutivePollingFailures)/10"
+                    machineActivity = String(localized: "Recuperando seguimiento · intento \(consecutivePollingFailures)/10")
                     if consecutivePollingFailures >= 10 {
                         throw error
                     }
@@ -1463,7 +1523,7 @@ final class AppModel: ObservableObject {
                state.runtime.profileIDs.contains(profile.id) {
                 profiles = state.profiles
                 runtime = state.runtime
-                machineActivity = "Perfil cargado: \(profile.name)"
+                machineActivity = String(localized: "Perfil cargado: \(profile.name)")
                 pendingProfileName = nil
                 lastError = nil
                 notifyProfilePhase(.profileLoaded, profile: profile)
@@ -1471,7 +1531,8 @@ final class AppModel: ObservableObject {
             }
             throw RemoteActionError.profileJobTimedOut
         } catch {
-            machineActivity = "Error al cargar \(profile.name)"
+            machineActivity = String(localized: "Error al cargar \(profile.name)")
+            machineActivityIsError = true
             pendingProfileName = nil
             lastError = error.localizedDescription
             notifyProfilePhase(.failed, profile: profile)
@@ -1485,34 +1546,33 @@ final class AppModel: ObservableObject {
 
     func profilePlanFailure(_ plan: ProfileRuntimePlan) -> String {
         if userProfileCount(plan.profileIDs) > 2 {
-            return "Ya hay dos perfiles cargados."
+            return String(localized: "Ya hay dos perfiles cargados.")
         }
         if !plan.aliasConflicts.isEmpty, !plan.portConflicts.isEmpty {
-            return "Alias incompatibles: \(plan.aliasConflicts.joined(separator: ", ")); "
-                + "puertos ocupados: \(plan.portConflicts.map(String.init).joined(separator: ", "))."
+            return String(localized: "Alias incompatibles: \(plan.aliasConflicts.joined(separator: ", ")); puertos ocupados: \(plan.portConflicts.map(String.init).joined(separator: ", ")).")
         }
         if !plan.aliasConflicts.isEmpty {
-            return "Alias incompatibles: \(plan.aliasConflicts.joined(separator: ", "))."
+            return String(localized: "Alias incompatibles: \(plan.aliasConflicts.joined(separator: ", ")).")
         }
         if !plan.portConflicts.isEmpty {
-            return "Puertos ocupados: \(plan.portConflicts.map(String.init).joined(separator: ", "))."
+            return String(localized: "Puertos ocupados: \(plan.portConflicts.map(String.init).joined(separator: ", ")).")
         }
         if plan.requiredMB > plan.capacityMB {
             return String(
-                format: "Los perfiles requieren %.1f GB en total y la capacidad segura es %.1f GB.",
+                format: String(localized: "Los perfiles requieren %.1f GB en total y la capacidad segura es %.1f GB."),
                 Double(plan.requiredMB) / 1024,
                 Double(plan.capacityMB) / 1024
             )
         }
         if plan.incrementalMB + plan.reserveMB > plan.availableMB {
             return String(
-                format: "Se necesitan %.1f GB adicionales más %.1f GB de reserva; hay %.1f GB libres.",
+                format: String(localized: "Se necesitan %.1f GB adicionales más %.1f GB de reserva; hay %.1f GB libres."),
                 Double(plan.incrementalMB) / 1024,
                 Double(plan.reserveMB) / 1024,
                 Double(plan.availableMB) / 1024
             )
         }
-        return "La combinación no supera el preflight de memoria y compatibilidad."
+        return String(localized: "La combinación no supera el preflight de memoria y compatibilidad.")
     }
 
     func stopQuickModel(_ quickModel: ProfileModelSummary) async {
@@ -1521,7 +1581,7 @@ final class AppModel: ObservableObject {
         defer { operationInProgress = false }
         await perform {
             try await MyDGXClient(configuration: self.configuration).stopQuickModel(quickModel)
-            self.machineActivity = "Modelo apagado: \(quickModel.label)"
+            self.machineActivity = String(localized: "Modelo apagado: \(quickModel.label)")
         }
     }
 
@@ -1531,10 +1591,10 @@ final class AppModel: ObservableObject {
         defer { operationInProgress = false }
         await perform {
             try await MyDGXClient(configuration: self.configuration).stopProfile(profileID: profile.id)
-            self.machineActivity = "Perfil detenido: \(profile.name)"
+            self.machineActivity = String(localized: "Perfil detenido: \(profile.name)")
             AppNotifications.send(
-                title: "Perfil detenido",
-                body: "\(profile.name) se detuvo en \(self.configuration.activeConnection.alias)."
+                title: String(localized: "Perfil detenido"),
+                body: String(localized: "\(profile.name) se detuvo en \(self.configuration.activeConnection.alias).")
             )
         }
     }
@@ -1548,10 +1608,10 @@ final class AppModel: ObservableObject {
             guard result == 0 else {
                 throw RemoteActionError.commandFailed(result)
             }
-            statusMessage = "Apagando…"
+            statusMessage = String(localized: "Apagando…")
             AppNotifications.send(
-                title: "Apagado solicitado",
-                body: "Esperando confirmación de \(configuration.activeConnection.alias)."
+                title: String(localized: "Apagado solicitado"),
+                body: String(localized: "Esperando confirmación de \(configuration.activeConnection.alias).")
             )
             for _ in 0..<40 {
                 try await Task.sleep(nanoseconds: 3_000_000_000)
@@ -1560,27 +1620,27 @@ final class AppModel: ObservableObject {
                     overview = nil
                     profiles = []
                     runtime = nil
-                    statusMessage = "Apagado"
+                    statusMessage = String(localized: "Apagado")
                     lastError = nil
                     notifyConnectionState(.disconnected)
                     AppNotifications.send(
-                        title: "Equipo apagado",
-                        body: "\(configuration.activeConnection.alias) dejó de responder por SSH."
+                        title: String(localized: "Equipo apagado"),
+                        body: String(localized: "\(configuration.activeConnection.alias) dejó de responder por SSH.")
                     )
                     return
                 }
             }
-            statusMessage = "Apagado no confirmado"
+            statusMessage = String(localized: "Apagado no confirmado")
             AppNotifications.send(
-                title: "Apagado no confirmado",
-                body: "\(configuration.activeConnection.alias) continúa respondiendo por SSH."
+                title: String(localized: "Apagado no confirmado"),
+                body: String(localized: "\(configuration.activeConnection.alias) continúa respondiendo por SSH.")
             )
         } catch {
             lastError = error.localizedDescription
-            statusMessage = "Error al apagar"
+            statusMessage = String(localized: "Error al apagar")
             AppNotifications.send(
-                title: "Error al apagar",
-                body: "No se pudo confirmar la orden para \(configuration.activeConnection.alias)."
+                title: String(localized: "Error al apagar"),
+                body: String(localized: "No se pudo confirmar la orden para \(configuration.activeConnection.alias).")
             )
         }
     }
@@ -1603,7 +1663,7 @@ final class AppModel: ObservableObject {
                 updateProfileJob(job, profile: profile)
             } else {
                 pendingProfileName = job.target
-                machineActivity = "Preparando perfil · \(Int(job.progress.rounded()))%"
+                machineActivity = String(localized: "Preparando perfil · \(Int(job.progress.rounded()))%")
             }
             return
         }
@@ -1614,7 +1674,7 @@ final class AppModel: ObservableObject {
            let profile = profiles.first(where: { $0.id == job.target }) {
             updateProfileJob(job, profile: profile)
             if ["failed", "cancelled"].contains(job.status) {
-                lastError = "No se pudo cargar el perfil: \(job.message)"
+                lastError = String(localized: "No se pudo cargar el perfil: \(job.message)")
             }
         }
         pendingProfileName = nil
@@ -1627,33 +1687,34 @@ final class AppModel: ObservableObject {
         let label: String
         if job.status == "completed" {
             phase = .profileLoaded
-            label = "Perfil cargado"
+            label = String(localized: "Perfil cargado")
         } else if ["failed", "cancelled"].contains(job.status) {
             phase = .failed
-            label = "Error al cargar el perfil"
+            label = String(localized: "Error al cargar el perfil")
         } else if job.status == "queued" {
             phase = .queued
-            label = "Perfil en cola"
+            label = String(localized: "Perfil en cola")
         } else if job.progress >= 96 || message.contains("modelos cargados") {
             phase = .modelLoaded
-            label = "Modelo cargado"
+            label = String(localized: "Modelo cargado")
         } else if job.progress >= 82 || message.contains("arrancando") {
             phase = .loading
-            label = "Cargando modelo"
+            label = String(localized: "Cargando modelo")
         } else if job.progress >= 76 || message.contains("comprobando archivos") {
             phase = .installing
-            label = "Instalando modelo"
+            label = String(localized: "Instalando modelo")
         } else if message.contains("descargando") || message.contains("preparando") {
             phase = .downloading
-            label = "Descargando modelo"
+            label = String(localized: "Descargando modelo")
         } else {
             phase = .checking
-            label = "Comprobando modelos"
+            label = String(localized: "Comprobando modelos")
         }
         let progress = Int(job.progress.rounded())
         machineActivity = phase == .profileLoaded
             ? "\(label): \(profile.name)"
             : "\(label) · \(progress)%"
+        machineActivityIsError = phase == .failed
         notifyProfilePhase(phase, profile: profile)
     }
 
@@ -1665,18 +1726,18 @@ final class AppModel: ObservableObject {
         lastProfileJobPhase = phase
         let title: String
         switch phase {
-        case .queued: title = "Perfil en cola"
-        case .checking: title = "Comprobando modelos"
-        case .downloading: title = "Descargando modelo"
-        case .installing: title = "Instalando modelo"
-        case .loading: title = "Cargando modelo"
-        case .modelLoaded: title = "Modelo cargado"
-        case .profileLoaded: title = "Perfil cargado"
-        case .failed: title = "Error al cargar perfil"
+        case .queued: title = String(localized: "Perfil en cola")
+        case .checking: title = String(localized: "Comprobando modelos")
+        case .downloading: title = String(localized: "Descargando modelo")
+        case .installing: title = String(localized: "Instalando modelo")
+        case .loading: title = String(localized: "Cargando modelo")
+        case .modelLoaded: title = String(localized: "Modelo cargado")
+        case .profileLoaded: title = String(localized: "Perfil cargado")
+        case .failed: title = String(localized: "Error al cargar perfil")
         }
         let body = phase == .profileLoaded
-            ? "\(profile.name) está listo en \(configuration.activeConnection.alias)."
-            : "\(profile.name) en \(configuration.activeConnection.alias)."
+            ? String(localized: "\(profile.name) está listo en \(configuration.activeConnection.alias).")
+            : String(localized: "\(profile.name) en \(configuration.activeConnection.alias).")
         AppNotifications.send(title: title, body: body)
     }
 
@@ -1696,13 +1757,13 @@ final class AppModel: ObservableObject {
         if previous == nil {
             if state == .undeployed {
                 AppNotifications.send(
-                    title: "MyDGX no desplegado",
-                    body: "El túnel con \(alias) funciona, pero la API MyDGX no responde."
+                    title: String(localized: "MyDGX no desplegado"),
+                    body: String(localized: "El túnel con \(alias) funciona, pero la API MyDGX no responde.")
                 )
             } else if state == .poweredOff {
                 AppNotifications.send(
-                    title: "Equipo apagado",
-                    body: "\(alias) no responde por API ni SSH."
+                    title: String(localized: "Equipo apagado"),
+                    body: String(localized: "\(alias) no responde por API ni SSH.")
                 )
             }
             return
@@ -1711,23 +1772,23 @@ final class AppModel: ObservableObject {
         switch state {
         case .connected:
             AppNotifications.send(
-                title: "Conexión restablecida",
-                body: "MyDGX vuelve a responder en \(alias)."
+                title: String(localized: "Conexión restablecida"),
+                body: String(localized: "MyDGX vuelve a responder en \(alias).")
             )
         case .disconnected:
             AppNotifications.send(
-                title: "Equipo desconectado",
-                body: "Se perdió o detuvo la conexión con \(alias)."
+                title: String(localized: "Equipo desconectado"),
+                body: String(localized: "Se perdió o detuvo la conexión con \(alias).")
             )
         case .undeployed:
             AppNotifications.send(
-                title: "MyDGX no desplegado",
-                body: "El túnel con \(alias) funciona, pero la API MyDGX no responde."
+                title: String(localized: "MyDGX no desplegado"),
+                body: String(localized: "El túnel con \(alias) funciona, pero la API MyDGX no responde.")
             )
         case .poweredOff:
             AppNotifications.send(
-                title: "Equipo apagado",
-                body: "\(alias) ha dejado de responder por API y SSH."
+                title: String(localized: "Equipo apagado"),
+                body: String(localized: "\(alias) ha dejado de responder por API y SSH.")
             )
         }
     }
@@ -1837,7 +1898,7 @@ final class AppModel: ObservableObject {
             managedTunnelRunning = true
             tunnelRunning = true
             activeTunnelEndpoints[profile.id] = selectedSSHEndpoints[profile.id]
-            statusMessage = "Túnel activo · \(profile.alias)"
+            statusMessage = String(localized: "Túnel activo · \(profile.alias)")
             return
         }
         if tunnelProcess?.isRunning == true {
@@ -1905,7 +1966,7 @@ final class AppModel: ObservableObject {
         if !arguments.contains("-L") {
             managedTunnelRunning = false
             tunnelRunning = true
-            statusMessage = "Túneles externos disponibles · \(profile.alias)"
+            statusMessage = String(localized: "Túneles externos disponibles · \(profile.alias)")
             log.closeFile()
             return
         }
@@ -1934,7 +1995,7 @@ final class AppModel: ObservableObject {
         managedTunnelRunning = true
         tunnelRunning = true
         activeTunnelEndpoints[profile.id] = selectedSSHEndpoints[profile.id]
-        statusMessage = "Túnel activo · \(profile.alias)"
+        statusMessage = String(localized: "Túnel activo · \(profile.alias)")
     }
 
     /// A cached response would report a port as reachable after its forward is gone.
@@ -2263,8 +2324,8 @@ final class AppModel: ObservableObject {
         let destination = "\(remoteTarget(profile)):\(profile.deployment.remoteDirectory)/"
         updateDeployment(
             progress: 0.06,
-            phase: "Sincronizando proyecto",
-            detail: "Calculando los archivos que deben copiarse."
+            phase: String(localized: "Sincronizando proyecto"),
+            detail: String(localized: "Calculando los archivos que deben copiarse.")
         )
         let rsyncStatus = try await runProcess(
             executable: "/usr/bin/rsync",
@@ -2294,8 +2355,8 @@ final class AppModel: ObservableObject {
         }
         updateDeployment(
             progress: 0.38,
-            phase: "Proyecto sincronizado",
-            detail: "Iniciando la preparación remota de MyDGX."
+            phase: String(localized: "Proyecto sincronizado"),
+            detail: String(localized: "Iniciando la preparación remota de MyDGX.")
         )
         let remoteDirectory = profile.deployment.remoteDirectory
         let openWebUIPublicURL = "http://127.0.0.1:\(profile.tunnel.localOpenWebUIPort)"
@@ -2318,7 +2379,7 @@ final class AppModel: ObservableObject {
         let profile = configuration.activeConnection
         let url = SupportLayout.logs.appendingPathComponent("deploy-\(profile.id).log")
         guard FileManager.default.fileExists(atPath: url.path) else {
-            lastError = "Todavía no existe un log de despliegue para este equipo."
+            lastError = String(localized: "Todavía no existe un log de despliegue para este equipo.")
             return
         }
         NSWorkspace.shared.open(url)
@@ -2347,8 +2408,8 @@ final class AppModel: ObservableObject {
         let progress = 0.06 + min(100, percentage ?? 0) / 100 * 0.30
         updateDeployment(
             progress: progress,
-            phase: "Sincronizando proyecto",
-            detail: percentage.map { "Transferencia: \(Int($0))%" } ?? text
+            phase: String(localized: "Sincronizando proyecto"),
+            detail: percentage.map { String(localized: "Transferencia: \(Int($0))%") } ?? text
         )
     }
 
@@ -2362,22 +2423,22 @@ final class AppModel: ObservableObject {
         let phase: String
         if lower.contains("instalando mydgx") || lower.contains("mydgx preparado") {
             progress = 0.55
-            phase = "Preparando MyDGX"
+            phase = String(localized: "Preparando MyDGX")
         } else if lower.contains("open webui preparado") {
             progress = 0.74
-            phase = "Preparando Open WebUI"
+            phase = String(localized: "Preparando Open WebUI")
         } else if lower.contains("systemd") || lower.contains("supervisor local") {
             progress = 0.84
-            phase = "Reiniciando servicios"
+            phase = String(localized: "Reiniciando servicios")
         } else if lower.contains("comprobando preparación") {
             progress = 0.93
-            phase = "Comprobando el sistema"
+            phase = String(localized: "Comprobando el sistema")
         } else if lower.contains("versiones desplegadas") {
             progress = 0.98
-            phase = "Verificando versiones"
+            phase = String(localized: "Verificando versiones")
         } else {
             progress = max(0.40, deploymentStatus?.progress ?? 0.40)
-            phase = deploymentStatus?.phase ?? "Preparando equipo remoto"
+            phase = deploymentStatus?.phase ?? String(localized: "Preparando equipo remoto")
         }
         updateDeployment(progress: progress, phase: phase, detail: text)
     }
@@ -2390,20 +2451,20 @@ final class AppModel: ObservableObject {
         }
         if text.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
             return profile.kind == .axforge
-                ? "AxForge cambió la clave SSH de esta instancia. Reinicia MyDGXTray para fijar la clave de la sesión actual y vuelve a desplegar."
-                : "La identidad SSH del equipo cambió. Verifica su huella antes de actualizar known_hosts."
+                ? String(localized: "AxForge cambió la clave SSH de esta instancia. Reinicia MyDGXTray para fijar la clave de la sesión actual y vuelve a desplegar.")
+                : String(localized: "La identidad SSH del equipo cambió. Verifica su huella antes de actualizar known_hosts.")
         }
         if text.localizedCaseInsensitiveContains("permission denied") {
-            return "SSH rechazó la autenticación. Comprueba el usuario, la clave privada y sus permisos."
+            return String(localized: "SSH rechazó la autenticación. Comprueba el usuario, la clave privada y sus permisos.")
         }
         if text.contains("sudo:") {
-            return "El equipo remoto necesita permisos sudo no interactivos para los comandos de instalación autorizados."
+            return String(localized: "El equipo remoto necesita permisos sudo no interactivos para los comandos de instalación autorizados.")
         }
         if text.localizedCaseInsensitiveContains("no space left") {
-            return "El equipo remoto no tiene espacio suficiente para completar el despliegue."
+            return String(localized: "El equipo remoto no tiene espacio suficiente para completar el despliegue.")
         }
         if text.localizedCaseInsensitiveContains("connection refused") {
-            return "El puerto SSH remoto rechazó la conexión."
+            return String(localized: "El puerto SSH remoto rechazó la conexión.")
         }
         return nil
     }
@@ -2535,31 +2596,31 @@ enum RemoteActionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .backupFailed(code):
-            return "La copia de seguridad falló (código \(code)). Revisa ~/.MyDGX/logs."
+            return String(localized: "La copia de seguridad falló (código \(code)). Revisa ~/.MyDGX/logs.")
         case let .commandFailed(code):
-            return "La operación SSH falló (código \(code)). Comprueba la clave y la regla sudoers limitada."
+            return String(localized: "La operación SSH falló (código \(code)). Comprueba la clave y la regla sudoers limitada.")
         case .incompleteSSH:
-            return "Completa host, usuario y puerto SSH del perfil."
+            return String(localized: "Completa host, usuario y puerto SSH del perfil.")
         case .invalidBackup:
-            return "La copia recibida está incompleta o no contiene mydgx.db."
+            return String(localized: "La copia recibida está incompleta o no contiene mydgx.db.")
         case .tunnelFailed:
-            return "El túnel SSH no pudo iniciarse. Revisa el log del perfil en ~/.MyDGX/logs."
+            return String(localized: "El túnel SSH no pudo iniciarse. Revisa el log del perfil en ~/.MyDGX/logs.")
         case .invalidDeploySource:
-            return "Selecciona en Proyecto local una carpeta de MyDGX que contenga start.sh."
+            return String(localized: "Selecciona en Proyecto local una carpeta de MyDGX que contenga start.sh.")
         case .gitHubSourceUnavailable:
-            return "Para actualizar desde GitHub, indica en Proyecto local un clon git de MyDGX."
+            return String(localized: "Para actualizar desde GitHub, indica en Proyecto local un clon git de MyDGX.")
         case let .deployFailed(code):
-            return "El despliegue falló (código \(code)). Revisa ~/.MyDGX/logs."
+            return String(localized: "El despliegue falló (código \(code)). Revisa ~/.MyDGX/logs.")
         case let .profilePreflightFailed(message):
-            return "No se puede arrancar el perfil: \(message)"
+            return String(localized: "No se puede arrancar el perfil: \(message)")
         case let .profileJobFailed(message):
-            return "No se pudo cargar el perfil: \(message)"
+            return String(localized: "No se pudo cargar el perfil: \(message)")
         case .profileJobTimedOut:
-            return "La carga del perfil no terminó en 30 minutos."
+            return String(localized: "La carga del perfil no terminó en 30 minutos.")
         case .unsafeIdentity:
-            return "La clave SSH no existe o sus permisos permiten acceso a otros usuarios; usa chmod 600."
+            return String(localized: "La clave SSH no existe o sus permisos permiten acceso a otros usuarios; usa chmod 600.")
         case let .webAppUnavailable(alias, port):
-            return "\(alias) no responde en el puerto \(port). Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac."
+            return String(localized: "\(alias) no responde en el puerto \(port). Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac.")
         }
     }
 }

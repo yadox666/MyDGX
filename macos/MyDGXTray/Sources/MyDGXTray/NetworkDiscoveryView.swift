@@ -8,7 +8,7 @@ struct NetworkDiscoveryView: View {
     @StateObject private var discovery = DGXDiscovery()
     @State private var phase = Phase.searching
     @State private var progress = 0.0
-    @State private var detail = "Preparando la búsqueda en la red local…"
+    @State private var detail = String(localized: "Preparando la búsqueda en la red local…")
     @State private var deviceStates: [String: DeviceState] = [:]
     @State private var running = false
     @State private var result: DGXImportResult?
@@ -45,14 +45,14 @@ struct NetworkDiscoveryView: View {
                                 .foregroundStyle(.secondary)
                                 Text(
                                     running
-                                        ? "Escuchando anuncios Bonjour…"
-                                        : "No se encontraron equipos"
+                                        ? String(localized: "Escuchando anuncios Bonjour…")
+                                        : String(localized: "No se encontraron equipos")
                                 )
                                 .font(.headline)
                                 Text(
                                     running
-                                        ? "Los DGX aparecerán aquí a medida que respondan."
-                                        : "Comprueba que el equipo y este Mac estén en la misma red."
+                                        ? String(localized: "Los DGX aparecerán aquí a medida que respondan.")
+                                        : String(localized: "Comprueba que el equipo y este Mac estén en la misma red.")
                                 )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -91,7 +91,9 @@ struct NetworkDiscoveryView: View {
                     Task { await runDiscovery() }
                 } label: {
                     Label(
-                        result == nil ? "Buscar de nuevo" : "Repetir búsqueda",
+                        result == nil
+                            ? String(localized: "Buscar de nuevo")
+                            : String(localized: "Repetir búsqueda"),
                         systemImage: "arrow.clockwise"
                     )
                 }
@@ -143,9 +145,9 @@ struct NetworkDiscoveryView: View {
                 Text(device.name)
                     .font(.callout.weight(.semibold))
                 Text(
-                    "\(device.ipAddress ?? "IP sin resolver") · "
+                    "\(device.ipAddress ?? String(localized: "IP sin resolver")) · "
                         + "\(device.host) · SSH \(device.port)"
-                        + (device.portVerified ? " ✓" : " (sin verificar)")
+                        + (device.portVerified ? " ✓" : " " + String(localized: "(sin verificar)"))
                 )
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
@@ -172,7 +174,7 @@ struct NetworkDiscoveryView: View {
         .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func summaryValue(_ value: Int, _ label: String, _ color: Color) -> some View {
+    private func summaryValue(_ value: Int, _ label: LocalizedStringKey, _ color: Color) -> some View {
         VStack(spacing: 2) {
             Text("\(value)")
                 .font(.title2.bold())
@@ -193,7 +195,7 @@ struct NetworkDiscoveryView: View {
         deviceStates = [:]
         phase = .searching
         progress = 0.02
-        detail = "Buscando anuncios SSH de DGX, Spark o NVIDIA…"
+        detail = String(localized: "Buscando anuncios SSH de DGX, Spark o NVIDIA…")
         discovery.start()
 
         for tick in 1...30 {
@@ -209,13 +211,13 @@ struct NetworkDiscoveryView: View {
         guard !discovery.devices.isEmpty else {
             phase = .completed
             progress = 1
-            detail = "Búsqueda finalizada sin resultados."
+            detail = String(localized: "Búsqueda finalizada sin resultados.")
             running = false
             return
         }
 
         phase = .verifying
-        detail = "Comprobando duplicados y claves SSH autorizadas…"
+        detail = String(localized: "Comprobando duplicados y claves SSH autorizadas…")
         let imported = await DGXAutoImporter.importDevices(
             discovery.devices,
             into: configuration
@@ -234,8 +236,8 @@ struct NetworkDiscoveryView: View {
         phase = .saving
         progress = 0.93
         detail = imported.added.isEmpty
-            ? "No hay equipos nuevos que guardar."
-            : "Guardando \(imported.added.count) equipo(s) en MyDGX…"
+            ? String(localized: "No hay equipos nuevos que guardar.")
+            : String(localized: "Guardando \(imported.added.count) equipo(s) en MyDGX…")
         do {
             if imported.configuration != configuration {
                 try onSave(imported.configuration)
@@ -243,10 +245,10 @@ struct NetworkDiscoveryView: View {
             result = imported
             phase = .completed
             progress = 1
-            detail = "Detección finalizada."
+            detail = String(localized: "Detección finalizada.")
         } catch {
             errorMessage = error.localizedDescription
-            detail = "No se pudo guardar el resultado."
+            detail = String(localized: "No se pudo guardar el resultado.")
         }
         running = false
     }
@@ -297,18 +299,18 @@ private extension NetworkDiscoveryView {
         var position: Int { rawValue }
         var title: String {
             switch self {
-            case .searching: return "Buscando equipos"
-            case .verifying: return "Verificando acceso"
-            case .saving: return "Guardando perfiles"
-            case .completed: return "Detección completada"
+            case .searching: return String(localized: "Buscando equipos")
+            case .verifying: return String(localized: "Verificando acceso")
+            case .saving: return String(localized: "Guardando perfiles")
+            case .completed: return String(localized: "Detección completada")
             }
         }
         var shortTitle: String {
             switch self {
-            case .searching: return "Buscar"
-            case .verifying: return "Verificar"
-            case .saving: return "Guardar"
-            case .completed: return "Finalizar"
+            case .searching: return String(localized: "Buscar")
+            case .verifying: return String(localized: "Verificar")
+            case .saving: return String(localized: "Guardar")
+            case .completed: return String(localized: "Finalizar")
             }
         }
         var symbol: String {
@@ -325,7 +327,7 @@ private extension NetworkDiscoveryView {
         let stage: String
         let detail: String
 
-        static let found = DeviceState(stage: "found", detail: "Detectado en la red")
+        static let found = DeviceState(stage: "found", detail: String(localized: "Detectado en la red"))
 
         init(stage: String, detail: String) {
             self.stage = stage

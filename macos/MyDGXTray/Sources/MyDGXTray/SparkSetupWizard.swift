@@ -10,10 +10,10 @@ final class SparkSetupWizard: ObservableObject {
 
         var title: String {
             switch self {
-            case .find: return "Buscar"
-            case .connect: return "Conectar"
-            case .install: return "Instalar"
-            case .done: return "Listo"
+            case .find: return String(localized: "Buscar")
+            case .connect: return String(localized: "Conectar")
+            case .install: return String(localized: "Instalar")
+            case .done: return String(localized: "Listo")
             }
         }
 
@@ -55,24 +55,24 @@ final class SparkSetupWizard: ObservableObject {
     }
 
     static let installPhases: [InstallPhase] = [
-        InstallPhase(id: "connect", title: "Conectar con el Spark", weight: 2, expectedSeconds: 15,
+        InstallPhase(id: "connect", title: String(localized: "Conectar con el Spark"), weight: 2, expectedSeconds: 15,
                      markers: ["SSH disponible"]),
-        InstallPhase(id: "copy", title: "Copiar MyDGX", weight: 4, expectedSeconds: 40,
+        InstallPhase(id: "copy", title: String(localized: "Copiar MyDGX"), weight: 4, expectedSeconds: 40,
                      markers: ["Sincronizando MyDGX"]),
-        InstallPhase(id: "system", title: "Preparar el sistema", weight: 14, expectedSeconds: 240,
+        InstallPhase(id: "system", title: String(localized: "Preparar el sistema"), weight: 14, expectedSeconds: 240,
                      markers: ["Modo completo", "dependencias base", "Node.js", "CUDA Toolkit",
                                "Comprobando integridad", "módulos DKMS", "Reparando configuración"]),
-        InstallPhase(id: "llama", title: "Compilar el motor de IA", weight: 34, expectedSeconds: 900,
+        InstallPhase(id: "llama", title: String(localized: "Compilar el motor de IA"), weight: 34, expectedSeconds: 900,
                      markers: ["Recompilando llama.cpp"]),
-        InstallPhase(id: "services", title: "Instalar apps y servicios", weight: 36, expectedSeconds: 900,
+        InstallPhase(id: "services", title: String(localized: "Instalar apps y servicios"), weight: 36, expectedSeconds: 900,
                      markers: ["Instalando Hashcat", "Instalando Ollama", "Docker y NVIDIA",
                                "Instalando MyDGX", "Whisper", "runtime TTS", "ComfyUI",
                                "Open WebUI", "SearXNG", "servicios systemd"]),
-        InstallPhase(id: "start", title: "Arrancar MyDGX", weight: 5, expectedSeconds: 90,
+        InstallPhase(id: "start", title: String(localized: "Arrancar MyDGX"), weight: 5, expectedSeconds: 90,
                      markers: ["Comprobando preparación", "Descargando modelo local"]),
-        InstallPhase(id: "verify", title: "Comprobar la instalación", weight: 2, expectedSeconds: 20,
+        InstallPhase(id: "verify", title: String(localized: "Comprobar la instalación"), weight: 2, expectedSeconds: 20,
                      markers: ["Versiones desplegadas", "Resumen final"]),
-        InstallPhase(id: "link", title: "Conectar este Mac", weight: 3, expectedSeconds: 30,
+        InstallPhase(id: "link", title: String(localized: "Conectar este Mac"), weight: 3, expectedSeconds: 30,
                      markers: []),
     ]
 
@@ -246,7 +246,7 @@ final class SparkSetupWizard: ObservableObject {
             ports = [port]
         }
         guard host.range(of: #"^[A-Za-z0-9._:-]+$"#, options: .regularExpression) != nil else {
-            errorMessage = "Escribe una IP (192.168.1.50) o un nombre (spark-1a2b.local)."
+            errorMessage = String(localized: "Escribe una IP (192.168.1.50) o un nombre (spark-1a2b.local).")
             return
         }
         errorMessage = nil
@@ -254,7 +254,7 @@ final class SparkSetupWizard: ObservableObject {
         Task {
             defer { checkingAddress = false }
             guard let probe = await SparkSetup.probe(host: host, ports: ports) else {
-                errorMessage = "No hay respuesta SSH en \(host). Comprueba que el Spark está encendido y en tu red."
+                errorMessage = String(localized: "No hay respuesta SSH en \(host). Comprueba que el Spark está encendido y en tu red.")
                 return
             }
             let candidate = Candidate(
@@ -317,11 +317,11 @@ final class SparkSetupWizard: ObservableObject {
         guard let selected, !connecting else { return }
         let trimmedUser = user.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedUser.range(of: #"^[A-Za-z0-9._-]+$"#, options: .regularExpression) != nil else {
-            errorMessage = "Escribe el usuario que creaste al encender el Spark por primera vez."
+            errorMessage = String(localized: "Escribe el usuario que creaste al encender el Spark por primera vez.")
             return
         }
         if useExistingKey && existingKeyPath.isEmpty {
-            errorMessage = "Elige el archivo de tu clave SSH privada."
+            errorMessage = String(localized: "Elige el archivo de tu clave SSH privada.")
             return
         }
         if useExistingKey, let existingKeyError {
@@ -333,12 +333,12 @@ final class SparkSetupWizard: ObservableObject {
         connecting = true
         facts = nil
         connectChecklist = [
-            ChecklistItem(id: "identity", title: "Comprobar la identidad del Spark"),
-            ChecklistItem(id: "key", title: useExistingKey ? "Usar tu clave SSH" : "Crear una clave segura para este Mac"),
-            ChecklistItem(id: "authorize", title: "Autorizar este Mac en el Spark"),
-            ChecklistItem(id: "login", title: "Entrar sin contraseña"),
-            ChecklistItem(id: "inspect", title: "Detectar equipo y sistema operativo"),
-            ChecklistItem(id: "sudo", title: "Comprobar permisos de administrador"),
+            ChecklistItem(id: "identity", title: String(localized: "Comprobar la identidad del Spark")),
+            ChecklistItem(id: "key", title: useExistingKey ? String(localized: "Usar tu clave SSH") : String(localized: "Crear una clave segura para este Mac")),
+            ChecklistItem(id: "authorize", title: String(localized: "Autorizar este Mac en el Spark")),
+            ChecklistItem(id: "login", title: String(localized: "Entrar sin contraseña")),
+            ChecklistItem(id: "inspect", title: String(localized: "Detectar equipo y sistema operativo")),
+            ChecklistItem(id: "sudo", title: String(localized: "Comprobar permisos de administrador")),
         ]
         Task {
             defer { connecting = false }
@@ -471,11 +471,11 @@ final class SparkSetupWizard: ObservableObject {
         installFinished = false
         phaseIndex = 0
         elapsedSeconds = 0
-        currentActivity = "Preparando la instalación…"
+        currentActivity = String(localized: "Preparando la instalación…")
         beginPhase()
         sleepActivity = ProcessInfo.processInfo.beginActivity(
             options: [.idleSystemSleepDisabled, .userInitiated],
-            reason: "Instalando MyDGX en el Spark"
+            reason: String(localized: "Instalando MyDGX en el Spark")
         )
         defer {
             if let sleepActivity { ProcessInfo.processInfo.endActivity(sleepActivity) }
@@ -503,9 +503,7 @@ final class SparkSetupWizard: ObservableObject {
             )
             guard status == 0 else {
                 throw SetupError.deployFailed(
-                    "La instalación se detuvo en «\(Self.installPhases[phaseIndex].title)». "
-                        + "Pulsa Reintentar: lo ya instalado se conserva. "
-                        + "El registro tiene los detalles."
+                    String(localized: "La instalación se detuvo en «\(Self.installPhases[phaseIndex].title)». Pulsa Reintentar: lo ya instalado se conserva. El registro tiene los detalles.")
                 )
             }
             deploySucceeded = true
@@ -595,7 +593,7 @@ final class SparkSetupWizard: ObservableObject {
                 let digits = line[match].filter(\.isNumber)
                 if let percent = Double(digits) {
                     phaseFraction = max(phaseFraction, min(0.98, percent / 100))
-                    currentActivity = "Compilando llama.cpp para la GPU GB10 · \(Int(percent))%"
+                    currentActivity = String(localized: "Compilando llama.cpp para la GPU GB10 · \(Int(percent))%")
                 }
                 continue
             }
@@ -627,7 +625,7 @@ final class SparkSetupWizard: ObservableObject {
     }
 
     private func linkMac(_ profile: ConnectionProfile) async {
-        currentActivity = "Guardando el perfil y abriendo el túnel seguro…"
+        currentActivity = String(localized: "Guardando el perfil y abriendo el túnel seguro…")
         do {
             try model.completeSetup(with: profile)
         } catch {
@@ -644,8 +642,7 @@ final class SparkSetupWizard: ObservableObject {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
         guard model.canUseAPI else {
-            errorMessage = "MyDGX está instalado, pero este Mac aún no logra conectarse. "
-                + "Pulsa Reintentar en unos segundos."
+            errorMessage = String(localized: "MyDGX está instalado, pero este Mac aún no logra conectarse. Pulsa Reintentar en unos segundos.")
             return
         }
         installFinished = true
@@ -764,7 +761,7 @@ final class SparkSetupWizard: ObservableObject {
 
     func chooseExistingKey() {
         let panel = NSOpenPanel()
-        panel.title = "Elige tu clave SSH privada"
+        panel.title = String(localized: "Elige tu clave SSH privada")
         panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".ssh", isDirectory: true)
         panel.showsHiddenFiles = true
@@ -831,7 +828,7 @@ final class SparkSetupWizard: ObservableObject {
         demoFacts.gpu = "NVIDIA GB10"
         demoFacts.hostname = "gx10-1a2b"
         alias = "ASUS Ascent GX10"
-        user = "usuario"
+        user = String(localized: "usuario")
         switch scene {
         case "permission":
             localNetworkPrimed = false
@@ -845,12 +842,12 @@ final class SparkSetupWizard: ObservableObject {
             step = .connect
             connecting = true
             connectChecklist = [
-                ChecklistItem(id: "identity", title: "Comprobar la identidad del Spark", state: .done),
-                ChecklistItem(id: "key", title: "Crear una clave segura para este Mac", state: .done),
-                ChecklistItem(id: "authorize", title: "Autorizar este Mac en el Spark", state: .done),
-                ChecklistItem(id: "login", title: "Entrar sin contraseña", state: .done),
-                ChecklistItem(id: "inspect", title: "Detectar equipo y sistema operativo", state: .running),
-                ChecklistItem(id: "sudo", title: "Comprobar permisos de administrador"),
+                ChecklistItem(id: "identity", title: String(localized: "Comprobar la identidad del Spark"), state: .done),
+                ChecklistItem(id: "key", title: String(localized: "Crear una clave segura para este Mac"), state: .done),
+                ChecklistItem(id: "authorize", title: String(localized: "Autorizar este Mac en el Spark"), state: .done),
+                ChecklistItem(id: "login", title: String(localized: "Entrar sin contraseña"), state: .done),
+                ChecklistItem(id: "inspect", title: String(localized: "Detectar equipo y sistema operativo"), state: .running),
+                ChecklistItem(id: "sudo", title: String(localized: "Comprobar permisos de administrador")),
             ]
         case "install":
             candidates = [asus]
@@ -861,7 +858,7 @@ final class SparkSetupWizard: ObservableObject {
             phaseIndex = 3
             phaseFraction = 0.46
             elapsedSeconds = 11 * 60 + 42
-            currentActivity = "Compilando llama.cpp para la GPU GB10 · 46%"
+            currentActivity = String(localized: "Compilando llama.cpp para la GPU GB10 · \(46)%")
             logURL = URL(fileURLWithPath: "/dev/null")
         default:
             candidates = [asus]

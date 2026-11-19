@@ -6,6 +6,14 @@ CONFIRMATION=""
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_ROOT="/var/lib/mydgx/serverize"
 REPORT_DIR="$ROOT/data"
+DEPLOY_SCRIPT="$ROOT/deploy.sh"
+MYDGX_EXTRA_PACKAGES=(
+  nodejs avahi-utils avahi-daemon libglib2.0-0t64 libglib2.0-0
+  docker.io containerd nvidia-container-toolkit openssh-server
+)
+USER_APP_ROOTS=(/home /root /opt /usr/local /srv)
+KEEP_PACKAGES=()
+declare -A USER_APP_PACKAGES=()
 DESKTOP_SNAPS=(firefox thunderbird snap-store snapd-desktop-integration firmware-updater)
 SERVICE_CANDIDATES=(
   display-manager.service gdm.service gdm3.service
@@ -29,9 +37,11 @@ Uso:
 --audit  Solo inventaría paquetes/servicios y simula APT. Es el modo predeterminado.
 --disable Desactiva el escritorio y servicios prescindibles sin borrar paquetes.
 --apply  Aplica el plan verificado, cambia a multi-user.target y elimina el escritorio.
+--keep PAQUETE  Conserva además ese paquete APT. Se puede repetir.
 
 El modo --apply conserva red, SSH, Avahi/mDNS, NVIDIA, CUDA, Docker, Ollama,
-MyDGX y firmware. De los kernels deja los dos más recientes y, si es más
+MyDGX y firmware, y los paquetes de los que dependen las aplicaciones
+instaladas fuera de APT en /home, /root, /opt, /usr/local y /srv. De los kernels deja los dos más recientes y, si es más
 antiguo, también el que está en ejecución. Guarda el estado previo en
 /var/lib/mydgx/serverize/.
 EOF
@@ -61,6 +71,12 @@ while (($#)); do
       CONFIRMATION="$2"
       shift 2
       ;;
+    --keep)
+      (($# >= 2)) || fail "--keep necesita un nombre de paquete."
+      [[ "$2" =~ ^[a-z0-9][a-z0-9+.-]+(:[a-z0-9]+)?$ ]] || fail "Nombre de paquete no válido: $2"
+      KEEP_PACKAGES+=("${2%%:*}")
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -72,7 +88,8 @@ while (($#)); do
 done
 
 [[ "$(uname -s)" == "Linux" ]] || fail "Esta operación solo está disponible en Linux."
-for command in apt-get apt-mark dpkg-query systemctl awk grep sort df python3; do
+for command in apt-get apt-mark dpkg dpkg-query systemctl awk grep sed sort find xargs \
+    readelf ldconfig df python3; do
   command -v "$command" >/dev/null 2>&1 || fail "Falta el comando requerido: $command"
 done
 [[ -r /etc/os-release ]] || fail "No se pudo identificar el sistema operativo."
@@ -91,7 +108,7 @@ is_desktop_package() {
   local package="${1%%:*}"
   case "$package" in
     ubuntu-desktop|ubuntu-desktop-*|ubuntu-session|gdm3|xorg|xorg-docs-core|xorg-sgml-doctools|\
-    xserver-xorg-input-*|xinit|x11-apps|x11-session-utils|\
+    xserver-xorg-input-all|xinit|x11-apps|x11-session-utils|\
     x11-xserver-utils|xdg-desktop-portal|xdg-desktop-portal-*|network-manager-gnome|\
     language-pack-gnome-*|ubuntu-wallpapers|ubuntu-wallpapers-*|yaru-theme-*|\
     gnome-accessibility-themes|gnome-backgrounds|gnome-bluetooth-*|gnome-calculator|\
@@ -120,8 +137,114 @@ is_desktop_package() {
   return 1
 }
 
+load_mydgx_packages() {
+  local package count=0
+  declare -gA MYDGX_PACKAGES=()
+  for package in "${MYDGX_EXTRA_PACKAGES[@]}"; do
+    MYDGX_PACKAGES[$package]=1
+  done
+  [[ -r "$DEPLOY_SCRIPT" ]] || return 0
+  while read -r package; do
+    MYDGX_PACKAGES[$package]=1
+    count=$((count + 1))
+  done < <(
+    awk '
+      /^base_packages=\(/ { inside = 1; next }
+      inside && /^\)/ { exit }
+      inside {
+        gsub(/[\\"]/, "")
+        for (i = 1; i <= NF; i++) if ($i ~ /^[a-z0-9][a-z0-9+.-]+$/) print $i
+      }
+    ' "$DEPLOY_SCRIPT"
+  )
+  ((count >= 10)) || fail "No se pudo leer la lista de dependencias de MyDGX en deploy.sh."
+}
+
+paths_to_packages() {
+  sort -u |
+    while IFS= read -r path; do
+      printf '%s\n' "$path"
+      readlink -f "$path" 2>/dev/null || true
+    done |
+    sort -u |
+    { xargs -r -d '\n' dpkg -S 2>/dev/null || true; } |
+    awk -F': ' '{
+      n = split($1, owners, ", ")
+      for (i = 1; i <= n; i++) {
+        sub(/:.*/, "", owners[i])
+        if (owners[i] ~ /^[a-z0-9][a-z0-9+.-]+$/) print owners[i]
+      }
+    }' |
+    sort -u
+}
+
+interpreter_path() {
+  local file="$1" line interpreter argument
+  line="$(head -c 256 "$file" 2>/dev/null | head -n 1 | tr -d '\0')" || return 0
+  [[ "$line" == '#!'* ]] || return 0
+  read -r interpreter argument _ <<<"${line#\#!}"
+  if [[ "$interpreter" == */env && -n "${argument:-}" && "$argument" != -* ]]; then
+    interpreter="$(command -v "$argument" 2>/dev/null || true)"
+  fi
+  [[ "$interpreter" == /* ]] && printf '%s\n' "$interpreter"
+  return 0
+}
+
+collect_user_app_packages() {
+  local root package scan file cfg unit command
+  local -a roots=()
+  USER_APP_PACKAGES=()
+  for package in "${KEEP_PACKAGES[@]}"; do
+    USER_APP_PACKAGES[$package]=1
+  done
+  for root in "${USER_APP_ROOTS[@]}"; do
+    if [[ -d "$root" && ! -L "$root" ]]; then
+      roots+=("$root")
+    fi
+  done
+  ((${#roots[@]})) || return 0
+
+  scan="$(mktemp -d)"
+  find "${roots[@]}" -xdev \
+    \( -name .git -o -name __pycache__ -o -path '*/.local/share/Trash' \) -prune -o \
+    -type f -name pyvenv.cfg -fprint "$scan/venvs" -o \
+    -type f \( -name '*.so' -o -name '*.so.*' -o -name '*.node' -o -perm -u+x \) \
+    -size -2G -fprint0 "$scan/files" 2>/dev/null || true
+  touch "$scan/venvs" "$scan/files"
+
+  {
+    { xargs -0 -r -n 256 readelf -d <"$scan/files" 2>/dev/null || true; } |
+      sed -n 's/.*Shared library: \[\(.*\)\]$/\1/p' | sort -u |
+      awk 'NR == FNR {wanted[$1] = 1; next} / => / && ($1 in wanted) {print $NF}' \
+        - <(ldconfig -p)
+    while IFS= read -r cfg; do
+      readlink -f "$(dirname "$cfg")/bin/python" 2>/dev/null || true
+    done <"$scan/venvs"
+    while IFS= read -r -d '' file; do
+      if [[ "$file" == */bin/* ]]; then
+        interpreter_path "$file"
+      fi
+    done <"$scan/files"
+    for unit in /home/*/.config/systemd/user/*.service /root/.config/systemd/user/*.service; do
+      [[ -f "$unit" ]] || continue
+      sed -n 's/^ExecStart=[-@+!:]*\([^ ]*\).*/\1/p' "$unit" 2>/dev/null || true
+    done
+  } | while IFS= read -r command; do
+    if [[ "$command" == /* && -e "$command" ]]; then
+      printf '%s\n' "$command"
+    fi
+  done | paths_to_packages >"$scan/packages"
+
+  while IFS= read -r package; do
+    USER_APP_PACKAGES[$package]=1
+  done <"$scan/packages"
+  rm -rf "$scan"
+}
+
 is_protected_package() {
   local package="${1%%:*}"
+  [[ -n "${MYDGX_PACKAGES[$package]:-}" ]] && return 0
+  [[ -n "${USER_APP_PACKAGES[$package]:-}" ]] && return 0
   # Estos son exclusivamente metapaquetes del escritorio DGX, no drivers.
   case "$package" in
     nvidia-system-station|nvidia-system-station-*|network-manager-gnome|\
@@ -350,11 +473,69 @@ has_workload_snaps() {
   return 1
 }
 
+snap_base() {
+  awk '/^base:/ {print $2; exit}' "/snap/$1/current/meta/snap.yaml" 2>/dev/null || true
+}
+
+unused_snap_dependencies() {
+  command -v snap >/dev/null 2>&1 || return 0
+  local name consumer provider base changed used
+  local -A remaining=() consumers=()
+  while read -r name; do
+    [[ -n "$name" ]] && remaining[$name]=1
+  done < <(snap list 2>/dev/null | awk 'NR > 1 {print $1}')
+  for name in "${DESKTOP_SNAPS[@]}"; do
+    unset "remaining[$name]"
+  done
+
+  while read -r consumer provider; do
+    consumers[$provider]+=" $consumer"
+  done < <(
+    snap connections --all 2>/dev/null |
+      awk 'NR > 1 && $1 ~ /^content/ && $3 != "-" {split($2, p, ":"); split($3, s, ":"); print p[1], s[1]}'
+    for name in "${!remaining[@]}"; do
+      base="$(snap_base "$name")"
+      if [[ -n "$base" ]]; then
+        printf '%s %s\n' "$name" "$base"
+      fi
+    done
+  )
+
+  # Se retira primero lo que usaba cada base, así que el orden de salida es seguro.
+  changed=1
+  while ((changed)); do
+    changed=0
+    for name in "${!remaining[@]}"; do
+      case "$name" in
+        bare|core[0-9]*|gnome-[0-9]*|gtk-common-themes|mesa-[0-9]*) ;;
+        *) continue ;;
+      esac
+      used=0
+      for consumer in ${consumers[$name]:-}; do
+        if [[ "$consumer" != "$name" && -n "${remaining[$consumer]:-}" ]]; then
+          used=1
+        fi
+      done
+      if ((used == 0)); then
+        printf '%s\n' "$name"
+        unset "remaining[$name]"
+        changed=1
+      fi
+    done
+  done
+}
+
+remove_orphan_snap_cache() {
+  [[ -d /var/lib/snapd/cache ]] || return 0
+  find /var/lib/snapd/cache -maxdepth 1 -type f -links 1 -delete 2>/dev/null || true
+}
+
 collect_candidates() {
   local package
   APT_CANDIDATES=()
   while read -r package; do
-    is_desktop_package "$package" && APT_CANDIDATES+=("$package")
+    is_desktop_package "$package" && ! is_protected_package "$package" &&
+      APT_CANDIDATES+=("$package")
   done < <(installed_packages)
 
   if ((${#APT_CANDIDATES[@]})); then
@@ -362,14 +543,27 @@ collect_candidates() {
   fi
 }
 
-simulate_removal_plan() {
-  local output_file="$1" package
-  local keep_arguments=()
+build_removal_arguments() {
+  local package
+  REMOVAL_ARGUMENTS=("${APT_CANDIDATES[@]}")
   while read -r package; do
-    is_protected_package "$package" && keep_arguments+=("${package}+")
+    is_protected_package "$package" && REMOVAL_ARGUMENTS+=("${package}+")
   done < <(installed_packages)
-  apt-get -s autoremove --purge \
-    "${APT_CANDIDATES[@]}" "${keep_arguments[@]}" >"$output_file"
+  return 0
+}
+
+simulate_removal_plan() {
+  build_removal_arguments
+  apt-get -s --no-upgrade autoremove --purge "${REMOVAL_ARGUMENTS[@]}" >"$1"
+}
+
+guard_removal_only() {
+  local plan_file="$1" changes
+  changes="$(awk '/^(Inst|Conf) / {print "  " $2}' "$plan_file" | sort -u)"
+  if [[ -n "$changes" ]]; then
+    printf 'APT intentaría instalar o actualizar paquetes:\n%s\n' "$changes" >&2
+    fail "Plan rechazado: la conversión solo puede retirar paquetes."
+  fi
 }
 
 planned_removals() {
@@ -403,7 +597,9 @@ print_services() {
 
 audit() {
   local plan_file="" kernel_plan_file="" snap_name found=0
+  local -a snap_dependencies=()
   trap 'rm -f "${plan_file:-}" "${kernel_plan_file:-}"' EXIT
+  collect_user_app_packages
   collect_candidates
   collect_kernel_cleanup
   printf 'Sistema: %s %s · arquitectura %s\n' \
@@ -417,6 +613,17 @@ audit() {
     printf '  %s\n' "${APT_CANDIDATES[@]}"
   fi
 
+  printf '\nDependencias de MyDGX protegidas: %d (deploy.sh y servicios)\n' \
+    "${#MYDGX_PACKAGES[@]}"
+  printf 'Paquetes usados por aplicaciones fuera de APT y --keep: %d\n' \
+    "${#USER_APP_PACKAGES[@]}"
+  if ((${#USER_APP_PACKAGES[@]})); then
+    printf '%s\n' "${!USER_APP_PACKAGES[@]}" | sort | sed 's/^/  /'
+  fi
+  if [[ "$EUID" -ne 0 ]]; then
+    printf '  AVISO: sin sudo no se leen los homes de otros usuarios ni /root.\n'
+  fi
+
   printf '\nSnaps de escritorio candidatos:\n'
   for snap_name in "${DESKTOP_SNAPS[@]}"; do
     if snap_is_installed "$snap_name"; then
@@ -425,6 +632,13 @@ audit() {
     fi
   done
   [[ "$found" == "1" ]] || printf '  ninguno\n'
+  printf 'Bases y temas snap que quedarían sin uso:\n'
+  mapfile -t snap_dependencies < <(unused_snap_dependencies)
+  if ((${#snap_dependencies[@]})); then
+    printf '  %s\n' "${snap_dependencies[@]}"
+  else
+    printf '  ninguno\n'
+  fi
   if has_workload_snaps; then
     printf '  AVISO: se conservarán snapd y los snaps no relacionados con el escritorio.\n'
   fi
@@ -442,6 +656,7 @@ audit() {
     plan_file="$(mktemp)"
     simulate_removal_plan "$plan_file"
     guard_plan "$plan_file"
+    guard_removal_only "$plan_file"
     printf '\nSimulación APT validada: %s paquetes quedarían retirados.\n' \
       "$(planned_removals "$plan_file" | wc -l | tr -d ' ')"
     grep -E '^(Remv|Purg) |After this operation|Se liberarán|The following packages' \
@@ -469,6 +684,25 @@ save_state() {
   chmod -R go-rwx "$state_dir"
 }
 
+record_mydgx_packages() {
+  local package
+  MYDGX_INSTALLED_BEFORE=()
+  while read -r package; do
+    if [[ -n "${MYDGX_PACKAGES[${package%%:*}]:-}" || -n "${USER_APP_PACKAGES[${package%%:*}]:-}" ]]; then
+      MYDGX_INSTALLED_BEFORE+=("$package")
+    fi
+  done < <(installed_packages)
+  return 0
+}
+
+verify_mydgx_packages() {
+  local package status
+  for package in "${MYDGX_INSTALLED_BEFORE[@]}"; do
+    status="$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null || true)"
+    [[ "$status" == ii* ]] || fail "Se retiró una dependencia de MyDGX o de una aplicación instalada: $package"
+  done
+}
+
 mark_protected_manual() {
   local package protected=()
   while read -r package; do
@@ -484,6 +718,7 @@ verify_preserved_services() {
     systemctl is-active --quiet "$unit" ||
       fail "El servicio que estaba activo dejó de funcionar: $unit"
   done <"$before_file"
+  verify_mydgx_packages
   command -v nvidia-smi >/dev/null 2>&1 || fail "nvidia-smi dejó de estar disponible."
   nvidia-smi >/dev/null || fail "El driver NVIDIA no responde tras la limpieza."
   [[ "$(systemctl get-default)" == "multi-user.target" ]] ||
@@ -491,21 +726,31 @@ verify_preserved_services() {
 }
 
 require_text_session() {
-  case "${XDG_SESSION_TYPE:-}" in
-    x11|wayland)
-      fail "Ejecuta esta operación desde SSH o una consola TTY, no desde el escritorio."
-      ;;
-  esac
+  local session type=""
+  # sudo descarta XDG_SESSION_TYPE; el id de sesión de auditoría sí se hereda.
+  session="$(cat /proc/self/sessionid 2>/dev/null || true)"
+  if [[ "$session" =~ ^[0-9]+$ && "$session" != "4294967295" ]] &&
+      command -v loginctl >/dev/null 2>&1; then
+    type="$(loginctl show-session "$session" -p Type --value 2>/dev/null || true)"
+  fi
+  [[ "$type" == "tty" ]] ||
+    fail "Ejecuta esta operación desde SSH o una consola TTY, no desde el escritorio (sesión: ${type:-desconocida})."
 }
 
 record_preserved_services() {
   local output_file="$1" unit
-  : >"$output_file"
-  for unit in "${PRESERVED_SERVICES[@]}"; do
+  {
+    printf '%s\n' "${PRESERVED_SERVICES[@]}"
+    systemctl list-units --type=service --state=running --plain --no-legend \
+      'mydgx*' 'open-webui*' 2>/dev/null | awk '{print $1}'
+    systemctl list-units --type=timer --state=active --plain --no-legend \
+      'mydgx*' 2>/dev/null | awk '{print $1}'
+  } | sort -u | while read -r unit; do
+    [[ -n "$unit" ]] || continue
     if systemctl is-active --quiet "$unit"; then
-      printf '%s\n' "$unit" >>"$output_file"
+      printf '%s\n' "$unit"
     fi
-  done
+  done >"$output_file"
 }
 
 disable_desktop_services() {
@@ -738,6 +983,7 @@ disable_only() {
   state_dir="$STATE_ROOT/$timestamp-disable"
   save_state "$state_dir"
   record_preserved_services "$state_dir/preserved-active-services.txt"
+  record_mydgx_packages
   printf '%s\n' "disable-only" >"$state_dir/mode.txt"
 
   disable_desktop_services
@@ -760,6 +1006,7 @@ apply_plan() {
   [[ -z "$(dpkg --audit 2>/dev/null)" ]] || fail "dpkg informa de paquetes incompletos."
   apt-get check >/dev/null || fail "APT no está en un estado consistente."
 
+  collect_user_app_packages
   collect_candidates
   collect_kernel_cleanup
   if ((${#APT_CANDIDATES[@]} == 0 && ${#KERNEL_REMOVE_PACKAGES[@]} == 0)); then
@@ -768,6 +1015,7 @@ apply_plan() {
   capture_before_metrics
 
   local timestamp state_dir plan_file="" kernel_plan_file="" snap_name
+  local -a snap_dependencies=()
   timestamp="$(date -u +'%Y%m%dT%H%M%SZ')"
   state_dir="$STATE_ROOT/$timestamp"
   trap 'rm -f "${plan_file:-}" "${kernel_plan_file:-}"' EXIT
@@ -776,6 +1024,7 @@ apply_plan() {
     plan_file="$(mktemp)"
     simulate_removal_plan "$plan_file"
     guard_plan "$plan_file"
+    guard_removal_only "$plan_file"
   fi
   if ((${#KERNEL_REMOVE_PACKAGES[@]})); then
     kernel_plan_file="$(mktemp)"
@@ -793,18 +1042,29 @@ apply_plan() {
   fi
 
   record_preserved_services "$state_dir/preserved-active-services.txt"
+  record_mydgx_packages
 
   mark_protected_manual
   systemctl set-default multi-user.target
   systemctl enable getty@tty1.service >/dev/null 2>&1 || true
   if command -v snap >/dev/null 2>&1; then
+    mapfile -t snap_dependencies < <(unused_snap_dependencies)
     for snap_name in "${DESKTOP_SNAPS[@]}"; do
-      snap_is_installed "$snap_name" && snap remove "$snap_name"
+      if snap_is_installed "$snap_name"; then
+        snap remove "$snap_name"
+      fi
     done
+    for snap_name in "${snap_dependencies[@]}"; do
+      if snap_is_installed "$snap_name"; then
+        snap remove "$snap_name" ||
+          printf 'AVISO: snapd no permitió retirar %s; se conserva.\n' "$snap_name" >&2
+      fi
+    done
+    remove_orphan_snap_cache
   fi
 
   if ((${#APT_CANDIDATES[@]})); then
-    DEBIAN_FRONTEND=noninteractive apt-get autoremove --purge -y "${APT_CANDIDATES[@]}"
+    DEBIAN_FRONTEND=noninteractive apt-get --no-upgrade autoremove --purge -y "${REMOVAL_ARGUMENTS[@]}"
   fi
   if ((${#KERNEL_REMOVE_PACKAGES[@]})); then
     DEBIAN_FRONTEND=noninteractive apt-get purge -y "${KERNEL_REMOVE_PACKAGES[@]}"
@@ -836,6 +1096,8 @@ apply_plan() {
   printf 'Cambios de disco y memoria guardados en %s\n' "$CHANGE_REPORT_FILE"
   printf 'Reinicia cuando decidas verificar el arranque HDMI en consola.\n'
 }
+
+load_mydgx_packages
 
 case "$MODE" in
   --audit) audit ;;

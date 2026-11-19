@@ -55,8 +55,10 @@ La fase inicial:
 Los procesos detenidos liberan memoria inmediatamente; no hace falta reiniciar.
 El siguiente arranque también será en consola.
 
-Ejecuta esta operación desde SSH o una TTY. El script rechaza sesiones marcadas
-como X11 o Wayland para no cerrar su propia terminal gráfica durante el cambio.
+Ejecuta esta operación desde SSH o una TTY. El script consulta a `loginctl` el
+tipo de la sesión que lo lanzó, porque `sudo` descarta `XDG_SESSION_TYPE`, y
+solo continúa si es `tty`. Así no cierra su propia terminal gráfica durante el
+cambio.
 
 Para reactivar el escritorio sin reinstalar nada:
 
@@ -87,12 +89,16 @@ El script:
 4. marca los componentes críticos para que APT no los trate como huérfanos;
 5. configura `multi-user.target` y habilita la consola `tty1`;
 6. retira aplicaciones, metapaquetes y servicios de escritorio;
-7. ejecuta `autoremove --purge` únicamente sobre el plan validado;
+7. ejecuta `autoremove --purge` con los mismos argumentos que la simulación;
 8. purga los kernels anteriores a los dos más recientes, junto con headers,
    módulos, herramientas y módulos NVIDIA de esa misma versión;
-9. verifica que los servicios previamente activos siguen funcionando, que
-   `nvidia-smi` responde y que siguen instalados el kernel en ejecución y el
-   otro kernel conservado.
+9. verifica que siguen activos los servicios conservados que estaban en marcha
+   (incluidos todos los `mydgx-*`, sus temporizadores y Open WebUI), que siguen
+   instaladas las dependencias de MyDGX, que `nvidia-smi` responde y que
+   siguen instalados el kernel en ejecución y el otro kernel conservado.
+
+La simulación usa `--no-upgrade` y se rechaza si APT propone instalar o
+actualizar cualquier paquete; la conversión solo retira paquetes.
 
 No reinicia el equipo. El reinicio y la comprobación de la consola HDMI quedan
 como acciones separadas y deliberadas.
@@ -108,11 +114,31 @@ Los candidatos se calculan sobre los paquetes realmente instalados. Incluyen:
 - Bluetooth, impresión, ModemManager, color y telemetría de escritorio cuando
   están instalados;
 - metapaquetes y personalizaciones NVIDIA/DGX exclusivos del escritorio;
+- el DGX Dashboard oficial de NVIDIA (`dgx-dashboard`) y la configuración
+  inicial `dgx-oobe`; MyDGX sigue funcionando y su comprobación del DGX
+  Dashboard pasa a aparecer como no disponible, sin ser obligatoria;
 - kernels más antiguos que los dos últimos, con sus paquetes `linux-*` de esa
   versión: imagen, headers, modules, tools y módulos NVIDIA asociados.
 
 Los snaps ajenos al escritorio no se eliminan. `snapd` se conserva porque forma
 parte de las dependencias de Ubuntu Server.
+
+Después de retirar los snaps de escritorio, `--apply` retira también las bases
+y capas de contenido que se queden sin uso (`gnome-*`, `mesa-*`,
+`gtk-common-themes`, `core*` y `bare`). Una base se conserva si algún snap que
+sigue instalado la usa como `base:` o tiene conectado su contenido. La
+auditoría muestra esa lista en el orden de retirada. Al terminar se borran de
+`/var/lib/snapd/cache` las copias que ya no corresponden a ningún snap
+instalado; sin ese paso el espacio no se libera.
+
+Las revisiones antiguas (`disabled`) se pueden retirar en cualquier momento sin
+quitar las aplicaciones:
+
+```bash
+snap list --all | awk 'NR > 1 && $NF ~ /disabled/ {print $1, $3}' |
+  while read -r name rev; do sudo snap remove "$name" --revision="$rev"; done
+sudo find /var/lib/snapd/cache -maxdepth 1 -type f -links 1 -delete
+```
 
 ## Qué se conserva
 
@@ -126,7 +152,37 @@ La protección cubre expresamente:
 - NetworkManager, Netplan, SSH y Avahi;
 - Docker, containerd y Ollama;
 - paquetes base de Ubuntu Server;
-- Python y herramientas esenciales usadas por MyDGX.
+- todas las dependencias del sistema que instala `deploy.sh` (se leen de su
+  lista `base_packages`), además de Node.js, `avahi-utils`, Docker y NVIDIA
+  Container Toolkit. Sin ellas fallarían la compilación del frontend, las
+  actualizaciones desde GitHub y el descubrimiento de equipos por mDNS;
+- los paquetes de los que dependen las aplicaciones instaladas fuera de APT.
+
+### Aplicaciones instaladas por el usuario
+
+Antes de simular, `--audit` y `--apply` recorren `/home`, `/root`, `/opt`,
+`/usr/local` y `/srv`. De ahí se protegen:
+
+- los paquetes que proporcionan las librerías del sistema enlazadas por
+  binarios ELF, librerías `.so` y módulos nativos `.node` (con `readelf`);
+- el intérprete de cada entorno virtual de Python (`pyvenv.cfg`);
+- el intérprete de los scripts situados en directorios `bin`, según su línea
+  `#!`;
+- el ejecutable de los servicios de usuario en `~/.config/systemd/user`.
+
+La auditoría muestra la lista resultante. Sin `sudo` no puede leer los homes
+de otros usuarios ni `/root`, así que conviene revisarla también con
+`sudo ./start.sh serverize --audit`.
+
+El escaneo no ve las librerías que una aplicación abre en tiempo de ejecución
+por nombre (por ejemplo, con `ctypes` o `dlopen`), ni los programas del
+sistema que invoca con su ruta. Para conservar un paquete concreto, añade
+`--keep PAQUETE`; se puede repetir y vale para `--audit` y `--apply`:
+
+```bash
+sudo ./start.sh serverize --apply --confirm CONVERT-TO-HEADLESS-SERVER \
+  --keep libreoffice-core --keep gimp
+```
 
 Avahi permanece activo porque la administración mediante nombres `.local`
 depende de mDNS.
@@ -134,8 +190,10 @@ depende de mDNS.
 ### Componentes X conservados
 
 El sistema deja de iniciar GDM, GNOME y X, pero puede conservar paquetes como
-`xserver-xorg-core` y `xserver-xorg-video-nvidia-*`. Los metapaquetes oficiales
-del driver NVIDIA dependen de ellos. Quitarlos también retiraría el controlador
+`xserver-xorg-core`, `xserver-xorg-input-libinput` y
+`xserver-xorg-video-nvidia-*`. Los metapaquetes oficiales del driver NVIDIA
+dependen de ellos; si se retirara el driver de entrada, APT instalaría otro en
+su lugar. Quitarlos también retiraría el controlador
 de cómputo y perjudicaría futuras actualizaciones.
 
 Esos componentes quedan instalados pero inactivos; el target de arranque es

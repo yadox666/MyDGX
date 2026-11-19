@@ -1065,7 +1065,7 @@ case "${1:-start}" in
   build) npm --prefix "$ROOT/frontend" run build ;;
   deploy) shift; deploy "$@" ;;
   *)
-    echo "Uso: $0 {setup|start|dev|stop|restart|status|logs|test [--autodiscover] [USUARIO@HOST [-pPUERTO] | OPCIONES]|--autodiscover [--add-to-tray] [--config [RUTA]]|serverize [--audit|--disable --confirm DISABLE-DESKTOP-SERVICES|--apply --confirm CONVERT-TO-HEADLESS-SERVER]|build|deploy [--database RUTA] [--duckdns]|install-opencode [NOMBRE]|opencode [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]|install-claude-code|claude [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]}" >&2
+    echo "Uso: $0 {setup|start|dev|stop|restart|status|logs|test [--autodiscover] [USUARIO@HOST [-pPUERTO] | OPCIONES]|--autodiscover [--add-to-tray] [--config [RUTA]]|serverize [--audit|--disable --confirm DISABLE-DESKTOP-SERVICES|--apply --confirm CONVERT-TO-HEADLESS-SERVER] [--keep PAQUETE]|build|deploy [--database RUTA] [--duckdns]|install-opencode [NOMBRE]|opencode [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]|install-claude-code|claude [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]}" >&2
     exit 2
     ;;
 esac

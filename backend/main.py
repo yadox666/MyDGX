@@ -4921,11 +4921,119 @@ def directory_usage_bytes(path: Path, filesystem_device: int | None = None) -> i
     return total
 
 
-def storage_inventory() -> dict[str, Any]:
+@lru_cache(maxsize=1)
+def du_skips_counted_directories() -> bool:
+    du = shutil.which("du")
+    if not du:
+        return False
+    try:
+        result = subprocess.run([du, "--version"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and "GNU" in result.stdout
+
+
+def subtract_nested_sizes(candidates: list[tuple[int, Path]], inclusive: dict[int, int], sizes: list[int]) -> list[int]:
+    for index, path in candidates:
+        inner = [
+            other for other_index, other in candidates
+            if other_index < index and other != path and other.is_relative_to(path)
+        ]
+        outermost = [item for item in inner if not any(item != other and item.is_relative_to(other) for other in inner)]
+        nested = sum(inclusive[other_index] for other_index, other in candidates if other in outermost)
+        sizes[index] = max(0, inclusive[index] - nested)
+    return sizes
+
+
+def exclusive_directory_sizes(paths: list[Path], filesystem_device: int | None = None) -> list[int]:
+    """Bytes of each path not already counted in an earlier one: list subdirectories before their parents.
+
+    GNU du skips directories it already counted, so one pass walks every tree once;
+    other du versions report inclusive sizes and the nested ones are subtracted."""
+    sizes = [0] * len(paths)
+    candidates: list[tuple[int, Path]] = []
+    for index, path in enumerate(paths):
+        path = path.expanduser()
+        try:
+            if path.is_symlink() or not path.is_dir():
+                continue
+            if filesystem_device is not None and path.stat().st_dev != filesystem_device:
+                continue
+        except OSError:
+            continue
+        candidates.append((index, path))
+    if not candidates:
+        return sizes
+    du = shutil.which("du")
+    if du:
+        try:
+            result = subprocess.run(
+                [du, "-x", "-s", "-k", "--", *(str(path) for _, path in candidates)],
+                capture_output=True,
+                text=True,
+                timeout=STORAGE_USAGE_DU_TIMEOUT_SECONDS,
+            )
+            reported = {}
+            for line in result.stdout.splitlines():
+                size, _, reported_path = line.partition("\t")
+                with suppress(ValueError):
+                    reported[reported_path] = int(size) * 1024
+            if reported:
+                measured = {index: reported.get(str(path), 0) for index, path in candidates}
+                if du_skips_counted_directories():
+                    for index, size in measured.items():
+                        sizes[index] = size
+                    return sizes
+                return subtract_nested_sizes(candidates, measured, sizes)
+        except subprocess.TimeoutExpired:
+            raise
+        except (OSError, subprocess.SubprocessError):
+            pass
+    inclusive = {index: directory_usage_bytes(path, filesystem_device) for index, path in candidates}
+    return subtract_nested_sizes(candidates, inclusive, sizes)
+
+
+DOCKER_SIZE_PATTERN = re.compile(r"^\s*([\d.]+)\s*([kKMGTP]?B)\s*$")
+DOCKER_SIZE_UNITS = {"B": 1, "kB": 1000, "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4, "PB": 1000**5}
+
+
+def docker_storage_bytes() -> int:
+    """Images, volumes and build cache as reported by `docker system df` (0 without access)."""
+    docker = shutil.which("docker")
+    if not docker:
+        return 0
+    try:
+        result = subprocess.run(
+            [docker, "system", "df", "--format", "{{json .}}"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    total = 0
+    for line in result.stdout.splitlines():
+        with suppress(json.JSONDecodeError, AttributeError):
+            match = DOCKER_SIZE_PATTERN.match(str(json.loads(line).get("Size") or ""))
+            if match:
+                total += int(float(match.group(1)) * DOCKER_SIZE_UNITS.get(match.group(2), 1))
+    return total
+
+
+async def ollama_storage_bytes() -> int:
+    with suppress(HTTPException):
+        tags = await ollama_payload("/api/tags", timeout=5)
+        return sum(int(model.get("size") or 0) for model in tags.get("models", []) if isinstance(model, dict))
+    return 0
+
+
+READ_ONLY_IMAGE_FILESYSTEMS = {"squashfs", "erofs", "iso9660"}
+
+
+def storage_partitions() -> list[dict[str, Any]]:
     visible = psutil.disk_partitions(all=False)
     all_partitions = psutil.disk_partitions(all=True)
     by_mount = {partition.mountpoint: partition for partition in all_partitions}
-    root_usage = psutil.disk_usage("/")
     root_partition = by_mount.get("/")
     partitions: list[dict[str, Any]] = []
     seen_mounts: set[str] = set()
@@ -4959,54 +5067,154 @@ def storage_inventory() -> dict[str, Any]:
         "system",
     )
     for partition in visible:
+        if partition.fstype.lower() in READ_ONLY_IMAGE_FILESYSTEMS or partition.mountpoint.startswith("/snap/"):
+            continue
         add_partition(partition.mountpoint, partition.device, partition.fstype, "physical")
+    return partitions
 
+
+STORAGE_APPS_ROOT = Path.home() / ".local" / "share" / "mydgx"
+STORAGE_USAGE_TTL_SECONDS = 600
+STORAGE_USAGE_FIRST_WAIT_SECONDS = 1.5
+STORAGE_USAGE_DU_TIMEOUT_SECONDS = 600
+STORAGE_HOME_DIRECTORY_MIN_BYTES = 50_000_000
+
+
+def home_child_directories(home: Path, classified: list[Path]) -> list[Path]:
+    """Top-level home directories, skipping symlinks and the ones already measured as a group."""
+    resolved = {path.expanduser().resolve() for path in classified}
+    try:
+        entries = sorted(home.iterdir(), key=lambda entry: entry.name)
+    except OSError:
+        return []
+    children = []
+    for entry in entries:
+        try:
+            if entry.is_symlink() or not entry.is_dir() or entry.resolve() in resolved:
+                continue
+        except OSError:
+            continue
+        children.append(entry)
+    return children
+
+
+def storage_usage(ollama_bytes: int, docker_bytes: int) -> dict[str, Any]:
+    """Splits the used space of `/` into groups; the system group is whatever is left."""
+    root_usage = psutil.disk_usage("/")
     root_device = Path("/").stat().st_dev
     home = Path.home()
     hf_path = Path(settings.hf_home).expanduser()
-    ollama_path = home / ".ollama"
-    local_tools_path = home / ".local"
-    model_sizes = {
-        "Hugging Face": directory_usage_bytes(hf_path, root_device),
-        "Ollama": directory_usage_bytes(ollama_path, root_device),
-    }
-    mydgx_size = directory_usage_bytes(ROOT, root_device)
-    home_tools_size = directory_usage_bytes(local_tools_path, root_device)
-    opt_size = directory_usage_bytes(Path("/opt"), root_device)
-    usr_local_size = directory_usage_bytes(Path("/usr/local"), root_device)
-    home_size = directory_usage_bytes(home, root_device)
-    models_size = sum(model_sizes.values())
-    tools_size = home_tools_size + opt_size + usr_local_size
-    home_other_size = max(0, home_size - models_size - mydgx_size - home_tools_size)
-    system_other_size = max(0, root_usage.used - home_size - opt_size - usr_local_size)
+    video_path = STORAGE_APPS_ROOT / "video-model-assets"
+    comfy_models_path = STORAGE_APPS_ROOT / "comfyui" / "ComfyUI" / "models"
+    engine_path = home / "opt"
+    classified = [hf_path, video_path, comfy_models_path, STORAGE_APPS_ROOT, ROOT, engine_path]
+    home_children = home_child_directories(home, classified)
+    sizes = exclusive_directory_sizes([*classified, *home_children, home], root_device)
+    hf_size, video_size, comfy_models_size, apps_size, mydgx_size, engine_size = sizes[:len(classified)]
+    child_sizes = sizes[len(classified):-1]
+    home_loose_size = sizes[-1]
+    home_size = home_loose_size + sum(child_sizes)
+    models_size = hf_size + ollama_bytes + video_size + comfy_models_size
+    apps_total = apps_size + docker_bytes
+    mydgx_total = mydgx_size + engine_size
+    attributed = models_size + apps_total + mydgx_total + home_size
+    if attributed > root_usage.used:
+        home_size = max(0, home_size - (attributed - root_usage.used))
+        attributed = models_size + apps_total + mydgx_total + home_size
     categories = [
-        {"id": "models", "label": "Modelos", "size": models_size, "description": "Hugging Face y Ollama"},
-        {"id": "mydgx", "label": "MyDGX", "size": mydgx_size, "description": "Aplicación, datos y entorno"},
-        {"id": "tools", "label": "Herramientas", "size": tools_size, "description": ".local, /opt y /usr/local"},
-        {"id": "home", "label": "Home del usuario", "size": home_other_size, "description": "Archivos no incluidos arriba"},
-        {"id": "system", "label": "Sistema y otros", "size": system_other_size, "description": "Sistema operativo y datos restantes"},
+        {"id": "system", "label": "Sistema", "size": max(0, root_usage.used - attributed),
+         "description": "Sistema operativo, CUDA, paquetes y registros"},
+        {"id": "models", "label": "Modelos", "size": models_size,
+         "description": "Hugging Face, Ollama, vídeo y ComfyUI; los enlaces a la caché de Hugging Face cuentan una vez"},
+        {"id": "apps", "label": "Apps", "size": apps_total,
+         "description": "ComfyUI, Open WebUI, SearXNG y Docker"},
+        {"id": "mydgx", "label": "MyDGX", "size": mydgx_total,
+         "description": "Dashboard, datos y motor llama.cpp"},
+        {"id": "home", "label": "Usuario y otros", "size": home_size,
+         "description": "Resto del home: proyectos, cachés y descargas"},
     ]
     targets = [
-        {"name": name, "path": str(path), "size": model_sizes[name]}
-        for name, path in (("Hugging Face", hf_path), ("Ollama", ollama_path))
-        if path.exists()
+        {"name": name, "path": path, "size": size}
+        for name, path, size in (
+            ("Hugging Face", str(hf_path), hf_size),
+            ("Ollama", settings.ollama_url, ollama_bytes),
+            ("Modelos de vídeo", str(video_path), video_size),
+            ("Modelos de ComfyUI", str(comfy_models_path), comfy_models_size),
+        )
+        if size >= 100_000_000 or name == "Hugging Face"
     ]
-    targets.append({"name": "MyDGX", "path": str(ROOT), "size": mydgx_size})
+    directories = sorted(
+        ({"name": path.name, "path": str(path), "size": size} for path, size in zip(home_children, child_sizes)),
+        key=lambda item: item["size"],
+        reverse=True,
+    )
+    listed = [item for item in directories if item["size"] >= STORAGE_HOME_DIRECTORY_MIN_BYTES]
+    remainder = home_loose_size + sum(item["size"] for item in directories[len(listed):])
+    if remainder > 0:
+        listed.append({
+            "name": "Otros",
+            "path": f"{len(directories) - len(listed)} directorios pequeños y ficheros sueltos en {home}",
+            "size": remainder,
+        })
     return {
-        "partitions": partitions,
         "usage_categories": categories,
         "categorized_total": root_usage.used,
+        "disk_total": root_usage.total,
+        "disk_free": root_usage.free,
         "model_storage": targets,
+        "home_directories": listed,
     }
+
+
+_storage_usage_cache: dict[str, Any] = {"value": None, "computed_at": 0.0, "task": None}
+
+
+async def refresh_storage_usage() -> None:
+    try:
+        ollama_bytes, docker_bytes = await asyncio.gather(
+            ollama_storage_bytes(), asyncio.to_thread(docker_storage_bytes),
+        )
+        value = await asyncio.to_thread(storage_usage, ollama_bytes, docker_bytes)
+    except Exception as exc:
+        with suppress(sqlite3.Error):
+            db.log("warning", "storage", "storage.usage_failed", f"No se pudo calcular el uso del disco: {type(exc).__name__}")
+        return
+    _storage_usage_cache.update(value=value, computed_at=time.time())
+
+
+async def storage_usage_snapshot(refresh: bool = False) -> tuple[dict[str, Any] | None, bool]:
+    """Cached usage plus whether a recalculation is running; stale values are served while it runs."""
+    cached = _storage_usage_cache["value"]
+    task = _storage_usage_cache["task"]
+    stale = refresh or cached is None or time.time() - _storage_usage_cache["computed_at"] > STORAGE_USAGE_TTL_SECONDS
+    if stale and (task is None or task.done()):
+        task = asyncio.create_task(refresh_storage_usage())
+        _storage_usage_cache["task"] = task
+    if cached is None and task is not None and not task.done():
+        await asyncio.wait({task}, timeout=STORAGE_USAGE_FIRST_WAIT_SECONDS)
+    return _storage_usage_cache["value"], task is not None and not task.done()
 
 
 @app.get("/api/storage", dependencies=secure)
-async def storage() -> dict[str, Any]:
-    inventory, devices = await asyncio.gather(
-        asyncio.to_thread(storage_inventory),
-        asyncio.to_thread(nvme_storage_devices),
+async def storage(refresh: bool = False) -> dict[str, Any]:
+    (partitions, devices), (usage, pending) = await asyncio.gather(
+        asyncio.gather(asyncio.to_thread(storage_partitions), asyncio.to_thread(nvme_storage_devices)),
+        storage_usage_snapshot(refresh),
     )
-    return {**inventory, "nvme_devices": devices}
+    updated = _storage_usage_cache["computed_at"]
+    return {
+        "partitions": partitions,
+        "nvme_devices": devices,
+        "usage_categories": [],
+        "categorized_total": 0,
+        "disk_total": 0,
+        "disk_free": 0,
+        "model_storage": [],
+        "home_directories": [],
+        **(usage or {}),
+        "usage_pending": pending,
+        "usage_updated_at": datetime.fromtimestamp(updated, timezone.utc).isoformat() if usage else None,
+    }
 
 
 QUANTIZATION_PATTERN = re.compile(

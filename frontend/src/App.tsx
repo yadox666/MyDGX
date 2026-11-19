@@ -14,6 +14,7 @@ import {
   Eye,
   FileArchive,
   Film,
+  Folder,
   Gauge,
   Globe,
   HardDrive,
@@ -2270,14 +2271,9 @@ function UnifiedMemoryMap({
   compact?: boolean;
   className?: string;
 }) {
-  const [activeSegment, setActiveSegment] = useState<number | null>(null);
   const memory = unifiedMemorySegments(models, overview, modelMetrics);
   if (!memory.total) return null;
   const percent = (value: number) => value / memory.total * 100;
-  const offsets = memory.segments.map((_, index) => (
-    memory.segments.slice(0, index).reduce((sum, segment) => sum + percent(segment.bytes), 0)
-  ));
-  const active = activeSegment !== null ? memory.segments[activeSegment] : undefined;
   if (compact) {
     const cacheBytes = memory.segments.filter((segment) => segment.kind === "cache").reduce((sum, segment) => sum + segment.bytes, 0);
     const compactSegments = memory.segments
@@ -2302,20 +2298,53 @@ function UnifiedMemoryMap({
     );
   }
   return (
+    <SegmentedMap
+      className={className}
+      title="Mapa de memoria unificada"
+      badge={<span className="live-memory-indicator"><i /> EN VIVO</span>}
+      summary={`${bytes(memory.used)} usados · ${bytes(memory.available)} disponibles · ${bytes(memory.total)} total`}
+      ariaLabel={`Memoria unificada: ${bytes(memory.used)} usados y ${bytes(memory.available)} disponibles`}
+      total={memory.total}
+      segments={memory.segments.map((segment, index) => ({ ...segment, colorIndex: segment.kind === "model" ? index : undefined }))}
+    />
+  );
+}
+
+type MapSegment = {
+  name: string;
+  bytes: number;
+  kind: string;
+  description: string;
+  colorIndex?: number;
+  estimated?: boolean;
+};
+
+function SegmentedMap({ title, badge, summary, ariaLabel, total, segments, className = "" }: {
+  title: string;
+  badge?: ReactNode;
+  summary: string;
+  ariaLabel: string;
+  total: number;
+  segments: MapSegment[];
+  className?: string;
+}) {
+  const [activeSegment, setActiveSegment] = useState<number | null>(null);
+  const percent = (value: number) => total > 0 ? value / total * 100 : 0;
+  const offsets = segments.map((_, index) => (
+    segments.slice(0, index).reduce((sum, segment) => sum + percent(segment.bytes), 0)
+  ));
+  const active = activeSegment !== null ? segments[activeSegment] : undefined;
+  return (
     <div className={`memory-map ${className}`.trim()}>
       <div className="memory-map-heading">
-        <div><strong>Mapa de memoria unificada</strong><span className="live-memory-indicator"><i /> EN VIVO</span></div>
-        <small>{bytes(memory.used)} usados · {bytes(memory.available)} disponibles · {bytes(memory.total)} total</small>
+        <div><strong>{title}</strong>{badge}</div>
+        <small>{summary}</small>
       </div>
       <div className="memory-map-bar-wrap" onMouseLeave={() => setActiveSegment(null)}>
-      <div
-        className="memory-map-bar"
-        role="list"
-        aria-label={`Memoria unificada: ${bytes(memory.used)} usados y ${bytes(memory.available)} disponibles`}
-      >
-        {memory.segments.map((segment, index) => (
+      <div className="memory-map-bar" role="list" aria-label={ariaLabel}>
+        {segments.map((segment, index) => (
           <div
-            className={`memory-map-segment ${segment.kind} ${segment.kind === "model" ? `color-${index % 6}` : ""} ${activeSegment === index ? "active" : ""}`}
+            className={`memory-map-segment ${segment.kind} ${segment.colorIndex != null ? `color-${segment.colorIndex % 6}` : ""} ${activeSegment === index ? "active" : ""}`}
             key={`${segment.kind}:${segment.name}:${index}`}
             style={{ width: `${percent(segment.bytes)}%` }}
             role="listitem"
@@ -6183,13 +6212,28 @@ function StorageView({ notify }: { notify: (message: string, error?: boolean) =>
     partitions: Array<Record<string, unknown>>;
     usage_categories: Array<{ id: string; label: string; size: number; description: string }>;
     categorized_total: number;
+    disk_total: number;
+    disk_free: number;
     model_storage: Array<Record<string, unknown>>;
+    home_directories: Array<{ name: string; path: string; size: number }>;
     nvme_devices: NvmeDevice[];
+    usage_pending: boolean;
+    usage_updated_at: string | null;
   } | null>(null);
-  useEffect(() => {
-    api<typeof storage>("/api/storage").then(setStorage).catch((error) => notify(error.message, true));
+  const load = useCallback((refresh = false) => {
+    api<NonNullable<typeof storage>>(`/api/storage${refresh ? "?refresh=true" : ""}`)
+      .then(setStorage)
+      .catch((error: Error) => notify(error.message, true));
   }, [notify]);
-  if (!storage) return <Loading label="Calculando almacenamiento" />;
+  useEffect(() => { load(); }, [load]);
+  const pending = storage?.usage_pending ?? false;
+  useEffect(() => {
+    if (!pending) return;
+    const timer = window.setTimeout(() => load(), 2000);
+    return () => window.clearTimeout(timer);
+  }, [pending, storage, load]);
+  if (!storage) return <Loading label="Leyendo discos" />;
+  const hasUsage = storage.usage_categories.length > 0;
   return (
     <div className="view-stack">
       <SectionHeading eyebrow="NVME" title="Unidades y salud SMART" />
@@ -6233,6 +6277,25 @@ function StorageView({ notify }: { notify: (message: string, error?: boolean) =>
         })}
         {storage.nvme_devices.length === 0 && <Card className="empty-state"><HardDrive /><strong>No se detectaron controladores NVMe</strong></Card>}
       </div>
+      <StorageMap storage={storage} onRefresh={() => load(true)} />
+      <SectionHeading eyebrow="USO REAL" title="Distribución del almacenamiento" />
+      <Card className="storage-breakdown">
+        <div className="storage-breakdown-total">
+          <span><Database size={17} /><strong>Espacio ocupado clasificado</strong></span>
+          <strong>{hasUsage ? bytes(storage.categorized_total) : "—"}</strong>
+        </div>
+        {!hasUsage && <small className="storage-pending"><RefreshCw className="spin" size={13} /> Midiendo carpetas; puede tardar si el disco no se ha leído hace poco.</small>}
+        {storage.usage_categories.map((category) => {
+          const percent = storage.categorized_total > 0
+            ? Math.min(100, category.size / storage.categorized_total * 100)
+            : 0;
+          return <div className="storage-breakdown-row" data-category={category.id} key={category.id}>
+            <div><span><strong>{category.label}</strong><small>{category.description}</small></span><strong>{bytes(category.size)}</strong></div>
+            <div className="storage-category-bar"><span style={{ width: `${percent}%` }} /></div>
+            <small>{percent.toFixed(1)}% del espacio ocupado</small>
+          </div>;
+        })}
+      </Card>
       <SectionHeading eyebrow="CAPACIDAD" title="Almacenamiento" />
       <div className="storage-grid">
         {storage.partitions.map((partition) => {
@@ -6253,30 +6316,94 @@ function StorageView({ notify }: { notify: (message: string, error?: boolean) =>
           );
         })}
       </div>
-      <SectionHeading eyebrow="USO REAL" title="Distribución del almacenamiento" />
-      <Card className="storage-breakdown">
-        <div className="storage-breakdown-total">
-          <span><Database size={17} /><strong>Espacio ocupado clasificado</strong></span>
-          <strong>{bytes(storage.categorized_total)}</strong>
-        </div>
-        {storage.usage_categories.map((category) => {
-          const percent = storage.categorized_total > 0
-            ? Math.min(100, category.size / storage.categorized_total * 100)
-            : 0;
-          return <div className="storage-breakdown-row" data-category={category.id} key={category.id}>
-            <div><span><strong>{category.label}</strong><small>{category.description}</small></span><strong>{bytes(category.size)}</strong></div>
-            <div className="storage-category-bar"><span style={{ width: `${percent}%` }} /></div>
-            <small>{percent.toFixed(1)}% del espacio ocupado</small>
-          </div>;
-        })}
-      </Card>
       <SectionHeading eyebrow="DISTRIBUCIÓN" title="Datos de modelos" />
       <Card className="storage-list">
         {storage.model_storage.map((item) => (
           <div key={String(item.path)}><div><Database size={17} /><span><strong>{String(item.name)}</strong><small>{String(item.path)}</small></span></div><strong>{bytes(Number(item.size))}</strong></div>
         ))}
       </Card>
+      <SectionHeading eyebrow="APPS DE USUARIO" title="Directorios del home" />
+      <Card className="storage-list">
+        {!hasUsage && <small className="storage-pending"><RefreshCw className="spin" size={13} /> Midiendo el home.</small>}
+        {(storage.home_directories ?? []).map((item) => (
+          <div key={item.path}><div><Folder size={17} /><span><strong>{item.name}</strong><small>{item.path}</small></span></div><strong>{bytes(item.size)}</strong></div>
+        ))}
+        {hasUsage && (storage.home_directories ?? []).length > 0 && (
+          <small className="storage-home-note">Cada directorio excluye lo que ya cuentan Modelos, Apps y MyDGX; juntos suman «Usuario y otros».</small>
+        )}
+      </Card>
     </div>
+  );
+}
+
+const STORAGE_SEGMENT_STYLE: Record<string, { kind: string; colorIndex?: number }> = {
+  system: { kind: "system" },
+  models: { kind: "model", colorIndex: 0 },
+  apps: { kind: "model", colorIndex: 1 },
+  mydgx: { kind: "model", colorIndex: 2 },
+  home: { kind: "model", colorIndex: 4 },
+};
+
+function StorageMap({ storage, onRefresh }: {
+  storage: {
+    usage_categories: Array<{ id: string; label: string; size: number; description: string }>;
+    categorized_total: number;
+    disk_total: number;
+    disk_free: number;
+    usage_pending: boolean;
+    usage_updated_at: string | null;
+  };
+  onRefresh: () => void;
+}) {
+  const total = storage.disk_total;
+  const grouped = storage.usage_categories.reduce((sum, category) => sum + category.size, 0);
+  const reserved = Math.max(0, total - grouped - storage.disk_free);
+  const segments: MapSegment[] = [
+    ...storage.usage_categories
+      .filter((category) => category.size > 0)
+      .map((category) => ({
+        name: category.label,
+        bytes: category.size,
+        description: category.description,
+        ...(STORAGE_SEGMENT_STYLE[category.id] ?? { kind: "system" }),
+      })),
+    ...(reserved > 0 ? [{ name: "Reservado", bytes: reserved, kind: "cache", description: "Bloques que ext4 reserva para root; no están ocupados pero tampoco disponibles para el usuario." }] : []),
+    { name: "Libre", bytes: storage.disk_free, kind: "available", description: "Espacio libre en el disco del sistema." },
+  ];
+  const updated = storage.usage_updated_at
+    ? new Date(storage.usage_updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : null;
+  const badge = (
+    <span className="storage-map-status">
+      {storage.usage_pending
+        ? <><RefreshCw className="spin" size={12} /> {updated ? "Actualizando" : "Calculando"}</>
+        : updated && <>Medido a las {updated}</>}
+      <button className="icon-button" onClick={onRefresh} disabled={storage.usage_pending} title="Volver a medir las carpetas" aria-label="Volver a medir el almacenamiento">
+        <RefreshCw size={13} />
+      </button>
+    </span>
+  );
+  if (!storage.usage_categories.length || !total) {
+    return (
+      <div className="memory-map storage-map">
+        <div className="memory-map-heading">
+          <div><strong>Mapa de almacenamiento</strong>{badge}</div>
+          <small>Midiendo sistema, modelos, apps y MyDGX…</small>
+        </div>
+        <div className="memory-map-bar storage-map-placeholder" aria-busy="true" />
+      </div>
+    );
+  }
+  return (
+    <SegmentedMap
+      className="storage-map"
+      title="Mapa de almacenamiento"
+      badge={badge}
+      summary={`${bytes(storage.categorized_total)} usados · ${bytes(storage.disk_free)} libres · ${bytes(total)} total`}
+      ariaLabel={`Disco del sistema: ${bytes(storage.categorized_total)} usados y ${bytes(storage.disk_free)} libres`}
+      total={total}
+      segments={segments}
+    />
   );
 }
 

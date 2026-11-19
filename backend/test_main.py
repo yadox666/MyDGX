@@ -7,10 +7,12 @@ import sqlite3
 import hashlib
 import os
 import struct
+import subprocess
 import tempfile
 import time
 import unittest
 import zlib
+from collections import namedtuple
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +32,8 @@ from backend.gateway import (
     supports_gateway_protocol,
 )
 from backend.main import (
+    docker_storage_bytes,
+    exclusive_directory_sizes,
     Database,
     ModelPayload,
     ProfilePayload,
@@ -64,6 +68,7 @@ from backend.main import (
     settings,
     software_versions,
     storage,
+    storage_partitions,
     system_integrity,
     system_readiness,
 )
@@ -1462,8 +1467,14 @@ class CollectorTests(unittest.TestCase):
                 "backend.main.psutil.disk_usage",
                 return_value=usage,
             ), patch(
-                "backend.main.directory_usage_bytes",
-                return_value=0,
+                "backend.main.exclusive_directory_sizes",
+                side_effect=lambda paths, device=None: [0] * len(paths),
+            ), patch(
+                "backend.main.docker_storage_bytes", return_value=0,
+            ), patch(
+                "backend.main.ollama_storage_bytes", new=AsyncMock(return_value=0),
+            ), patch.dict(
+                main_module._storage_usage_cache, {"value": None, "computed_at": 0.0, "task": None},
             ):
                 result = asyncio.run(storage())
         self.assertEqual(
@@ -1471,10 +1482,107 @@ class CollectorTests(unittest.TestCase):
             {"/", str(volume)},
         )
         self.assertEqual(result["categorized_total"], 25)
+        self.assertFalse(result["usage_pending"])
         self.assertEqual(
             sum(item["size"] for item in result["usage_categories"]),
             result["categorized_total"],
         )
+
+    def test_storage_partitions_hide_snap_squashfs_images(self) -> None:
+        partition = namedtuple("partition", "device mountpoint fstype")
+        mounts = [
+            partition("/dev/nvme0n1p2", "/", "ext4"),
+            partition("/dev/nvme0n1p1", "/boot/efi", "vfat"),
+            partition("/dev/loop3", "/snap/firefox/9056", "squashfs"),
+            partition("/dev/loop9", "/media/install", "iso9660"),
+        ]
+        usage = namedtuple("usage", "total used free percent")(100, 40, 60, 40.0)
+        with patch("backend.main.psutil.disk_partitions", return_value=mounts), \
+                patch("backend.main.psutil.disk_usage", return_value=usage), \
+                patch("backend.main.Path.is_dir", return_value=True):
+            mountpoints = [item["mountpoint"] for item in storage_partitions()]
+
+        self.assertEqual(mountpoints, ["/", "/boot/efi"])
+
+    def test_storage_answers_with_partitions_while_usage_is_still_computing(self) -> None:
+        def slow_usage(ollama_bytes: int, docker_bytes: int) -> dict[str, Any]:
+            time.sleep(0.3)
+            return {"usage_categories": [{"id": "models", "label": "Modelos", "size": 7, "description": ""}],
+                    "categorized_total": 7, "disk_total": 10, "disk_free": 3, "model_storage": []}
+
+        async def scenario() -> tuple[dict[str, Any], dict[str, Any]]:
+            first = await storage()
+            await asyncio.sleep(0.5)
+            return first, await storage()
+
+        with patch("backend.main.storage_partitions", return_value=[{"mountpoint": "/"}]), \
+                patch("backend.main.nvme_storage_devices", return_value=[]), \
+                patch("backend.main.storage_usage", side_effect=slow_usage), \
+                patch("backend.main.docker_storage_bytes", return_value=0), \
+                patch("backend.main.ollama_storage_bytes", new=AsyncMock(return_value=0)), \
+                patch("backend.main.STORAGE_USAGE_FIRST_WAIT_SECONDS", 0.05), \
+                patch.dict(main_module._storage_usage_cache, {"value": None, "computed_at": 0.0, "task": None}):
+            first, second = asyncio.run(scenario())
+        self.assertEqual(first["partitions"], [{"mountpoint": "/"}])
+        self.assertTrue(first["usage_pending"])
+        self.assertEqual(first["usage_categories"], [])
+        self.assertIsNone(first["usage_updated_at"])
+        self.assertFalse(second["usage_pending"])
+        self.assertEqual(second["categorized_total"], 7)
+        self.assertIsNotNone(second["usage_updated_at"])
+
+    def test_storage_lists_each_home_directory_outside_the_classified_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            for name in ("ragkit", ".cache/huggingface", "Downloads", "tiny", "MyDGX-Dashboard", "opt",
+                         ".local/share/mydgx"):
+                (home / name).mkdir(parents=True)
+            (home / "link").symlink_to(home / "ragkit")
+            reported = {"ragkit": 400_000_000, ".cache": 70_000_000, "Downloads": 10_000_000}
+
+            def sizes(paths, device=None):
+                return [5_000_000 if path == home else reported.get(path.name, 0) for path in paths]
+
+            usage = namedtuple("usage", "total used free percent")(2_000_000_000, 1_000_000_000, 1_000_000_000, 50.0)
+            with patch("backend.main.Path.home", return_value=home), \
+                    patch.object(main_module.settings, "hf_home", str(home / ".cache" / "huggingface")), \
+                    patch("backend.main.STORAGE_APPS_ROOT", home / ".local" / "share" / "mydgx"), \
+                    patch("backend.main.ROOT", home / "MyDGX-Dashboard"), \
+                    patch("backend.main.psutil.disk_usage", return_value=usage), \
+                    patch("backend.main.exclusive_directory_sizes", side_effect=sizes):
+                result = main_module.storage_usage(0, 0)
+
+        listed = [(item["name"], item["size"]) for item in result["home_directories"]]
+        self.assertEqual(listed, [("ragkit", 400_000_000), (".cache", 70_000_000), ("Otros", 15_000_000)])
+        self.assertIn("3 directorios pequeños", result["home_directories"][-1]["path"])
+        home_group = next(item for item in result["usage_categories"] if item["id"] == "home")
+        self.assertEqual(home_group["size"], sum(size for _, size in listed))
+
+    def test_exclusive_directory_sizes_count_nested_directories_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / "parent"
+            child = parent / "child"
+            child.mkdir(parents=True)
+            (child / "big.bin").write_bytes(b"\0" * 3_000_000)
+            (parent / "small.bin").write_bytes(b"\0" * 1_000_000)
+            missing = Path(directory) / "missing"
+            detected = main_module.du_skips_counted_directories()
+            for gnu in {detected, False}:
+                with self.subTest(gnu_du=gnu), patch("backend.main.du_skips_counted_directories", return_value=gnu):
+                    sizes = exclusive_directory_sizes([child, missing, parent])
+                    self.assertGreater(sizes[0], 2_800_000)
+                    self.assertEqual(sizes[1], 0)
+                    self.assertGreater(sizes[2], 900_000)
+                    self.assertLess(sizes[2], 1_500_000)
+
+    def test_docker_storage_adds_images_volumes_and_build_cache(self) -> None:
+        output = "\n".join(json.dumps({"Type": kind, "Size": size}) for kind, size in (
+            ("Images", "54.93GB"), ("Containers", "664.2kB"), ("Local Volumes", "1.78GB"), ("Build Cache", "13.78GB"),
+        ))
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=output, stderr="")
+        with patch("backend.main.shutil.which", return_value="/usr/bin/docker"), \
+                patch("backend.main.subprocess.run", return_value=completed):
+            self.assertEqual(docker_storage_bytes(), 54_930_000_000 + 664_200 + 1_780_000_000 + 13_780_000_000)
 
     def test_nvme_inventory_uses_sysfs_without_privileged_device_access(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

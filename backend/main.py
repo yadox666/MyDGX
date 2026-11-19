@@ -47,7 +47,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9837,6 +9837,9 @@ class ModelPayload(BaseModel):
     enabled: bool = True
 
 
+PROFILE_MAX_ADDITIONAL_MODELS = 12
+
+
 class AdditionalModelPayload(ModelPayload):
     id: str = Field(default="", max_length=80, pattern=r"^[A-Za-z0-9._-]*$")
     name: str = Field(min_length=2, max_length=80, pattern=r"^[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+$")
@@ -9844,7 +9847,7 @@ class AdditionalModelPayload(ModelPayload):
 
 class ProfilePayload(ModelPayload):
     name: str = Field(min_length=2, max_length=80, pattern=r"^[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+$")
-    additional_models: list[AdditionalModelPayload] = Field(default_factory=list, max_length=12)
+    additional_models: list[AdditionalModelPayload] = Field(default_factory=list, max_length=PROFILE_MAX_ADDITIONAL_MODELS)
     memory_reserve_mb: int = Field(default=4096, ge=1024, le=131_072)
     auto_fit_context: bool = True
     minimum_context_size: int = Field(default=8192, ge=512, le=1_048_576)
@@ -10960,6 +10963,95 @@ async def delete_profile(profile_id: str, confirm: str = Query()) -> dict[str, b
     db.execute("DELETE FROM profiles WHERE id=?", (profile_id,))
     db.audit("profile.delete", profile["name"], True)
     return {"deleted": True}
+
+
+class ProfileDuplicatePayload(BaseModel):
+    name: str = Field(min_length=2, max_length=80, pattern=r"^[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+$")
+
+
+def profile_payload_from_row(row: dict[str, Any], name: str, fresh_ports: bool = True) -> ProfilePayload:
+    """The stored profile (also Default or Quick) as a payload; with fresh_ports its llama.cpp models get new automatic ports."""
+    primary, *additional = profile_models(row)
+
+    def fields(model: dict[str, Any], model_type: type[BaseModel]) -> dict[str, Any]:
+        values = {key: model[key] for key in model_type.model_fields if key in model and model[key] is not None}
+        if fresh_ports and values.get("engine") == "llama.cpp":
+            values["port"] = 0
+            values["port_auto"] = True
+        return values
+
+    try:
+        model_files = json.loads(row.get("model_files_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        model_files = []
+    return ProfilePayload.model_validate({
+        **fields(primary, ProfilePayload),
+        "model_files": model_files if isinstance(model_files, list) else [],
+        "app": str(row.get("app") or ""),
+        "name": name,
+        "additional_models": [fields(model, AdditionalModelPayload) for model in additional],
+    })
+
+
+@app.post("/api/profiles/{profile_id}/duplicate", dependencies=secure)
+async def duplicate_profile(profile_id: str, payload: ProfileDuplicatePayload) -> dict[str, str]:
+    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    name = payload.name.strip()
+    if db.rows("SELECT id FROM profiles WHERE name=? COLLATE NOCASE", (name,)):
+        raise HTTPException(status_code=409, detail="Ya existe un perfil con ese nombre")
+    try:
+        copy = profile_payload_from_row(rows[0], name)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"El perfil no se puede copiar: {exc.errors()[0].get('msg')}") from exc
+    created = await create_profile(copy)
+    db.audit("profile.duplicate", f"{rows[0]['name']} → {name}", True)
+    return created
+
+
+class ProfileAddModelPayload(BaseModel):
+    source: Literal["ollama", "huggingface"]
+    model_id: str = Field(min_length=1, max_length=300)
+    context_size: int | None = Field(default=None, ge=512, le=1_048_576)
+
+
+@app.post("/api/profiles/{profile_id}/models", dependencies=secure)
+async def add_model_to_profile(profile_id: str, payload: ProfileAddModelPayload) -> dict[str, Any]:
+    """Append a local model, configured as Encender would launch it, to an editable profile."""
+    ensure_profile_editable(profile_id)
+    rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    profile = profile_payload_from_row(rows[0], rows[0]["name"], fresh_ports=False)
+    identity = f"{payload.source}:{payload.model_id.casefold()}"
+    if any(model_identity(model.model_dump()) == identity for model in [profile, *profile.additional_models]):
+        raise HTTPException(status_code=409, detail=f"{payload.model_id} ya está en el perfil {profile.name}")
+    if len(profile.additional_models) >= PROFILE_MAX_ADDITIONAL_MODELS:
+        raise HTTPException(status_code=409, detail="El perfil ya tiene el máximo de modelos")
+    config = await managed_model_config(payload.source, payload.model_id, payload.context_size)
+    values = {key: config[key] for key in AdditionalModelPayload.model_fields if key in config and config[key] is not None}
+    if values.get("engine") == "llama.cpp":
+        values["port"] = 0
+        values["port_auto"] = True
+    aliases = {(model.model_alias or model.model_ref).casefold() for model in [profile, *profile.additional_models]}
+    base_alias = str(values.get("model_alias") or values.get("model_ref") or "")[:190]
+    alias, suffix = base_alias, 2
+    while alias.casefold() in aliases:
+        alias, suffix = f"{base_alias}-{suffix}", suffix + 1
+    values["model_alias"] = alias
+    values["id"] = f"m-{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
+    values["name"] = managed_model_name(config)
+    values["enabled"] = True
+    profile.additional_models.append(AdditionalModelPayload.model_validate(values))
+    await update_profile(profile_id, profile)
+    db.audit("profile.model.add", f"{profile.name} + {payload.model_id}", True)
+    return {
+        "profile_id": profile_id,
+        "name": values["name"],
+        "context_size": values.get("context_size"),
+        "running": profile_id in _runtime_profile_ids,
+    }
 
 
 def hf_profile_recommendation(

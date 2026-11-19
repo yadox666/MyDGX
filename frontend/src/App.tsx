@@ -47,6 +47,7 @@ import {
   Trash2,
   Trophy,
   ChevronDown,
+  ListPlus,
   Upload,
   X,
   Zap,
@@ -955,6 +956,108 @@ function hfGroupResidentSize(group: HfFileGroup) {
     && !/-\d{5}-of-\d{5}\.gguf$/i.test(file.name)
   ));
   return Math.max(0, group.size - (sharedEngram?.size ?? 0));
+}
+
+type AddToProfileRequest = {
+  source: "ollama" | "huggingface";
+  modelId: string;
+  range?: QuickStart["context"];
+  defaultContext?: number;
+};
+
+function AddToProfileDialog({ request, notify, onClose }: {
+  request: AddToProfileRequest;
+  notify: (message: string, error?: boolean) => void;
+  onClose: () => void;
+}) {
+  useDialogEscape(onClose);
+  const [profiles, setProfiles] = useState<Profile[] | null>(null);
+  const [selected, setSelected] = useState("");
+  const [busy, setBusy] = useState(false);
+  const range = request.range && request.range.context_max > request.range.context_min ? request.range : undefined;
+  const initial = range ? Math.min(range.context_max, Math.max(range.context_min, request.defaultContext || range.context_min)) : 0;
+  const [context, setContext] = useState(initial);
+  const memoryAt = (tokens: number) => range && range.memory_min_mb && range.memory_max_mb
+    ? range.memory_min_mb + (range.memory_max_mb - range.memory_min_mb) * (tokens - range.context_min) / (range.context_max - range.context_min)
+    : 0;
+
+  const contains = (profile: Profile) => profile.models.some((model) => (
+    request.source === "ollama"
+      ? model.engine === "ollama" && model.model_ref === request.modelId
+      : (model.model_repo || "").toLocaleLowerCase() === request.modelId.toLocaleLowerCase()
+  ));
+
+  useEffect(() => {
+    api<{ profiles: Profile[] }>("/api/profiles")
+      .then((data) => {
+        const editable = data.profiles.filter((profile) => !profile.read_only);
+        setProfiles(editable);
+        setSelected((editable.find((profile) => !contains(profile)) ?? editable[0])?.id ?? "");
+      })
+      .catch((error: Error) => { notify(error.message, true); setProfiles([]); });
+  }, [request.source, request.modelId]);
+
+  async function submit() {
+    const profile = profiles?.find((item) => item.id === selected);
+    if (!profile) return;
+    setBusy(true);
+    try {
+      const result = await api<{ running: boolean; context_size?: number }>(`/api/profiles/${encodeURIComponent(profile.id)}/models`, {
+        method: "POST",
+        body: JSON.stringify({
+          source: request.source,
+          model_id: request.modelId,
+          ...(range && context !== initial ? { context_size: context } : {}),
+        }),
+      });
+      notify(
+        `${request.modelId} añadido a ${profile.name}`
+        + (result.context_size ? ` con ${contextLabel(result.context_size)}` : "")
+        + (result.running ? " · se cargará al reiniciar el perfil" : " · se cargará al arrancar el perfil"),
+      );
+      onClose();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={`Añadir ${request.modelId} a un perfil`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <Card className="model-help-dialog add-to-profile-dialog">
+      <SectionHeading eyebrow="AÑADIR A PERFIL" title={request.modelId} action={<button className="icon-button" onClick={onClose} aria-label="Cerrar"><X size={16} /></button>} />
+      <p className="preflight-intro">Se añade con la misma configuración que usaría <strong>Encender</strong> (cuantización, drafter, muestreo y tus ajustes manuales) y un puerto libre propio. Default y Quick se gestionan desde esta página y no aparecen aquí.</p>
+      {profiles === null
+        ? <p className="preflight-intro"><RefreshCw className="spin" size={14} /> Cargando perfiles…</p>
+        : profiles.length === 0
+          ? <div className="profile-warning"><TriangleAlert size={15} />No hay perfiles editables. Crea uno en Perfiles.</div>
+          : <div className="add-to-profile-list" role="radiogroup" aria-label="Perfil de destino">
+            {profiles.map((profile) => {
+              const already = contains(profile);
+              return <label key={profile.id} className={`${selected === profile.id ? "selected" : ""} ${already ? "disabled" : ""}`}>
+                <input type="radio" name="add-to-profile" value={profile.id} checked={selected === profile.id} disabled={already} onChange={() => setSelected(profile.id)} />
+                <span>
+                  <strong>{profile.name}</strong>
+                  <small>{already ? "Ya contiene este modelo" : `${profile.models.length} modelo${profile.models.length === 1 ? "" : "s"} · ${profile.engine}${profile.active ? " · predeterminado" : ""}`}</small>
+                </span>
+              </label>;
+            })}
+          </div>}
+      {range && <div className="add-to-profile-context">
+        <span>Contexto</span>
+        <label className="quick-context-slider" title="Va del mínimo de los agentes de código al máximo del autor o del GGUF">
+          <input type="range" min={range.context_min} max={range.context_max} step={1024} value={context} disabled={busy} onChange={(event) => setContext(Number(event.target.value))} aria-label={`Contexto de ${request.modelId} en el perfil`} />
+          <span>{contextLabel(context).replace(" tokens", "")}{memoryAt(context) ? <small>~{(memoryAt(context) / 1024).toFixed(0)} GB</small> : null}</span>
+        </label>
+      </div>}
+      <div className="add-to-profile-actions">
+        <button className="button secondary" onClick={onClose}>Cancelar</button>
+        <button className="button primary" disabled={busy || !selected || Boolean(profiles?.find((item) => item.id === selected && contains(item)))} onClick={() => void submit()}>
+          <Plus size={14} /> {busy ? "Añadiendo…" : "Añadir al perfil"}
+        </button>
+      </div>
+    </Card>
+  </div>;
 }
 
 function recommendedHfFiles(inspection: HfInspection) {
@@ -3301,6 +3404,7 @@ function ModelsView({
   const [downloadBusy, setDownloadBusy] = useState<string | null>(null);
   const [pendingDownload, setPendingDownload] = useState<PendingDownload | null>(null);
   const [settingsModel, setSettingsModel] = useState<string | null>(null);
+  const [addToProfile, setAddToProfile] = useState<AddToProfileRequest | null>(null);
   const [chosenContexts, setChosenContexts] = useState<Record<string, number | undefined>>({});
   const [glossaryRequest, setGlossaryRequest] = useState<GlossaryRequest | null>(null);
 
@@ -3951,6 +4055,7 @@ function ModelsView({
                         : loaded
                           ? <button className="button secondary compact" onClick={() => ollamaMemory(name, false)} aria-label={`Descargar ${name} de memoria`}><Square size={13} /> Liberar</button>
                           : <QuickStartButton label={name} availability={model.quick_start as QuickStart | undefined} busy={quickBusy !== null} pending={quickBusy === quickKey} title="Cargar ahora en el perfil Quick; no se restaura al reiniciar el equipo" onStart={() => void quickModel("ollama", name, true)} />}
+                    {(model.quick_start as QuickStart | undefined)?.supported !== false && <button className="icon-button" onClick={() => setAddToProfile({ source: "ollama", modelId: name })} title="Añadir a un perfil" aria-label={`Añadir ${name} a un perfil`}><ListPlus size={15} /></button>}
                     <button className="icon-button" onClick={() => updateOllama(name)} title="Actualizar desde el registro" aria-label={`Actualizar ${name}`}><RefreshCw size={15} /></button>
                     <button
                       className="icon-button danger"
@@ -4032,6 +4137,7 @@ function ModelsView({
                         && <QuickStartButton label={model.repo_id} availability={model.quick_start} defaultContext={model.memory_estimate?.context_size} unsupportedReason={unsupportedReason} busy={quickBusy !== null} pending={quickBusy === `huggingface:${model.repo_id}`} title="Cargar ahora con llama.cpp en el perfil Quick; no se restaura al reiniciar el equipo" onStart={(contextSize) => void quickModel("huggingface", model.repo_id, true, contextSize)} onContextChange={(contextSize) => setChosenContexts((current) => ({ ...current, [model.repo_id]: contextSize }))} />}
                     <a className="icon-button" href={`https://huggingface.co/${model.repo_id}`} target="_blank" rel="noreferrer noopener" title="Abrir en Hugging Face" aria-label={`Abrir ${model.repo_id} en Hugging Face`}><ExternalLink size={15} /></a>
                     <button className="button secondary compact" disabled={inspectingRepo !== null} onClick={() => inspect(model.repo_id)} aria-label={`Inspeccionar ${model.repo_id}`}><Search className={inspectingRepo === model.repo_id ? "spin" : ""} size={13} /> Detalles</button>
+                    {runnable && !incomplete && !unsupportedReason && model.quick_start?.supported !== false && <button className="icon-button" onClick={() => setAddToProfile({ source: "huggingface", modelId: model.repo_id, range: model.quick_start?.context, defaultContext: chosenContexts[model.repo_id] ?? model.memory_estimate?.context_size })} title="Añadir a un perfil, con su contexto" aria-label={`Añadir ${model.repo_id} a un perfil`}><ListPlus size={15} /></button>}
                     {runnable && !incomplete && <button className="icon-button" onClick={() => setSettingsModel(model.repo_id)} title="Ajustes de arranque: cuantización, contexto, drafter y muestreo" aria-label={`Ajustes de ${model.repo_id}`}><SlidersHorizontal size={15} /></button>}
                     <button className="icon-button" disabled={verificationActive} onClick={() => verifyIntegrity(model.repo_id)} aria-label={`Verificar ${model.repo_id}`} title={verification?.message || "Verificar integridad (SHA-256)"}><ShieldCheck className={verificationActive ? "spin" : ""} size={15} /></button>
                     <button
@@ -4470,6 +4576,7 @@ function ModelsView({
       {glossaryRequest && <ModelGlossaryDialog request={glossaryRequest} onClose={() => setGlossaryRequest(null)} />}
       {pendingDownload && <DownloadPreflightDialog pending={pendingDownload} onCancel={() => setPendingDownload(null)} onConfirm={(extra) => void confirmDownload(extra)} />}
       {settingsModel && <ModelSettingsDialog modelId={settingsModel} notify={notify} onClose={() => setSettingsModel(null)} onSaved={refresh} />}
+      {addToProfile && <AddToProfileDialog request={addToProfile} notify={notify} onClose={() => setAddToProfile(null)} />}
 
       {displayedJobs.length > 0 && (
         <ActivitySection
@@ -4920,6 +5027,22 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
     }
   }
 
+  async function duplicate(profile: Profile) {
+    const suggestion = `${profile.name} copia`.replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+    const name = window.prompt(
+      `Nombre del nuevo perfil (copia de ${profile.name}).\nLetras, números, espacios y · . _ - ; de 2 a 80 caracteres.`,
+      suggestion,
+    )?.trim();
+    if (!name) return;
+    try {
+      await api(`/api/profiles/${encodeURIComponent(profile.id)}/duplicate`, { method: "POST", body: JSON.stringify({ name }) });
+      notify(`Perfil «${name}» creado como copia de ${profile.name}; sus modelos llama.cpp usan puertos nuevos`);
+      load();
+    } catch (error) {
+      notify((error as Error).message, true);
+    }
+  }
+
   async function appAction(name: string, appActionName: "status" | "restart") {
     try {
       const result = await api<ProfileAppState & { exit_code: number }>(`/api/profile-apps/${encodeURIComponent(name)}/${appActionName}`, { method: "POST" });
@@ -5189,6 +5312,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
               }
             }}
           ><X size={14} /> Cancelar</button>}
+          <button title="Crear un perfil editable con la misma configuración y otro nombre" onClick={() => void duplicate(profile)}><Copy size={14} /> Duplicar</button>
           {profile.read_only
             ? <small className="profile-readonly-hint">Se gestiona desde Modelos</small>
             : <>

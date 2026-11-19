@@ -5310,6 +5310,83 @@ class ProfileApiTests(unittest.TestCase):
                 self.assertIn(profile_id, profile["runtime_plan"]["profile_ids"])
         db.path = original_path
 
+    def test_profile_can_be_duplicated_with_another_name_and_its_own_ports(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("backend.main.local_port_available", return_value=True):
+            db.path = Path(directory) / "duplicate.db"
+            with TestClient(app) as client:
+                created = client.post("/api/profiles", json={
+                    "name": "Original", "engine": "llama.cpp", "model_ref": "primary",
+                    "model_repo": "org/Model-GGUF", "model_filename": "Model-00001-of-00002.gguf",
+                    "model_files": ["Model-00001-of-00002.gguf", "Model-00002-of-00002.gguf"],
+                    "port": 18080, "port_auto": False, "temperature": 0.3, "context_size": 32768,
+                    "additional_models": [
+                        {"name": "Segundo", "engine": "llama.cpp", "model_ref": "second",
+                         "model_file": "/models/second.gguf", "port": 18081, "port_auto": False},
+                        {"name": "Ollama", "engine": "ollama", "model_ref": "qwen3:8b", "port": 11434},
+                    ],
+                })
+                self.assertEqual(created.status_code, 200, created.json())
+                source_id = created.json()["id"]
+                copy = client.post(f"/api/profiles/{source_id}/duplicate", json={"name": "Original copia"})
+                self.assertEqual(copy.status_code, 200, copy.json())
+                again = client.post(f"/api/profiles/{source_id}/duplicate", json={"name": "original COPIA"})
+                self.assertEqual(again.status_code, 409)
+                missing = client.post("/api/profiles/no-existe/duplicate", json={"name": "Otro"})
+                self.assertEqual(missing.status_code, 404)
+                listing = {item["id"]: item for item in client.get("/api/profiles").json()["profiles"]}
+        db.path = original_path
+        source, duplicate = listing[source_id], listing[copy.json()["id"]]
+        self.assertEqual(duplicate["name"], "Original copia")
+        self.assertEqual(duplicate["temperature"], 0.3)
+        self.assertEqual(duplicate["context_size"], 32768)
+        self.assertEqual(duplicate["model_files"], source["model_files"])
+        self.assertEqual(len(duplicate["model_files"]), 2)
+        self.assertEqual([item["name"] for item in duplicate["models"]], ["Original copia", "Segundo", "Ollama"])
+        self.assertFalse(duplicate["active"])
+        llama_ports = {item["port"] for item in source["models"] if item["engine"] == "llama.cpp"}
+        copy_ports = {item["port"] for item in duplicate["models"] if item["engine"] == "llama.cpp"}
+        self.assertFalse(llama_ports & copy_ports)
+        self.assertEqual(duplicate["models"][2]["port"], 11434)
+
+    def test_local_model_is_added_to_a_profile_with_its_launch_config(self) -> None:
+        original_path = db.path
+        launch = {
+            "engine": "llama.cpp", "model_ref": "org/Coder-GGUF", "model_alias": "primary",
+            "model_repo": "org/Coder-GGUF", "model_filename": "Coder-Q4_K_M.gguf",
+            "model_files": ["Coder-Q4_K_M.gguf"], "context_size": 65536, "temperature": 0.6,
+            "estimated_memory_mb": 9000, "port": 4321,
+        }
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("backend.main.local_port_available", return_value=True), \
+                patch("backend.main.managed_model_config", new=AsyncMock(return_value=launch)) as config:
+            db.path = Path(directory) / "add-model.db"
+            with TestClient(app) as client:
+                created = client.post("/api/profiles", json={
+                    "name": "Trabajo", "engine": "llama.cpp", "model_ref": "primary",
+                    "model_file": "/models/primary.gguf", "port": 18080, "port_auto": False,
+                })
+                profile_id = created.json()["id"]
+                body = {"source": "huggingface", "model_id": "org/Coder-GGUF", "context_size": 65536}
+                added = client.post(f"/api/profiles/{profile_id}/models", json=body)
+                self.assertEqual(added.status_code, 200, added.json())
+                again = client.post(f"/api/profiles/{profile_id}/models", json=body)
+                missing = client.post("/api/profiles/no-existe/models", json=body)
+                managed = client.post(f"/api/profiles/{main_module.QUICK_PROFILE_ID}/models", json=body)
+                profile = next(item for item in client.get("/api/profiles").json()["profiles"] if item["id"] == profile_id)
+        db.path = original_path
+        config.assert_awaited_once_with("huggingface", "org/Coder-GGUF", 65536)
+        self.assertEqual((again.status_code, missing.status_code, managed.status_code), (409, 404, 403))
+        self.assertFalse(added.json()["running"])
+        primary, coder = profile["models"]
+        self.assertEqual(primary["port"], 18080)
+        self.assertEqual(coder["model_filename"], "Coder-Q4_K_M.gguf")
+        self.assertEqual(coder["context_size"], 65536)
+        self.assertEqual(coder["temperature"], 0.6)
+        self.assertEqual(coder["model_alias"], "primary-2")
+        self.assertNotIn(coder["port"], {18080, 4321})
+
     def test_profile_ports_are_reassigned_when_another_runtime_uses_them(self) -> None:
         original_path = db.path
         with tempfile.TemporaryDirectory() as directory:

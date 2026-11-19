@@ -1778,3 +1778,15 @@ select { height: 34px; min-width: 170px; padding: 0 30px 0 10px; }
 .stop-all-button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 11px; border: 1px solid var(--red); border-radius: 999px; color: #fff; background: var(--red); font-size: calc(12px * var(--font-scale)); font-weight: 650; cursor: pointer; }
 .stop-all-button:hover:not(:disabled) { filter: brightness(1.08); }
 .stop-all-button:disabled { opacity: .65; cursor: progress; }
+
+.add-to-profile-dialog { width: min(560px, calc(100vw - 32px)); }
+.add-to-profile-list { display: grid; gap: 8px; margin: 12px 0; max-height: 320px; overflow-y: auto; }
+.add-to-profile-list label { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+.add-to-profile-list label.selected { border-color: var(--accent); background: var(--accent-soft); }
+.add-to-profile-list label.disabled { opacity: 0.55; cursor: not-allowed; }
+.add-to-profile-list span { display: grid; gap: 2px; }
+.add-to-profile-list small { color: var(--text-secondary); }
+.add-to-profile-context { display: flex; align-items: center; gap: 12px; margin: 8px 0 4px; }
+.add-to-profile-context > span { font-weight: 600; }
+.add-to-profile-context .quick-context-slider { flex: 1; }
+.add-to-profile-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }

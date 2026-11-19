@@ -253,6 +253,61 @@ class DatabaseTests(unittest.TestCase):
             asyncio.run(main_module.watchdog_tick(1.0))
         owner.assert_not_called()
 
+    def test_memory_pressure_alerts_once_when_sustained(self) -> None:
+        breakdown = {"available": 30 * 1024**3, "runtimes": [
+            {"name": "Cyber-Tiel", "bytes": 33 * 1024**3},
+            {"name": "BaronLLM", "bytes": 22 * 1024**3},
+            {"name": "tiny", "bytes": 1024**2},
+        ]}
+        with tempfile.TemporaryDirectory() as directory:
+            pressure_file = Path(directory) / "memory"
+
+            def pressure(full: float) -> None:
+                pressure_file.write_text(
+                    f"some avg10={full + 1:.2f} avg60=0.00 avg300=0.00 total=1\n"
+                    f"full avg10={full:.2f} avg60=0.00 avg300=0.00 total=1\n",
+                    encoding="ascii",
+                )
+
+            tick = lambda now: asyncio.run(main_module.memory_pressure_tick(now))
+            with (
+                patch.object(main_module, "MEMORY_PRESSURE_FILE", pressure_file),
+                patch.dict(main_module._memory_pressure_state, {"high": 0, "notified_at": float("-inf")}),
+                patch("backend.main.safe_memory_breakdown", new=AsyncMock(return_value=breakdown)),
+                patch("backend.main.notify_safely") as notified,
+                patch("backend.main.db.log"),
+            ):
+                pressure(76.35)
+                self.assertEqual([tick(0), tick(10), tick(20)], [False, False, True])
+                kind, title, message = notified.call_args.args
+                self.assertEqual((kind, title), ("memory.pressure", "Memoria saturada"))
+                self.assertIn("76 %", message)
+                self.assertIn("Cyber-Tiel 33 GB, BaronLLM 22 GB", message)
+                self.assertNotIn("tiny", message)
+                self.assertFalse(tick(30))
+                pressure(5.0)
+                self.assertFalse(tick(40))
+                pressure(80.0)
+                self.assertEqual([tick(50), tick(60), tick(70)], [False, False, False])
+                self.assertEqual([tick(920), tick(930)], [True, False])
+                self.assertEqual(notified.call_count, 2)
+                pressure_file.unlink()
+                self.assertIsNone(main_module.memory_pressure_full_avg10())
+                self.assertFalse(tick(2000))
+
+    def test_quick_models_count_toward_loaded_llm_limit(self) -> None:
+        models = {
+            main_module.DEFAULT_PROFILE_ID: [{"task": "chat"}, {"task": "chat"}],
+            main_module.QUICK_PROFILE_ID: [{"task": "chat"}, {"task": "vision"}, {"task": "embeddings"}, {"task": "chat", "enabled": False}],
+            "user": [{"task": "chat"}, {"task": "chat"}],
+        }
+        profile = lambda profile_id: {"id": profile_id}
+        with patch("backend.main.profile_models", side_effect=lambda item: models[item["id"]]):
+            self.assertEqual(main_module.loaded_llm_slots([profile(main_module.DEFAULT_PROFILE_ID)]), 0)
+            self.assertEqual(main_module.loaded_llm_slots([profile("user")]), 1)
+            self.assertEqual(main_module.loaded_llm_slots([profile(main_module.QUICK_PROFILE_ID)]), 2)
+            self.assertEqual(main_module.loaded_llm_slots([profile(main_module.QUICK_PROFILE_ID), profile("user")]), 3)
+
     def test_orphaned_llama_servers_from_previous_backend_are_reaped(self) -> None:
         ours = SimpleNamespace(pid=11, info={"pid": 11, "ppid": 1, "cmdline": ["/usr/local/bin/llama-server"]},
                                terminate=lambda: None, wait=lambda _timeout: None, kill=lambda: None)

@@ -411,8 +411,8 @@ struct MenuContentView: View {
 
     private func profileAvailabilitySuffix(_ profile: InferenceProfile) -> String {
         guard let plan = profile.runtimePlan, !plan.fits else { return "" }
-        if userProfileCount(plan.profileIDs) > 2 {
-            return " · " + String(localized: "límite de 2 perfiles")
+        if plan.exceedsLLMLimit {
+            return " · " + String(localized: "límite de 2 perfiles o Quick")
         }
         if !plan.aliasConflicts.isEmpty, !plan.portConflicts.isEmpty {
             return " · " + String(localized: "alias y puerto en uso")

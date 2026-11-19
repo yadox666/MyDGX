@@ -352,6 +352,7 @@
   "El runtime visual no produjo una respuesta": "Vision runtime did not produce a response",
   "El servicio de chat no está disponible": "Chat service is not available",
   "El servicio multimodal no está disponible": "Multimodal service is not available",
+  "El sistema pasa el {0} % del tiempo esperando memoria; el panel, los modelos y ComfyUI se ralentizan o fallan. Mayor consumo: {1}. Para un modelo o cancela el trabajo de ComfyUI.": "The system spends {0} % of its time waiting for memory; the dashboard, models and ComfyUI slow down or fail. Largest consumers: {1}. Stop a model or cancel the ComfyUI job.",
   "El token de Hugging Face debe empezar por hf_ y no contener espacios": "The Hugging Face token must start with hf_ and contain no spaces",
   "El trabajo no se puede cancelar": "Job cannot be cancelled",
   "El trabajo no tiene resultado": "Job has no result",
@@ -567,6 +568,7 @@
   "Los errores tienen la forma {\"detail\": \"...\"}.": "Errors have the form {\"detail\": \"...\"}.",
   "Los puertos manuales deben estar entre 1024 y 65535": "Manual ports must be between 1024 and 65535",
   "Mantenimiento": "Maintenance",
+  "Memoria saturada": "Memory saturated",
   "Memoria vaciada · {0}": "Memory cleared · {0}",
   "Modalidad inválida": "Invalid modality",
   "Modelo": "Model",
@@ -1001,6 +1003,7 @@
   "settings.context_size={0}: Encender usará {1} (el mínimo que necesitan los agentes o el máximo del modelo)": "settings.context_size={0}: Turning on will use {1} (the minimum agents need or the model maximum)",
   "sin afirmación de inteligibilidad; score penalizado": "no intelligibility assertion; score penalized",
   "sin censura": "uncensored",
+  "sin datos": "no data",
   "speech recognition": "speech recognition",
   "speech to text": "speech to text",
   "square is left": "square is left",
@@ -1032,7 +1035,7 @@
   "video generation": "video generation",
   "visión": "vision",
   "vídeo": "video",
-  "ya hay dos perfiles cargados": "two profiles are already loaded",
+  "ya hay dos perfiles o modelos Quick cargados; para uno antes": "two profiles or Quick models are already loaded; stop one first",
   "zgx nano": "zgx nano",
   "{0} (fuera de MyDGX)": "{0} (outside MyDGX)",
   "{0} GB de pesos detectados": "{0} GB of weights detected",
@@ -1101,7 +1104,5 @@
   "«task» debe ser {0}": "«task» must be {0}",
   "«{0}» debe ser texto de hasta {1} caracteres": "«{0}» must be text of up to {1} characters",
   "Área o términos: perfiles, memoria, benchmarks, chat completions, borrar modelo...": "Area or terms: profiles, memory, benchmarks, chat completions, delete model...",
-  "≈{0} tok/s y {1} slot(s) conservadores": "≈{0} tok/s and {1} conservative slot(s)",
-  "INCOMPLETO": "INCOMPLETE",
-  "DEFECTUOSO": "DEFECTIVE"
+  "≈{0} tok/s y {1} slot(s) conservadores": "≈{0} tok/s and {1} conservative slot(s)"
 }

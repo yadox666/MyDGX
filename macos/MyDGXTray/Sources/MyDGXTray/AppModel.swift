@@ -73,6 +73,10 @@ final class AppModel: ObservableObject {
         case disconnected
         case undeployed
         case poweredOff
+        /// The API times out while SSH answers and the Spark is stalled on memory.
+        case saturated
+        /// The API times out while SSH answers, without memory pressure.
+        case unresponsive
     }
 
     private enum ProfileJobPhase: Equatable {
@@ -591,6 +595,19 @@ final class AppModel: ObservableObject {
             profiles = []
             runtime = nil
             setCodingAgentBlockReason(String(localized: "MyDGX no está conectado."))
+            if (error as? URLError)?.code == .timedOut, !(await sshIsUnavailable()) {
+                apiReachable = false
+                if await remoteMemoryIsSaturated() {
+                    statusMessage = String(localized: "Spark saturado (memoria)")
+                    lastError = String(localized: "El Spark responde por SSH, pero se está quedando sin memoria y MyDGX tarda demasiado en contestar. Para un modelo o cancela el trabajo de ComfyUI.")
+                    notifyConnectionState(.saturated)
+                } else {
+                    statusMessage = String(localized: "MyDGX tarda en responder")
+                    lastError = String(localized: "El Spark responde por SSH, pero la API de MyDGX no contestó a tiempo.")
+                    notifyConnectionState(.unresponsive)
+                }
+                return
+            }
             let healthAvailable: Bool
             if let client = try? MyDGXClient(configuration: configuration),
                (try? await client.health()) != nil {
@@ -622,6 +639,8 @@ final class AppModel: ObservableObject {
                 && (
                     lastConnectionState == .connected
                         || lastConnectionState == .poweredOff
+                        || lastConnectionState == .saturated
+                        || lastConnectionState == .unresponsive
                         || lastConnectionState == nil
                 ) {
                 poweredOff = await sshIsUnavailable()
@@ -1546,8 +1565,8 @@ final class AppModel: ObservableObject {
     }
 
     func profilePlanFailure(_ plan: ProfileRuntimePlan) -> String {
-        if userProfileCount(plan.profileIDs) > 2 {
-            return String(localized: "Ya hay dos perfiles cargados.")
+        if plan.exceedsLLMLimit {
+            return String(localized: "Ya hay dos perfiles o modelos Quick cargados.")
         }
         if !plan.aliasConflicts.isEmpty, !plan.portConflicts.isEmpty {
             return String(localized: "Alias incompatibles: \(plan.aliasConflicts.joined(separator: ", ")); puertos ocupados: \(plan.portConflicts.map(String.init).joined(separator: ", ")).")
@@ -1791,7 +1810,23 @@ final class AppModel: ObservableObject {
                 title: String(localized: "Equipo apagado"),
                 body: String(localized: "\(alias) ha dejado de responder por API y SSH.")
             )
+        case .saturated:
+            AppNotifications.send(
+                title: String(localized: "Spark saturado"),
+                body: String(localized: "\(alias) se está quedando sin memoria; para un modelo o cancela el trabajo de ComfyUI.")
+            )
+        case .unresponsive:
+            AppNotifications.send(
+                title: String(localized: "MyDGX tarda en responder"),
+                body: String(localized: "\(alias) responde por SSH, pero la API de MyDGX no contesta a tiempo.")
+            )
         }
+    }
+
+    /// Exit status 0 means "full avg10" in /proc/pressure/memory reached 40 %, the backend's alert threshold.
+    private func remoteMemoryIsSaturated() async -> Bool {
+        let script = "awk '/^full/ { split($2, value, \"=\"); pressure = value[2] + 0 } END { exit !(pressure >= 40) }' /proc/pressure/memory"
+        return ((try? await runSSH(arguments: [script])) ?? -1) == 0
     }
 
     private func sshIsUnavailable() async -> Bool {

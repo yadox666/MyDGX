@@ -14,7 +14,9 @@
 "%@ no responde por API ni SSH." = "%@ isn’t responding over API or SSH.";
 "%@ no responde; MyDGXTray usa %@ %@." = "%@ isn’t responding; MyDGXTray is using %@ %@.";
 "%@ no se puede abrir: %@" = "%@ can’t be opened: %@";
+"%@ responde por SSH, pero la API de MyDGX no contesta a tiempo." = "%@ answers over SSH, but the MyDGX API is not replying in time.";
 "%@ se detuvo en %@." = "%@ stopped on %@.";
+"%@ se está quedando sin memoria; para un modelo o cancela el trabajo de ComfyUI." = "%@ is running out of memory; stop a model or cancel the ComfyUI job.";
 "%@ seleccionado (%@)" = "%@ selected (%@)";
 "%@ · cargado · %@" = "%@ · loaded · %@";
 "%@ · edición (--active)" = "%@ · edit (--active)";
@@ -202,6 +204,8 @@
 "El Spark conservará lo que ya esté instalado y podrás continuar más tarde." = "The Spark will keep what’s already installed, and you can continue later.";
 "El Spark no acepta contraseña por SSH. Elige tu clave SSH en «Ya tengo una clave»." = "The Spark doesn’t accept SSH passwords. Choose your SSH key under “I already have a key.”";
 "El Spark no aceptó la clave SSH. Escribe la contraseña para instalar una nueva." = "The Spark didn’t accept the SSH key. Enter the password to install a new one.";
+"El Spark responde por SSH, pero la API de MyDGX no contestó a tiempo." = "The Spark answers over SSH, but the MyDGX API did not reply in time.";
+"El Spark responde por SSH, pero se está quedando sin memoria y MyDGX tarda demasiado en contestar. Para un modelo o cancela el trabajo de ComfyUI." = "The Spark answers over SSH, but it is running out of memory and MyDGX takes too long to reply. Stop a model or cancel the ComfyUI job.";
 "El túnel con %@ funciona, pero la API MyDGX no responde." = "The tunnel to %@ works, but the MyDGX API isn’t responding.";
 "El túnel de %@ se recuperó tras reactivar el Mac." = "The tunnel to %@ recovered after the Mac woke up.";
 "El túnel SSH no pudo iniciarse. Revisa el log del perfil en ~/.MyDGX/logs." = "The SSH tunnel couldn’t start. Check the profile’s log in ~/.MyDGX/logs.";
@@ -324,7 +328,7 @@
 "Los modelos con contexto suficiente no admiten tool calling (llama.cpp sin --jinja)." = "Models with enough context don’t support tool calling (llama.cpp without --jinja).";
 "Los modelos y perfiles anteriores se restaurarán al terminar." = "Previous models and profiles will be restored when finished.";
 "Los perfiles requieren %.1f GB en total y la capacidad segura es %.1f GB." = "The profiles need %.1f GB in total, and the safe capacity is %.1f GB.";
-"límite de 2 perfiles" = "2-profile limit";
+"límite de 2 perfiles o Quick" = "limit of 2 profiles or Quick";
 "Mac en reposo" = "Mac asleep";
 "macOS ha bloqueado el acceso a la red local" = "macOS blocked local network access";
 "macOS puede solicitar autorización en Ajustes del Sistema → Ítems de inicio." = "macOS may ask for authorization in System Settings → Login Items.";
@@ -344,6 +348,7 @@
 "MyDGX quedó desplegado correctamente." = "MyDGX was deployed successfully.";
 "MyDGX se desplegó y la conexión quedó iniciada." = "MyDGX was deployed and the connection started.";
 "MyDGX se sincronizó, preparó y reinició correctamente." = "MyDGX was synced, prepared, and restarted successfully.";
+"MyDGX tarda en responder" = "MyDGX is slow to respond";
 "MyDGX vuelve a responder en %@." = "MyDGX is responding again on %@.";
 "MyDGX ya funciona en este Spark. Pulsa Conectar para empezar a usarlo, o Reinstalar para actualizarlo con la versión de esta app." = "MyDGX is already running on this Spark. Click Connect to start using it, or Reinstall to update it to this app’s version.";
 "MyDGX · ningún Spark configurado" = "MyDGX · no Spark configured";
@@ -480,6 +485,8 @@
 "Sistema" = "System";
 "Sobrescribir" = "Overwrite";
 "Solo si el Spark aún no acepta tu clave" = "Only if the Spark doesn’t accept your key yet";
+"Spark saturado" = "Spark saturated";
+"Spark saturado (memoria)" = "Spark saturated (memory)";
 "SSH" = "SSH";
 "SSH rechazó la autenticación. Comprueba el usuario, la clave privada y sus permisos." = "SSH rejected authentication. Check the user, the private key, and its permissions.";
 "Suite de benchmarks" = "Benchmark suite";
@@ -515,7 +522,7 @@
 "Ya está configurado · puerto anunciado sin verificar" = "Already set up · advertised port not verified";
 "Ya está configurado · SSH %lld" = "Already set up · SSH %lld";
 "Ya hay %lld equipo(s). Sigo buscando…" = "%lld device(s) found so far. Still searching…";
-"Ya hay dos perfiles cargados." = "Two profiles are already loaded.";
+"Ya hay dos perfiles o modelos Quick cargados." = "Two profiles or Quick models are already loaded.";
 "Ya tengo una clave SSH" = "I already have an SSH key";
 "¡Spark encontrado!" = "Spark found!";
 "¡Tu Spark está listo!" = "Your Spark is ready!";

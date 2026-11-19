@@ -211,7 +211,17 @@ struct ProfileRuntimePlan: Decodable {
     let availableMB: Int
     let aliasConflicts: [String]
     let portConflicts: [Int]
+    let llmSlots: Int?
+    let maxLLMSlots: Int?
     let fits: Bool
+
+    /// Older backends do not report slots and only counted user profiles.
+    var exceedsLLMLimit: Bool {
+        if let llmSlots, let maxLLMSlots {
+            return llmSlots > maxLLMSlots
+        }
+        return userProfileCount(profileIDs) > 2
+    }
 
     enum CodingKeys: String, CodingKey {
         case profileIDs = "profile_ids"
@@ -224,6 +234,8 @@ struct ProfileRuntimePlan: Decodable {
         case availableMB = "available_mb"
         case aliasConflicts = "alias_conflicts"
         case portConflicts = "port_conflicts"
+        case llmSlots = "llm_slots"
+        case maxLLMSlots = "max_llm_slots"
         case fits
     }
 }

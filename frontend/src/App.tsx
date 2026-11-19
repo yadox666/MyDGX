@@ -1867,6 +1867,8 @@ type ProfilesResponse = {
     profile_id: string | null;
     profile_ids: string[];
     running_models: number;
+    llm_slots: number;
+    max_llm_slots: number;
     models: Array<{ profile_id?: string | null; model_id: string; running: boolean; shared?: boolean; effective_context?: number }>;
     boot_restore?: { state: "idle" | "restoring" | "done"; pending: string[]; errors: string[] };
   };
@@ -5162,6 +5164,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
         alias_conflicts: string[];
         port_conflicts: number[];
         profile_ids: string[];
+        llm_slots: number;
+        max_llm_slots: number;
         port_assignments: Array<{ model: string; from: number; to: number }>;
       }>(`/api/profiles/${profile.id}/runtime-plan`);
       if (!plan.fits) {
@@ -5169,8 +5173,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
           ? t("Alias incompatibles: {join}", { join: plan.alias_conflicts.join(", ") })
           : plan.port_conflicts.length
             ? t("Puertos incompatibles: {join}", { join: plan.port_conflicts.join(", ") })
-            : plan.profile_ids.filter((id) => !MANAGED_PROFILE_IDS.has(id)).length > 2
-              ? t("Ya hay dos perfiles cargados")
+            : plan.llm_slots > plan.max_llm_slots
+              ? t("Ya hay dos perfiles o modelos Quick cargados")
               : t("Se necesitan {toFixed} GB adicionales y hay {toFixed2} GB libres", { toFixed: (plan.incremental_mb / 1024).toFixed(1), toFixed2: (plan.available_mb / 1024).toFixed(1) });
         notify(t("No se puede arrancar: {conflict}", { conflict: conflict }), true);
         return;
@@ -5272,13 +5276,12 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
     if (!data) return null;
     const running = data.runtime.profile_ids?.includes(profile.id)
       || (data.runtime.running && data.runtime.profile_id === profile.id);
-    const runningProfileCount = (data.runtime.profile_ids ?? []).filter((id) => !MANAGED_PROFILE_IDS.has(id)).length;
-    const limitReached = !profile.read_only && runningProfileCount >= 2;
+    const limitReached = !profile.read_only && data.runtime.llm_slots >= data.runtime.max_llm_slots;
     const runtimePlan = profile.runtime_plan;
     const noFitReason = running
       ? ""
       : limitReached
-        ? t("Ya hay dos perfiles encendidos; detén uno para arrancar este")
+        ? t("Ya hay dos perfiles o modelos Quick encendidos; detén uno para arrancar este")
         : !profile.memory_plan.fits
           ? t("El conjunto supera la memoria segura del equipo o repite puertos")
           : runtimePlan && !runtimePlan.fits
@@ -5429,7 +5432,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       />
       <div className="profile-summary">
         <Card><small>{t("Perfil predeterminado")}</small><strong>{data?.profiles.find((profile) => profile.active)?.name ?? t("Sin seleccionar")}</strong></Card>
-        <Card><small>{t("Runtime")}</small><strong>{data?.runtime.running ? t("{loaded}/2 perfiles{extra} · {runningModels} modelo(s)", { loaded: (data.runtime.profile_ids ?? []).filter((id) => !MANAGED_PROFILE_IDS.has(id)).length, extra: (data.runtime.profile_ids ?? []).some((id) => MANAGED_PROFILE_IDS.has(id)) ? " + Default/Quick" : "", runningModels: data.runtime.running_models }) : t("Detenido")}</strong></Card>
+        <Card><small>{t("Runtime")}</small><strong>{data?.runtime.running ? t("{loaded}/{max} perfiles o modelos Quick{extra} · {runningModels} modelo(s)", { loaded: data.runtime.llm_slots, max: data.runtime.max_llm_slots, extra: (data.runtime.profile_ids ?? []).includes("mydgx-default") ? " + Default" : "", runningModels: data.runtime.running_models }) : t("Detenido")}</strong></Card>
         <Card><small>llama.cpp</small><strong>{data?.llama_cpp_available ? t("Detectado") : t("No detectado")}</strong></Card>
       </div>
       {data?.runtime.boot_restore?.state === "restoring" && <div className="profile-warning"><RefreshCw className="spin" size={14} />{t("Restaurando los perfiles del último arranque")}{data.runtime.boot_restore.pending.length ? `: ${data.runtime.boot_restore.pending.join(", ")}` : ""}…</div>}
@@ -8008,7 +8011,7 @@ function NotificationBell({ unread, popup, onOpen }: { unread: number; popup: Ap
   </div>;
 }
 
-function NotificationsPanel({ data, onRead }: { data: NotificationsResponse | null; onRead: (ids: number[] | "all") => void }) {
+function NotificationsPanel({ data, onRead, notify }: { data: NotificationsResponse | null; onRead: (ids: number[] | "all") => void; notify: (message: string, error?: boolean) => void }) {
   const [fresh, setFresh] = useState<Set<number>>(new Set());
   const unreadIds = useMemo(() => (data?.items ?? []).filter((item) => !item.read_at).map((item) => item.id), [data]);
   useEffect(() => {
@@ -8029,6 +8032,7 @@ function NotificationsPanel({ data, onRead }: { data: NotificationsResponse | nu
         <div>
           <div className="notification-line"><strong>{item.title}</strong><time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString(locale)}</time></div>
           <p>{item.message}</p>
+          {item.kind === "memory.pressure" && <div className="notification-actions"><StopAllModelsButton notify={notify} onDone={() => undefined} /></div>}
           {item.log && <details><summary>{t("Log")}</summary><pre>{item.log}</pre></details>}
         </div>
       </li>)}
@@ -8091,7 +8095,7 @@ function LogsView({ notify, notifications, onReadNotifications }: { notify: (mes
           <button className="icon-button" onClick={() => void load()} aria-label={t("Actualizar logs")}><RefreshCw size={16} /></button>
         </div>}
       />
-      <NotificationsPanel data={notifications} onRead={onReadNotifications} />
+      <NotificationsPanel data={notifications} onRead={onReadNotifications} notify={notify} />
       <div className="logs-summary">
         <Card><small>{t("Últimas 24 h")}</small><strong>{Object.values(counts).reduce((total, count) => total + (count ?? 0), 0)}</strong></Card>
         <Card className="warning"><small>{t("Warnings")}</small><strong>{counts.warning ?? 0}</strong></Card>

@@ -108,7 +108,9 @@ Todas las descargas están limitadas al tamaño de la memoria física del equipo
 ## Perfiles
 
 Un perfil agrupa uno o varios modelos (principal más adicionales) con su motor,
-puerto, contexto y parámetros. Puede haber hasta dos perfiles cargados a la vez.
+puerto, contexto y parámetros. Puede haber hasta dos perfiles o modelos Quick de
+chat o visión cargados a la vez; `GET /api/profiles` (`runtime`) y el plan de
+arranque informan de las plazas ocupadas en `llm_slots` y `max_llm_slots`.
 
 | Método | Ruta | Para qué |
 |---|---|---|

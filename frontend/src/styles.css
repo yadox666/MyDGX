@@ -157,6 +157,7 @@ nav button.active { color: var(--accent-strong); background: var(--accent-soft);
 .notification-line time { flex: 0 0 auto; color: var(--text-muted); font-size: calc(11px * var(--font-scale)); font-variant-numeric: tabular-nums; }
 .notifications-list p { margin: 3px 0 0; color: var(--text-secondary); font-size: calc(12px * var(--font-scale)); overflow-wrap: anywhere; }
 .notifications-list details { margin-top: 5px; }
+.notification-actions { margin-top: 8px; display: flex; gap: 8px; }
 .notifications-list summary { color: var(--text-muted); font-size: calc(11px * var(--font-scale)); cursor: pointer; }
 .notifications-list pre { max-height: 220px; margin: 6px 0 0; padding: 8px; overflow: auto; font-size: calc(11px * var(--font-scale)); white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 6px; background: var(--surface-soft); }
 .notifications-empty { margin: 10px 0 0; color: var(--text-muted); font-size: calc(12px * var(--font-scale)); }

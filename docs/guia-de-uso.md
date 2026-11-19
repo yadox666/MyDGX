@@ -8,7 +8,7 @@ hay detrás. La referencia completa de endpoints está en [API](api.md).
 | Concepto | Qué es |
 |---|---|
 | **Modelo** | Pesos descargados en la caché de Hugging Face (`HF_HOME`) o en Ollama. Descargar no implica cargar en memoria. |
-| **Perfil** | Receta de inferencia: uno o varios modelos con su motor (llama.cpp, Ollama, vLLM, SGLang, TensorRT-LLM, ComfyUI, Whisper...), puerto, contexto y parámetros. Puede haber **hasta dos perfiles cargados** a la vez si caben en memoria. |
+| **Perfil** | Receta de inferencia: uno o varios modelos con su motor (llama.cpp, Ollama, vLLM, SGLang, TensorRT-LLM, ComfyUI, Whisper...), puerto, contexto y parámetros. Puede haber **hasta dos perfiles o modelos Quick cargados** a la vez si caben en memoria. |
 | **Perfil predeterminado** | Perfil que MyDGX vuelve a cargar al arrancar (`ENABLE_PROFILE_AUTOSTART`). Se fija con *Activar*. |
 | **App del perfil** | Aplicación propia (por ejemplo `~/ragkit`) que arranca y se para con el perfil mediante su `start.sh`. |
 | **Perfil Default** | Perfil de solo lectura con los modelos marcados como *Default* en *Modelos* (por ejemplo un modelo de embeddings que siempre debe estar disponible). Arranca siempre al iniciar MyDGX y no cuenta para el límite de dos perfiles. |
@@ -231,7 +231,8 @@ de descarga, plan de memoria y, si tiene, la app asociada.
 - **Activar**: lo marca como predeterminado para el próximo arranque de MyDGX.
 - **Default y Quick** llevan la etiqueta *Solo lectura*: se pueden arrancar o
   detener, pero no editar, activar ni borrar; se gestionan desde
-  *Modelos*. No cuentan para el límite de dos perfiles cargados.
+  *Modelos*. Default no cuenta para el límite de dos cargados; cada modelo de
+  chat o visión encendido en Quick ocupa una de esas dos plazas.
 
 ### App del perfil
 
@@ -322,6 +323,16 @@ API: `/api/profiles*`, `POST /api/profile-apps/{name}/{action}`,
 Que un motor aparezca *activo* significa que su servicio responde. Whisper y
 ComfyUI cargan sus modelos bajo demanda en la primera petición, así que pueden
 estar activos sin ocupar apenas memoria.
+
+Esa carga bajo demanda no pasa por el control de memoria de los perfiles: un
+workflow de ComfyUI puede agotar la memoria aunque cada modelo cupiera al
+cargarse. MyDGX vigila la presión de memoria del kernel
+(`/proc/pressure/memory`). Si durante 30 s el sistema pasa al menos el 40 % del
+tiempo esperando memoria, crea la notificación *Memoria saturada* con los
+procesos que más ocupan y un botón **Parar modelos**. El aviso se repite como
+mucho cada 15 minutos. En ese estado MyDGX Tray muestra *Spark saturado
+(memoria)* en lugar de *No conectado*, porque el equipo sigue respondiendo por
+SSH.
 
 ## Laboratorio IA
 

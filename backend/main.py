@@ -2777,6 +2777,8 @@ def profile_runtime_status() -> dict[str, Any]:
         "profile_ids": list(_runtime_profile_ids),
         "models": models,
         "running_models": len(unique_running),
+        "llm_slots": loaded_llm_slots(running_profiles()),
+        "max_llm_slots": MAX_LOADED_LLM_SLOTS,
         "boot_restore": {
             "state": _boot_restore["state"],
             "pending": list(_boot_restore["pending"]),
@@ -3235,8 +3237,22 @@ def persist_managed_profile_ports(profile: dict[str, Any]) -> None:
     )
 
 
-def user_profile_count(profiles: list[dict[str, Any]]) -> int:
-    return sum(1 for profile in profiles if profile["id"] not in MANAGED_PROFILES)
+MAX_LOADED_LLM_SLOTS = 2
+QUICK_SLOT_TASKS = {"chat", "vision"}
+
+
+def loaded_llm_slots(profiles: list[dict[str, Any]]) -> int:
+    """User profiles take one slot each and every Quick chat or vision model takes its own; Default is free."""
+    slots = 0
+    for profile in profiles:
+        if profile["id"] == QUICK_PROFILE_ID:
+            slots += sum(
+                1 for model in profile_models(profile)
+                if model.get("enabled", True) and model.get("task", "chat") in QUICK_SLOT_TASKS
+            )
+        elif profile["id"] not in MANAGED_PROFILES:
+            slots += 1
+    return slots
 
 
 def profiles_runtime_plan(profiles: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3303,8 +3319,10 @@ def profiles_runtime_plan(profiles: list[dict[str, Any]]) -> dict[str, Any]:
         "available_mb": available_mb,
         "alias_conflicts": sorted(set(alias_conflicts)),
         "port_conflicts": sorted(set(port_conflicts)),
+        "llm_slots": loaded_llm_slots(profiles),
+        "max_llm_slots": MAX_LOADED_LLM_SLOTS,
         "fits": (
-            user_profile_count(profiles) <= 2
+            loaded_llm_slots(profiles) <= MAX_LOADED_LLM_SLOTS
             and fits_total
             and fits_available
             and not alias_conflicts
@@ -3817,6 +3835,70 @@ async def profile_watchdog() -> None:
                 db.log("error", "profile", "profile.watchdog.error", f"{type(exc).__name__}: {redact_log_text(str(exc), 300)}")
 
 
+MEMORY_PRESSURE_FILE = Path("/proc/pressure/memory")
+MEMORY_PRESSURE_INTERVAL_SECONDS = 10
+# "full avg10": share of the last 10 s in which every task was stalled waiting for memory.
+MEMORY_PRESSURE_THRESHOLD = 40.0
+MEMORY_PRESSURE_SUSTAINED_SAMPLES = 3
+MEMORY_PRESSURE_COOLDOWN_SECONDS = 900
+_memory_pressure_state: dict[str, float] = {"high": 0, "notified_at": float("-inf")}
+
+
+def memory_pressure_full_avg10() -> float | None:
+    try:
+        text = MEMORY_PRESSURE_FILE.read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in text.splitlines():
+        if line.startswith("full "):
+            fields = dict(part.split("=", 1) for part in line.split()[1:] if "=" in part)
+            try:
+                return float(fields["avg10"])
+            except (KeyError, ValueError):
+                return None
+    return None
+
+
+async def memory_pressure_tick(now: float | None = None) -> bool:
+    """Alert once per cooldown when the system stays stalled on memory; returns whether it alerted."""
+    now = time.monotonic() if now is None else now
+    pressure = await asyncio.to_thread(memory_pressure_full_avg10)
+    state = _memory_pressure_state
+    if pressure is None or pressure < MEMORY_PRESSURE_THRESHOLD:
+        state["high"] = 0
+        return False
+    state["high"] += 1
+    if state["high"] < MEMORY_PRESSURE_SUSTAINED_SAMPLES or now - state["notified_at"] < MEMORY_PRESSURE_COOLDOWN_SECONDS:
+        return False
+    state["notified_at"] = now
+    memory = await safe_memory_breakdown()
+    consumers = ", ".join(
+        f"{item['name']} {item['bytes'] / 1024**3:.0f} GB"
+        for item in memory.get("runtimes", [])[:4]
+        if item["bytes"] >= 1024**3
+    ) or "sin datos"
+    message = (
+        f"El sistema pasa el {pressure:.0f} % del tiempo esperando memoria; el panel, los modelos y "
+        f"ComfyUI se ralentizan o fallan. Mayor consumo: {consumers}. Para un modelo o cancela el trabajo de ComfyUI."
+    )
+    db.log(
+        "warning", "runtime", "memory.pressure", message,
+        detail={"full_avg10": pressure, "available_bytes": memory.get("available")},
+    )
+    notify_safely("memory.pressure", "Memoria saturada", message, level="error")
+    return True
+
+
+async def memory_pressure_watchdog() -> None:
+    while True:
+        await asyncio.sleep(MEMORY_PRESSURE_INTERVAL_SECONDS)
+        try:
+            await memory_pressure_tick()
+        except Exception as exc:
+            with suppress(Exception):
+                db.log("error", "runtime", "memory.pressure.error", f"{type(exc).__name__}: {redact_log_text(str(exc), 300)}")
+
+
 def reap_orphaned_llama_servers() -> list[int]:
     """llama-server processes still writing to our profile logs belong to a previous backend that died."""
     logs = str(ROOT / "logs" / "profile-")
@@ -4075,8 +4157,8 @@ async def start_profile_process(
     profiles = [*current_profiles, profile]
     plan = profiles_runtime_plan(profiles)
     if not plan["fits"]:
-        if user_profile_count(profiles) > 2:
-            reason = "ya hay dos perfiles cargados"
+        if plan["llm_slots"] > plan["max_llm_slots"]:
+            reason = "ya hay dos perfiles o modelos Quick cargados; para uno antes"
         elif plan["alias_conflicts"]:
             reason = f"alias incompatibles: {', '.join(plan['alias_conflicts'])}"
         elif plan["port_conflicts"]:
@@ -4447,6 +4529,7 @@ async def lifespan(_: FastAPI):
     restore_task = asyncio.create_task(boot_restore_runtime(profile))
     memory_mode_task = asyncio.create_task(reapply_memory_mode())
     watchdog_task = asyncio.create_task(profile_watchdog())
+    pressure_task = asyncio.create_task(memory_pressure_watchdog())
     description_task = asyncio.create_task(backfill_hf_model_descriptions())
     inventory_task = asyncio.create_task(warm_benchmark_inventory())
     yield
@@ -4460,9 +4543,9 @@ async def lifespan(_: FastAPI):
     )
     sampler.cancel()
     description_task.cancel()
-    for task in (restore_task, memory_mode_task, watchdog_task, inventory_task):
+    for task in (restore_task, memory_mode_task, watchdog_task, pressure_task, inventory_task):
         task.cancel()
-    await asyncio.gather(restore_task, memory_mode_task, watchdog_task, inventory_task, return_exceptions=True)
+    await asyncio.gather(restore_task, memory_mode_task, watchdog_task, pressure_task, inventory_task, return_exceptions=True)
     for task in list(_benchmark_background_tasks):
         task.cancel()
     if _benchmark_background_tasks:

@@ -8393,6 +8393,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
             {hasActiveModels && <StopAllModelsButton notify={notify} onDone={() => { void refreshOverview(); void refreshModels(); }} />}
             <button className="theme-toggle" onClick={toggleTheme} title={themePreference === "system" ? t("Tema automático según el sistema") : t("Tema fijo")}>{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}<span>{theme === "dark" ? t("Modo día") : t("Modo noche")}</span></button>
             <FontSizeControl onChange={setFontScale} />
+            <button className="theme-toggle language-toggle" onClick={() => setLanguagePreference(language === "es" ? "en" : "es")} title={language === "es" ? t("Switch to English") : t("Cambiar a español")} aria-label={language === "es" ? t("Switch to English") : t("Cambiar a español")}><Languages size={16} /><span>{language.toUpperCase()}</span></button>
             {onLogout && <button className="session-logout" onClick={onLogout} title={t("Cerrar sesión")} aria-label={t("Cerrar sesión")}><LogOut size={16} /></button>}
           </div>
         </header>

@@ -105,7 +105,7 @@ ejecuta al arrancar y después aproximadamente cada hora.
 | Variable | Por defecto | Descripción |
 |---|---|---|
 | `ENABLE_PROFILE_AUTOSTART` | `true` | Recarga el perfil predeterminado al arrancar MyDGX. |
-| `DEFAULT_PROFILE_ID` | vacío | Perfil predeterminado inicial (normalmente se elige con *Activar*). |
+| `DEFAULT_PROFILE_ID` | vacío | Perfil predeterminado inicial (normalmente se elige con *Solo predeterminado*). |
 | `PROFILE_BIND_HOST` | `127.0.0.1` | Dirección en la que escuchan los runtimes de perfil. |
 | `PROFILE_START_TIMEOUT_SECONDS` | `180` | Espera máxima a que un modelo responda al arrancar. |
 | `PROFILE_RESTORE_RETRY_SECONDS` | `300` | Reintento de restauración del perfil predeterminado tras un fallo. |

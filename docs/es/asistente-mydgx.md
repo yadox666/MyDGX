@@ -53,11 +53,14 @@ El asistente utiliza cuatro fuentes de información:
 1. **Mapa de la aplicación** en su prompt de sistema: las secciones de la
    interfaz y los conceptos clave (perfiles, perfiles Default y Quick, apps de
    perfil, gateway, modo memoria, trabajos).
-2. **Documentación local:** indexa en memoria `README.md`, `docs/**/*.md`, la
-   guía de comprobación DGX y la guía de la aplicación macOS. La búsqueda es
-   local y no indexa `.env`, bases de datos, logs ni archivos de usuario.
-3. **Referencia de la API:** `get_api_reference` lee [docs/api.md](api.md), que un
-   test mantiene sincronizado con todas las rutas reales. Con ella el asistente
+2. **Documentación local:** indexa en memoria la documentación del idioma de la
+   interfaz (`README.es.md` y `docs/es/*.md` en español, `README.md` y
+   `docs/en/*.md` en inglés), la guía de comprobación DGX y la guía de la
+   aplicación macOS. La búsqueda es local y no indexa `.env`, bases de datos,
+   logs ni archivos de usuario.
+3. **Referencia de la API:** `get_api_reference` lee [api.md](api.md) en el
+   mismo idioma; un test mantiene las dos versiones sincronizadas con todas las
+   rutas reales. Con ella el asistente
    explica cómo integrar o automatizar MyDGX y muestra ejemplos `curl`. Usa
    siempre marcadores como `YOUR_API_KEY` e indica el texto de confirmación que
    exige cada endpoint. El asistente no ejecuta esas llamadas: son para que las

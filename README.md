@@ -1,61 +1,63 @@
 # MyDGX
 
+<p align="right"><a href="README.es.md">Versión en español</a></p>
+
 <p align="center">
   <img src="frontend/public/apple-touch-icon.png" width="92" alt="MyDGX">
 </p>
 
-<h3 align="center">Tu supercomputador personal, bajo control.</h3>
+<h3 align="center">Your personal supercomputer, under control.</h3>
 
 <p align="center">
-  Panel local y open source para monitorizar, configurar y operar equipos NVIDIA GB10:
-  DGX Spark, ASUS Ascent GX10, HP ZGX Nano G1n, Lenovo ThinkStation PGX y Dell Pro Max GB10.
+  A local, open source dashboard to monitor, configure and operate NVIDIA GB10 systems:
+  DGX Spark, ASUS Ascent GX10, HP ZGX Nano G1n, Lenovo ThinkStation PGX and Dell Pro Max GB10.
 </p>
 
 <p align="center">
-  <strong>Modelos</strong> · <strong>Perfiles multimodelo</strong> ·
-  <strong>Telemetría histórica</strong> · <strong>Gateway OpenAI</strong> ·
-  <strong>Actualizaciones seguras</strong>
+  <strong>Models</strong> · <strong>Multi-model profiles</strong> ·
+  <strong>Historical telemetry</strong> · <strong>OpenAI Gateway</strong> ·
+  <strong>Safe updates</strong>
 </p>
 
-![Resumen de MyDGX en NVIDIA DGX Spark](docs/screenshots/resumen-darkmode.png)
+![MyDGX overview on NVIDIA DGX Spark](docs/screenshots/resumen-darkmode.png)
 
-## ¿Qué es MyDGX?
+## What is MyDGX?
 
-MyDGX reúne en una sola interfaz las tareas habituales de un equipo de IA local:
+MyDGX brings the everyday tasks of a local AI machine together in a single interface:
 
-- monitorización de GPU, CPU, memoria unificada, temperatura, potencia, red y disco;
-- histórico persistente en SQLite con navegación de 1 hora a 7 días;
-- inventario, inspección y eliminación de modelos;
-- búsqueda en Hugging Face con recomendador para el Spark y comprobación previa
-  de las cabeceras GGUF antes de descargar;
-- descarga por nombre con Ollama e importación de GGUF propios desde un ZIP, con
-  prueba automática al terminar;
-- hasta dos perfiles simultáneos, cada uno con varios modelos, motores y puertos;
-- deduplicación de modelos compartidos y preflight conjunto de memoria, alias y puertos;
-- cálculo preventivo de memoria para pesos, contexto, caché KV y reserva del sistema;
-- perfiles predeterminados con arranque automático y recuperación ante errores de memoria;
-- apps propias que arrancan y se paran con el perfil (por ejemplo un RAG que usa sus modelos);
-- encendido inmediato de un modelo desde *Modelos* (perfil Quick: sobrevive a un deploy, no a un reinicio del equipo) y perfil Default con los modelos que deben arrancar siempre;
-- modo memoria para pausar servicios opcionales y restaurarlos después;
-- benchmarks reproducibles con cola automática para modelos nuevos y un
-  [ranking de modelos probados en el Spark](docs/modelos-probados.md);
-- chat local, Open WebUI y laboratorio multimodal;
-- asistente MyDGX local con documentación, telemetría en vivo y acciones confirmadas;
-- catálogo OpenAI compatible para todos los modelos del perfil activo;
-- comprobación de DGX OS, CUDA, kernel, drivers, llama.cpp, paquetes y servicios;
-- actualizaciones controladas con verificación posterior de integridad;
-- logs técnicos, trabajos y auditoría persistentes;
-- modos día y noche, diseño responsive e identidad automática del fabricante;
-- prueba de aceptación por SSH para [comprobar un DGX Spark antes de comprarlo](docs/comprobar-spark.md),
-  nuevo o de segunda mano.
+- monitoring of GPU, CPU, unified memory, temperature, power, network and disk;
+- persistent history in SQLite, browsable from 1 hour to 7 days;
+- model inventory, inspection and removal;
+- Hugging Face search with a recommender for the Spark and a pre-check of the
+  GGUF headers before downloading;
+- download by name with Ollama and import of your own GGUF files from a ZIP, with
+  an automatic test when finished;
+- up to two simultaneous profiles, each with several models, engines and ports;
+- deduplication of shared models and a joint preflight of memory, aliases and ports;
+- preventive memory calculation for weights, context, KV cache and system reserve;
+- default profiles with autostart and recovery from out-of-memory errors;
+- your own apps that start and stop with the profile (for example a RAG that uses its models);
+- instant start of a model from *Models* (Quick profile: survives a deploy, not a system reboot) and a Default profile with the models that must always start;
+- memory mode to pause optional services and restore them later;
+- reproducible benchmarks with an automatic queue for new models and a
+  [ranking of models tested on the Spark](docs/en/modelos-probados.md);
+- local chat, Open WebUI and a multimodal lab;
+- local MyDGX assistant with documentation, live telemetry and confirmed actions;
+- OpenAI-compatible catalog for every model in the active profile;
+- checks for DGX OS, CUDA, kernel, drivers, llama.cpp, packages and services;
+- controlled updates with post-update integrity verification;
+- persistent technical logs, jobs and audit trail;
+- day and night modes, responsive design and automatic vendor identity;
+- SSH acceptance test to [check a DGX Spark before buying it](docs/en/comprobar-spark.md),
+  new or second-hand.
 
-Todo funciona de forma local. Los tokens y claves se leen desde `.env`; no se
-guardan en SQLite ni se devuelven al navegador.
+Everything runs locally. Tokens and keys are read from `.env`; they are not
+stored in SQLite or returned to the browser.
 
-## Equipos compatibles
+## Supported hardware
 
-MyDGX detecta el fabricante mediante DMI, device-tree, DGX OS y la GPU. Cuando la
-identificación es inequívoca adapta el resumen, la fotografía y la marca.
+MyDGX detects the vendor through DMI, device-tree, DGX OS and the GPU. When the
+identification is unambiguous it adapts the overview, the photo and the branding.
 
 <table>
   <tr>
@@ -68,522 +70,522 @@ identificación es inequívoca adapta el resumen, la fotografía y la marca.
   </tr>
 </table>
 
-También funciona en Ubuntu y otros entornos de desarrollo. Las funciones
-dependientes de NVIDIA, systemd, APT, NVMe o SMART se muestran como no disponibles
-cuando el sistema no las ofrece.
+It also runs on Ubuntu and other development environments. Features that
+depend on NVIDIA, systemd, APT, NVMe or SMART are shown as unavailable
+when the system does not provide them.
 
-## Instalación rápida desde macOS (recomendada)
+## Quick install from macOS (recommended)
 
-Si tienes un Mac, no necesitas Terminal, Git, Python ni Node.js. **MyDGXTray**, la
-app de la barra de menús, trae MyDGX dentro y un asistente lo instala en el
-Spark por SSH. El Spark compila e instala todo lo demás.
+If you have a Mac, you don't need Terminal, Git, Python or Node.js. **MyDGXTray**, the
+menu bar app, ships with MyDGX inside and an assistant installs it on the
+Spark over SSH. The Spark builds and installs everything else.
 
-**Necesitas:**
-- macOS 13 o posterior (Apple Silicon o Intel);
-- un DGX Spark (o un equipo GB10 compatible) con el primer arranque ya hecho;
-- el usuario y la contraseña de ese primer arranque, con permiso `sudo`;
-- los dos equipos en la misma red, o acceso SSH remoto, e Internet durante la
-  instalación.
+**You need:**
+- macOS 13 or later (Apple Silicon or Intel);
+- a DGX Spark (or a compatible GB10 system) with the first boot already completed;
+- the username and password from that first boot, with `sudo` permission;
+- both machines on the same network, or remote SSH access, and Internet during the
+  installation.
 
-**Pasos:**
+**Steps:**
 
-1. Descarga `MyDGXTray-<versión>-macos-universal.zip` desde
-   [Releases](https://github.com/yadox666/MyDGX/releases), descomprímelo y
-   arrastra **MyDGXTray** a `Aplicaciones`.
-2. Ábrela. Si macOS la bloquea, ve a **Ajustes del Sistema › Privacidad y
-   seguridad** y pulsa **Abrir igualmente**. El **Asistente de instalación
-   Spark** se abre solo.
-3. **Buscar:** pulsa **Buscar mi Spark** y acepta el permiso de **Red local**.
-   Elige el equipo o escribe su IP o nombre, por ejemplo `spark-1a2b.local`.
-4. **Conectar:** escribe el usuario y la contraseña del Spark. El asistente
-   guarda su huella SSH, crea una clave solo para este Mac y la autoriza. La
-   contraseña se usa una vez y no se guarda.
-5. **Instalar:** pulsa **Instalar MyDGX**. La primera vez tarda entre 20 y 40
-   minutos; el Mac no se duerme mientras tanto. Si algo falla, **Reintentar**
-   conserva lo ya instalado.
-6. **Listo:** pulsa **Abrir Dashboard**.
+1. Download `MyDGXTray-<version>-macos-universal.zip` from
+   [Releases](https://github.com/yadox666/MyDGX/releases), unzip it and
+   drag **MyDGXTray** to `Applications`.
+2. Open it. If macOS blocks it, go to **System Settings › Privacy &
+   Security** and click **Open Anyway**. The **Spark Setup
+   Assistant** opens on its own.
+3. **Search:** click **Find my Spark** and accept the **Local Network** permission.
+   Pick the machine or type its IP or name, for example `spark-1a2b.local`.
+4. **Connect:** enter the Spark username and password. The assistant
+   saves its SSH fingerprint, creates a key just for this Mac and authorizes it. The
+   password is used once and is not stored.
+5. **Install:** click **Install MyDGX**. The first time takes between 20 and 40
+   minutes; the Mac does not go to sleep in the meantime. If something fails, **Retry**
+   keeps what is already installed.
+6. **Done:** click **Open Dashboard**.
 
 <table>
   <tr>
-    <td width="50%"><strong>1 · Buscar</strong><br><img src="docs/images/setup-find.png" alt="Asistente: buscar el Spark en la red"></td>
-    <td width="50%"><strong>2 · Conectar</strong><br><img src="docs/images/setup-connect.png" alt="Asistente: usuario y contraseña del Spark"></td>
+    <td width="50%"><strong>1 · Search</strong><br><img src="docs/images/setup-find.png" alt="Assistant: find the Spark on the network"></td>
+    <td width="50%"><strong>2 · Connect</strong><br><img src="docs/images/setup-connect.png" alt="Assistant: Spark username and password"></td>
   </tr>
   <tr>
-    <td width="50%"><strong>3 · Instalar</strong><br><img src="docs/images/setup-install.png" alt="Asistente: instalar MyDGX en el Spark"></td>
-    <td width="50%"><strong>4 · Listo</strong><br><img src="docs/images/setup-done.png" alt="Asistente: Spark listo"></td>
+    <td width="50%"><strong>3 · Install</strong><br><img src="docs/images/setup-install.png" alt="Assistant: install MyDGX on the Spark"></td>
+    <td width="50%"><strong>4 · Done</strong><br><img src="docs/images/setup-done.png" alt="Assistant: Spark ready"></td>
   </tr>
 </table>
 
-### MyDGX Tray: tu Spark desde la barra de menús
+### MyDGX Tray: your Spark from the menu bar
 
-**MyDGX Tray** es la suite todo en uno para controlar tu DGX Spark desde el Mac.
-Instala MyDGX, mantiene la conexión y reúne en un solo menú, junto al reloj,
-todo lo que harías con la Terminal. En la barra ves siempre el uso de GPU y RAM
-del Spark (`GPU 4% · RAM 29%`); un clic abre el menú.
+**MyDGX Tray** is the all-in-one suite to control your DGX Spark from your Mac.
+It installs MyDGX, keeps the connection alive and gathers in a single menu, next to the clock,
+everything you would do from the Terminal. The menu bar always shows the Spark's GPU and RAM
+usage (`GPU 4% · RAM 29%`); one click opens the menu.
 
-![MyDGX Tray: el menú de la barra explicado por bloques](docs/images/mydgx-tray.png)
+![MyDGX Tray: the menu bar menu explained block by block](docs/images/mydgx-tray.png)
 
-1. **Estado en vivo.** Qué Spark usas, si llegas por la red local (LAN) o por
-   Internet y cuánta memoria queda libre para modelos.
-2. **Control del equipo.** Cambia entre varios Sparks o servidores, abre o
-   cierra el túnel SSH y apaga el equipo con confirmación. El túnel va cifrado,
-   no abre puertos en el router y se reconecta solo.
-3. **Perfiles de IA.** Muestra los perfiles cargados, cuántos modelos tienen y
-   cuánta memoria ocupan. Detén uno o arranca otro sin entrar en el dashboard.
-4. **Tus apps, a un clic.** Dashboard, Open WebUI, ComfyUI, RAGKit, las apps de
-   tus perfiles y una Terminal SSH ya configurada. Se abren en una dirección
-   local del Mac (`http://127.0.0.1:…`) a través del túnel.
-5. **Agentes de código.** Lanza Claude Code u OpenCode contra tus modelos
-   locales. Si ningún modelo publicado admite tool calling con al menos 32k de
-   contexto, el submenú explica qué falta en lugar de fallar.
-6. **Preferencias.** Perfiles de conexión, claves, copias de seguridad,
-   despliegue y actualizaciones de la app.
+1. **Live status.** Which Spark you are using, whether you reach it over the local network (LAN) or over
+   the Internet, and how much memory is left free for models.
+2. **Machine control.** Switch between several Sparks or servers, open or
+   close the SSH tunnel and shut the machine down with confirmation. The tunnel is encrypted,
+   opens no ports on the router and reconnects on its own.
+3. **AI profiles.** Shows the loaded profiles, how many models they have and
+   how much memory they use. Stop one or start another without opening the dashboard.
+4. **Your apps, one click away.** Dashboard, Open WebUI, ComfyUI, RAGKit, the apps of
+   your profiles and a ready-to-use SSH Terminal. They open at a local
+   address on the Mac (`http://127.0.0.1:…`) through the tunnel.
+5. **Coding agents.** Launch Claude Code or OpenCode against your local
+   models. If no published model supports tool calling with at least 32k of
+   context, the submenu explains what is missing instead of failing.
+6. **Settings.** Connection profiles, keys, backups,
+   deployment and app updates.
 
-Para el día a día:
-- **Actualizar MyDGX:** instala la nueva versión de la app y pulsa
-  **Preferencias → Despliegue → Guardar y desplegar**. Conserva `.env`, modelos y
-  bases de datos.
-- **Añadir otro Spark o un servidor remoto:** usa la **varita mágica** de
-  *Preferencias*.
-- **Idioma:** la app está en español e inglés.
+For day-to-day use:
+- **Update MyDGX:** install the new version of the app and click
+  **Settings → Deployment → Save and deploy**. It keeps `.env`, models and
+  databases.
+- **Add another Spark or a remote server:** use the **magic wand** in
+  *Settings*.
+- **Language:** the app is available in Spanish and English.
 
-Guía completa, con permisos, claves SSH propias, acceso remoto y solución de
-problemas: **[Inicio rápido con MyDGXTray](docs/quickstart.md)**. Sin Mac, o para
-desarrollar, sigue la [instalación manual](#instalación-manual-linux-o-desarrollo).
+Full guide, with permissions, your own SSH keys, remote access and
+troubleshooting: **[Quick start with MyDGXTray](docs/en/quickstart.md)**. Without a Mac, or for
+development, follow the [manual installation](#manual-installation-linux-or-development).
 
-## Recorrido por la aplicación
+## Application tour
 
-Cada apartado corresponde a una entrada del menú principal. Las capturas están
-tomadas en modo noche sobre un NVIDIA DGX Spark real. La interfaz está disponible
-en español e inglés: el idioma se toma del navegador y se cambia con el botón de
-idioma de la cabecera o desde *Configuración*.
+Each section matches an entry in the main menu. The screenshots were
+taken in night mode on a real NVIDIA DGX Spark. The interface is available
+in Spanish and English: the language is taken from the browser and can be changed with the
+language button in the header or from *Settings*.
 
-- [Barra lateral](#barra-lateral)
-- [Resumen](#resumen)
+- [Sidebar](#sidebar)
+- [Overview](#overview)
 - [Chat](#chat)
-- [Modelos](#modelos)
-- [Perfiles](#perfiles-multimodelo)
+- [Models](#models)
+- [Profiles](#multi-model-profiles)
 - [Benchmarks](#benchmarks)
-- [Almacenamiento](#almacenamiento)
-- [Motores](#motores)
-- [Laboratorio IA](#laboratorio-ia)
-- [Configuración](#configuración)
-- [Sistema](#sistema)
+- [Storage](#storage)
+- [Engines](#engines)
+- [AI Lab](#ai-lab)
+- [Settings](#settings)
+- [System](#system)
 - [Logs](#logs)
 
-### Barra lateral
+### Sidebar
 
-<img src="docs/screenshots/barra-lateral-darkmode.png" width="260" alt="Barra lateral con perfiles activos y memoria">
+<img src="docs/screenshots/barra-lateral-darkmode.png" width="260" alt="Sidebar with active profiles and memory">
 
-Siempre visible junto al menú. Identifica el equipo y resume lo que está cargado.
+Always visible next to the menu. It identifies the machine and summarizes what is loaded.
 
-- fabricante, modelo y sistema operativo detectados (DGX Spark, GB10, DGX OS);
-- perfiles activos con sus modelos y acceso directo a la app web del perfil;
-- barra de memoria unificada con el reparto por modelo y el total usado;
-- contadores de modelos y perfiles cargados junto a cada entrada del menú.
+- detected vendor, model and operating system (DGX Spark, GB10, DGX OS);
+- active profiles with their models and a shortcut to the profile's web app;
+- unified memory bar with the per-model breakdown and total used;
+- counters of loaded models and profiles next to each menu entry.
 
-### Resumen
+### Overview
 
-![Resumen](docs/screenshots/resumen-darkmode.png)
+![Overview](docs/screenshots/resumen-darkmode.png)
 
-Página de inicio: estado del equipo de un vistazo y accesos directos a las
-herramientas instaladas.
+Home page: the machine's status at a glance and shortcuts to the
+installed tools.
 
-- saludo con el estado del Spark, host, arquitectura y tiempo encendido;
-- plataforma, GPU, memoria unificada y disco detectados;
-- accesos a DGX Dashboard, Open WebUI, ComfyUI y a las apps web de los perfiles;
-- indicadores en vivo de GPU, CPU, memoria unificada y disco con umbrales;
-- **mapa de memoria unificada** en vivo: driver CUDA, cada modelo, caché de disco
-  recuperable y memoria libre;
-- botón *Parar modelos* en la cabecera para liberar toda la inferencia de golpe.
+- greeting with the Spark's status, host, architecture and uptime;
+- detected platform, GPU, unified memory and disk;
+- shortcuts to DGX Dashboard, Open WebUI, ComfyUI and the profiles' web apps;
+- live indicators for GPU, CPU, unified memory and disk with thresholds;
+- live **unified memory map**: CUDA driver, each model, reclaimable disk
+  cache and free memory;
+- *Stop models* button in the header to free all inference at once.
 
-![Gateway y servicios en el Resumen](docs/screenshots/resumen-gateway-darkmode.png)
+![Gateway and services in the Overview](docs/screenshots/resumen-gateway-darkmode.png)
 
-- recursos en vivo (temperatura de GPU, memoria usada y tráfico de red);
-- **Gateway API**: URL base OpenAI compatible, puerto, autenticación y modelos
-  publicados con el nombre exacto que hay que usar en el campo `model`;
-- estado de los servicios (Ollama, Open WebUI, ComfyUI, DGX Dashboard).
+- live resources (GPU temperature, used memory and network traffic);
+- **Gateway API**: OpenAI-compatible base URL, port, authentication and published
+  models with the exact name to use in the `model` field;
+- service status (Ollama, Open WebUI, ComfyUI, DGX Dashboard).
 
-![Telemetría del sistema](docs/screenshots/resumen-telemetria-darkmode.png)
+![System telemetry](docs/screenshots/resumen-telemetria-darkmode.png)
 
-- **telemetría histórica** persistente en SQLite, de 1 hora a 7 días, con
-  navegación hacia atrás;
-- gráficas de utilización y temperatura de GPU, potencia, CPU y memoria, red y
-  E/S de disco, con media y máximo del intervalo.
+- persistent **historical telemetry** in SQLite, from 1 hour to 7 days, with
+  backward navigation;
+- charts for GPU utilization and temperature, power, CPU and memory, network and
+  disk I/O, with the interval's average and maximum.
 
-![Consumo de inferencia por modelo](docs/screenshots/resumen-consumo-darkmode.png)
+![Inference usage per model](docs/screenshots/resumen-consumo-darkmode.png)
 
-- **consumo por modelo**: GPU, memoria de GPU, RAM unificada y CPU de cada modelo
-  cargado, con su histórico;
-- indica si la métrica se atribuye al proceso, a Ollama o si el motor no la
-  expone.
+- **usage per model**: GPU, GPU memory, unified RAM and CPU of each loaded
+  model, with its history;
+- shows whether the metric is attributed to the process, to Ollama, or whether the engine does not
+  expose it.
 
 ### Chat
 
-![Chat con el asistente MyDGX](docs/screenshots/chat-darkmode.png)
+![Chat with the MyDGX assistant](docs/screenshots/chat-darkmode.png)
 
-Chat local con cualquier modelo cargado y con el **asistente MyDGX**.
+Local chat with any loaded model and with the **MyDGX assistant**.
 
-- selector de modelo entre el asistente y los modelos de los perfiles activos;
-- el asistente consulta telemetría, sistema, modelos, perfiles y documentación
-  con herramientas de solo lectura;
-- las acciones que propone (arrancar perfiles, liberar memoria…) siempre
-  requieren confirmación en la interfaz;
-- sugerencias de preguntas frecuentes y acceso a Open WebUI para una experiencia
-  avanzada.
+- model selector between the assistant and the models of the active profiles;
+- the assistant queries telemetry, system, models, profiles and documentation
+  with read-only tools;
+- the actions it proposes (starting profiles, freeing memory…) always
+  require confirmation in the interface;
+- suggested frequent questions and access to Open WebUI for an advanced
+  experience.
 
-![Open WebUI en modo oscuro con FLUX.1 Schnell de ComfyUI seleccionado como modelo](docs/images/openwebui-chat.png)
+![Open WebUI in dark mode with ComfyUI's FLUX.1 Schnell selected as the model](docs/images/openwebui-chat.png)
 
-Detalle en [Asistente MyDGX](docs/asistente-mydgx.md).
+Details in [MyDGX assistant](docs/en/asistente-mydgx.md).
 
-### Modelos
+### Models
 
-![Modelos instalados y mapa de memoria](docs/screenshots/modelos-darkmode.png)
+![Installed models and memory map](docs/screenshots/modelos-darkmode.png)
 
-Biblioteca local y descarga de modelos.
+Local library and model downloads.
 
-- pestañas *Instalados*, *Explorar Hugging Face*, *Descargar con Ollama* e
-  *Importar ZIP*;
-- mapa de memoria unificada para ver qué cabe antes de encender nada;
-- filtros por estado (cargados), modalidad (texto, visión, voz, imagen y vídeo),
-  origen (Ollama, Hugging Face) y tamaño;
-- ficha de cada modelo: parámetros, cuantización, familia, formato, contexto al
-  encender, digest y memoria estimada frente a la libre;
-- **Encender** carga un modelo al momento en el perfil Quick; la casilla
-  **Default** lo añade al perfil que arranca siempre con MyDGX;
-- verificación de integridad, favoritos, carga y descarga de Ollama en memoria y
-  borrado de modelos que no use ningún perfil.
+- *Installed*, *Explore Hugging Face*, *Download with Ollama* and
+  *Import ZIP* tabs;
+- unified memory map to see what fits before starting anything;
+- filters by status (loaded), modality (text, vision, voice, image and video),
+  source (Ollama, Hugging Face) and size;
+- card for each model: parameters, quantization, family, format, context on
+  start, digest and estimated memory versus free memory;
+- **Start** loads a model right away in the Quick profile; the
+  **Default** checkbox adds it to the profile that always starts with MyDGX;
+- integrity verification, favorites, loading and unloading Ollama models in memory and
+  deletion of models not used by any profile.
 
-#### Explorar Hugging Face
+#### Explore Hugging Face
 
-![Recomendador de Hugging Face para el Spark](docs/screenshots/modelos-huggingface-darkmode.png)
+![Hugging Face recommender for the Spark](docs/screenshots/modelos-huggingface-darkmode.png)
 
-Busca modelos en el Hub y los ordena por lo que cabe y rinde en este Spark, no
-solo por popularidad.
+Searches the Hub for models and ranks them by what fits and performs well on this Spark, not
+just by popularity.
 
-**Búsqueda**
+**Search**
 
-- tres vistas: *Para este Spark* (recomendador), *Todo Hugging Face* (búsqueda
-  general por nombre, autor o arquitectura) y *Favoritos*, que se guardan con su
-  ficha para revisarlos después;
-- filtros por tarea, tamaño (*Mejor calidad que cabe*, por ejemplo), contenido
-  (todos o solo sin censura, con enlace al catálogo de modelos sin censura),
-  modalidad de entrada, runtime y formato;
-- número de resultados por búsqueda y botón para analizar más candidatos;
-- se descartan los modelos que exigen runtimes que MyDGX no instala (por
-  ejemplo, las variantes REAP).
+- three views: *For this Spark* (recommender), *All Hugging Face* (general
+  search by name, author or architecture) and *Favorites*, which are saved with their
+  card for later review;
+- filters by task, size (*Best quality that fits*, for example), content
+  (all or uncensored only, with a link to the uncensored model catalog),
+  input modality, runtime and format;
+- number of results per search and a button to analyze more candidates;
+- models that require runtimes MyDGX does not install (for
+  example, REAP variants) are discarded.
 
-**Recomendador**
+**Recommender**
 
-- cada tarjeta muestra la puntuación MyDGX (0–100), el estado (*Ideal*,
-  *Compatible*, *Ajustado* o *No recomendado*), si ya está instalado y etiquetas
-  como *Chat*, *Reasoning* o *Uncensored*;
-- el ranking usa la telemetría en vivo: memoria libre real y reserva del sistema;
-- orden alternativo por recomendación, rendimiento estimado (tok/s), menor
-  memoria, score de la comunidad, descargas, likes o tendencia;
-- ayuda integrada que explica en lenguaje llano Q8, MTP, Heretic, Abliterated y
-  otros términos.
+- each card shows the MyDGX score (0–100), the status (*Ideal*,
+  *Compatible*, *Tight fit* or *Not recommended*), whether it is already installed, and tags
+  such as *Chat*, *Reasoning* or *Uncensored*;
+- the ranking uses live telemetry: actual free memory and system reserve;
+- alternative sort by recommendation, estimated performance (tok/s), less
+  memory, community score, downloads, likes or trending;
+- built-in help that explains Q8, MTP, Heretic, Abliterated and
+  other terms in plain language.
 
-**Elegir archivos y descargar**
+**Choosing files and downloading**
 
-- la ficha del repositorio lista las cuantizaciones, los shards, los proyectores
-  de visión (`mmproj`) y los drafters para decodificación especulativa;
-- antes de descargar, la **comprobación previa** lee las cabeceras GGUF remotas y
-  muestra arquitectura, cuantización, contexto nativo, MTP integrado y memoria
-  estimada con 32K de contexto;
-- avisa si faltan shards, si llama.cpp no reconoce la arquitectura, si el modelo
-  supera la memoria segura, si solo has elegido un drafter o un proyector, o si el
-  repositorio ofrece un drafter que no has seleccionado;
-- rechaza los ficheros que ya están descargados y reutiliza la descarga en curso
-  si el repositorio ya se está bajando;
-- al terminar, Benchmarks comprueba que el modelo arranca y responde y compara la
-  memoria real con la estimada.
+- the repository card lists the quantizations, shards, vision projectors
+  (`mmproj`) and drafters for speculative decoding;
+- before downloading, the **pre-check** reads the remote GGUF headers and
+  shows architecture, quantization, native context, built-in MTP and estimated
+  memory with 32K context;
+- it warns if shards are missing, if llama.cpp does not recognize the architecture, if the model
+  exceeds safe memory, if you only picked a drafter or a projector, or if the
+  repository offers a drafter you have not selected;
+- it rejects files that are already downloaded and reuses the ongoing download
+  if the repository is already being fetched;
+- when finished, Benchmarks checks that the model starts and responds and compares the
+  actual memory with the estimate.
 
-#### Descargar con Ollama
+#### Download with Ollama
 
-![Descarga de modelos con Ollama](docs/screenshots/modelos-ollama-darkmode.png)
+![Downloading models with Ollama](docs/screenshots/modelos-ollama-darkmode.png)
 
-Descarga un modelo por su nombre exacto. No es un buscador: para descubrir
-modelos usa *Explorar Hugging Face*.
+Downloads a model by its exact name. It is not a search engine: to discover
+models use *Explore Hugging Face*.
 
-- acepta nombres de la biblioteca de Ollama (`qwen3:8b`) y GGUF de Hugging Face
-  con la ruta `hf.co/autor/repositorio:CUANTIZACIÓN`;
-- ejemplos de un clic (`qwen3:8b`, `llama3.2:3b`, `gemma3:12b`,
-  `nomic-embed-text`…) y enlace a la biblioteca de Ollama;
-- progreso en vivo y botón para cancelar;
-- MyDGX cancela la descarga si el tamaño no cabe en la memoria unificada;
-- al terminar, el modelo aparece en *Instalados* con su cuantización, familia y
-  parámetros, y si el modo automático está activo se encola su benchmark;
-- paneles de actividad de Ollama y de tareas recientes con el histórico de
-  descargas.
+- accepts names from the Ollama library (`qwen3:8b`) and Hugging Face GGUF
+  with the path `hf.co/author/repository:QUANTIZATION`;
+- one-click examples (`qwen3:8b`, `llama3.2:3b`, `gemma3:12b`,
+  `nomic-embed-text`…) and a link to the Ollama library;
+- live progress and a cancel button;
+- MyDGX cancels the download if the size does not fit in unified memory;
+- when finished, the model appears in *Installed* with its quantization, family and
+  parameters, and if automatic mode is on its benchmark is queued;
+- Ollama activity and recent tasks panels with the download
+  history.
 
-#### Importar ZIP
+#### Import ZIP
 
-![Importación de un modelo GGUF desde un ZIP](docs/screenshots/modelos-importar-zip-darkmode.png)
+![Importing a GGUF model from a ZIP](docs/screenshots/modelos-importar-zip-darkmode.png)
 
-Sube un modelo GGUF que ya tienes en el ordenador: modelos que no están en
-Hugging Face, compilaciones propias o equipos sin conexión.
+Upload a GGUF model you already have on your computer: models that are not on
+Hugging Face, your own builds or offline machines.
 
-- muestra el espacio libre, el tamaño máximo que admite el ZIP en ese momento y
-  el límite del modelo principal; el máximo absoluto es 512 GB y se cambia con
+- shows the free space, the maximum ZIP size allowed at that moment and
+  the main model's limit; the absolute maximum is 512 GB and is changed with
   `MODEL_IMPORT_MAX_GB`;
-- una guía en cuatro pasos explica qué meter en el ZIP:
-  - el modelo `.gguf` (con todas sus partes `-0000N-of-0000M` si está dividido);
-  - el proyector `mmproj-*.gguf` para visión (opcional);
-  - un drafter `mtp-…`, `dspark-…` o `eagle3-…` para ganar velocidad (opcional);
-  - `README.md` y `LICENSE` (opcional);
-- el `mydgx.json` opcional fija nombre, descripción, licencia, modelo base,
-  etiquetas, tarea (`chat` o `vision`) y los ajustes del editor de modelos
-  (contexto, temperatura, `top_p`, ficheros del modelo, del `mmproj` y del
-  drafter…); hay una plantilla descargable;
-- la importación va en cinco pasos con progreso: subida, revisión del ZIP,
-  extracción, análisis del modelo y prueba;
-- se rechazan ZIP cifrados, enlaces simbólicos, rutas peligrosas, ficheros
-  duplicados, compresión anómala y GGUF dañados; el resto de ficheros se ignora
-  y se avisa;
-- el modelo queda en la biblioteca como `imported/nombre` y, si la prueba está
-  activada, se arranca igual que con **Encender** y se ejecuta un benchmark corto
-  con velocidad, latencia, memoria real y aceptación del drafter.
+- a four-step guide explains what to put in the ZIP:
+  - the `.gguf` model (with all its `-0000N-of-0000M` parts if it is split);
+  - the `mmproj-*.gguf` projector for vision (optional);
+  - an `mtp-…`, `dspark-…` or `eagle3-…` drafter to gain speed (optional);
+  - `README.md` and `LICENSE` (optional);
+- the optional `mydgx.json` sets name, description, license, base model,
+  tags, task (`chat` or `vision`) and the model editor settings
+  (context, temperature, `top_p`, model, `mmproj` and
+  drafter files…); a downloadable template is provided;
+- the import runs in five steps with progress: upload, ZIP review,
+  extraction, model analysis and test;
+- encrypted ZIPs, symbolic links, dangerous paths, duplicate files,
+  abnormal compression and damaged GGUF files are rejected; any other files are ignored
+  with a warning;
+- the model is added to the library as `imported/name` and, if the test is
+  enabled, it is started the same way as with **Start** and a short benchmark runs
+  with speed, latency, actual memory and drafter acceptance.
 
-#### Recomendaciones para DGX Spark
+#### Recommendations for DGX Spark
 
-La búsqueda de Hugging Face calcula el ranking con la memoria libre real y el
-presupuesto reservado para el sistema. Además de formato, cuantización, contexto,
-licencia y popularidad, favorece arquitecturas MoE con pocos parámetros activos y
-modelos que declaran MTP, DFlash o DSpark para decodificación especulativa. La
-estimación incluye la caché KV, los slots concurrentes y 1,5 GiB de reserva cuando
-se detecta una técnica especulativa.
+The Hugging Face search computes the ranking with the actual free memory and the
+budget reserved for the system. Besides format, quantization, context,
+license and popularity, it favors MoE architectures with few active parameters and
+models that declare MTP, DFlash or DSpark for speculative decoding. The
+estimate includes the KV cache, concurrent slots and a 1.5 GiB reserve when
+a speculative technique is detected.
 
-La popularidad se muestra como **Score comunidad HF (0–100)**, calculado con
-descargas, likes y tendencia publicados por Hugging Face. Aporta hasta 12 puntos
-al ranking MyDGX, pero no sustituye compatibilidad, memoria ni benchmarks técnicos.
+Popularity is shown as **HF community score (0–100)**, calculated from the
+downloads, likes and trending data published by Hugging Face. It contributes up to 12 points
+to the MyDGX ranking, but does not replace compatibility, memory or technical benchmarks.
 
-El rendimiento en tokens/s es una **estimación comparativa**, basada en los pesos
-activos y el ancho de banda, no un benchmark garantizado. Puede variar por runtime,
-prompt, contexto y batching. `SPARK_CLUSTER_SIZE` permite describir entre uno y
-cuatro Sparks enlazados; valores mayores que uno solo son válidos si ConnectX-7 y
-tensor parallel están realmente configurados. El ancho de banda base se ajusta con
-`SPARK_MEMORY_BANDWIDTH_GBPS` (273 GB/s por defecto).
+Performance in tokens/s is a **comparative estimate**, based on the active
+weights and the bandwidth, not a guaranteed benchmark. It can vary by runtime,
+prompt, context and batching. `SPARK_CLUSTER_SIZE` lets you describe between one and
+four linked Sparks; values greater than one are only valid if ConnectX-7 and
+tensor parallel are actually configured. The base bandwidth is set with
+`SPARK_MEMORY_BANDWIDTH_GBPS` (273 GB/s by default).
 
-### Perfiles multimodelo
+### Multi-model profiles
 
-![Perfiles activos](docs/screenshots/perfiles-darkmode.png)
+![Active profiles](docs/screenshots/perfiles-darkmode.png)
 
-Un perfil describe un grupo operativo completo: modelos, alias, motores, puertos,
-contextos, slots, cuantización, parámetros de sampling, caché KV, modalidades y
-límites de memoria.
+A profile describes a complete operational group: models, aliases, engines, ports,
+contexts, slots, quantization, sampling parameters, KV cache, modalities and
+memory limits.
 
-- hasta dos perfiles de usuario cargados a la vez, más **Default** y **Quick**;
-- cada tarjeta muestra modelos, puertos, memoria estimada y capacidad segura, con
-  una barra que indica si el conjunto cabe en memoria;
-- lista de modelos con motor, tarea, puerto y contexto;
-- perfil predeterminado (se recarga al iniciar MyDGX), favoritos, búsqueda,
-  edición, detención y borrado;
-- el editor avisa de los cambios sin guardar antes de cerrar.
+- up to two user profiles loaded at once, plus **Default** and **Quick**;
+- each card shows models, ports, estimated memory and safe capacity, with
+  a bar that indicates whether the set fits in memory;
+- list of models with engine, task, port and context;
+- default profile (reloaded when MyDGX starts), favorites, search,
+  editing, stopping and deletion;
+- the editor warns about unsaved changes before closing.
 
-![Perfil con app web](docs/screenshots/perfiles-app-darkmode.png)
+![Profile with a web app](docs/screenshots/perfiles-app-darkmode.png)
 
-- **app del perfil**: un `start.sh` propio que arranca y se para con el perfil,
-  con estado, reinicio y botón *Abrir* cuando publica una web.
+- **profile app**: your own `start.sh` that starts and stops with the profile,
+  with status, restart and an *Open* button when it publishes a website.
 
-Antes de arrancar, MyDGX:
+Before starting, MyDGX:
 
-1. comprueba que los puertos no se repitan;
-2. estima pesos, contexto, caché y reserva para el sistema;
-3. descarga y verifica los modelos ausentes;
-4. arranca los modelos en orden y valida su endpoint de salud;
-5. reduce el contexto y reintenta cuando detecta saturación de memoria;
-6. revierte el grupo completo si no puede dejarlo en un estado consistente.
+1. checks that ports are not repeated;
+2. estimates weights, context, cache and system reserve;
+3. downloads and verifies missing models;
+4. starts the models in order and validates their health endpoint;
+5. reduces the context and retries when it detects memory saturation;
+6. rolls back the whole group if it cannot leave it in a consistent state.
 
-El perfil activado se convierte en el predeterminado para el próximo arranque.
+The activated profile becomes the default for the next startup.
 
 ### Benchmarks
 
 ![Benchmarks](docs/screenshots/benchmarks-darkmode.png)
 
-Mide cada modelo del equipo con el mismo protocolo y dice cuál rinde mejor en esta
-máquina. No son cifras de catálogo: cada resultado sale de ejecutar el modelo aquí,
-aislado y con pruebas versionadas por tipo de tarea.
+Measures every model on the machine with the same protocol and tells you which one performs best on this
+machine. These are not catalog figures: each result comes from running the model here,
+isolated and with versioned tests per task type.
 
-- flujo en cuatro pasos: elige, aísla (libera memoria y calienta solo ese
-  modelo), mide y compara;
-- pruebas por modalidad: texto (tok/s, primer token, estabilidad), voz (tiempo
-  real, error de palabras, inteligibilidad), imagen y vídeo (tiempo,
-  reproducibilidad), visión y embeddings (calidad semántica, NDCG);
-- **suite multimodal secuencial** para medir todos los modelos pendientes de una
-  vez; restaura después los perfiles y modelos residentes;
-- cola automática para los modelos nuevos cuando el sistema está libre;
-- histórico de solo añadido y exportación e importación en JSON.
+- four-step flow: choose, isolate (free memory and warm up only that
+  model), measure and compare;
+- tests per modality: text (tok/s, first token, stability), voice (real-time
+  factor, word error rate, intelligibility), image and video (time,
+  reproducibility), vision and embeddings (semantic quality, NDCG);
+- **sequential multimodal suite** to measure all pending models in one
+  go; it then restores the resident profiles and models;
+- automatic queue for new models when the system is idle;
+- append-only history and JSON export and import.
 
-![Rendimiento por categoría](docs/screenshots/benchmarks-ranking-darkmode.png)
+![Performance by category](docs/screenshots/benchmarks-ranking-darkmode.png)
 
-- contadores de runs históricos, válidos y artefactos medidos;
-- **ranking por categoría** con score MyDGX /100, tokens por segundo y tiempo al
-  primer token;
-- comparación por entorno (versiones de llama.cpp, driver…) para comparar solo
-  en igualdad de condiciones.
+- counters for historical runs, valid runs and measured artifacts;
+- **ranking by category** with MyDGX score /100, tokens per second and time to
+  first token;
+- comparison by environment (llama.cpp versions, driver…) to compare only
+  under equal conditions.
 
-![Eficiencia y memoria](docs/screenshots/benchmarks-eficiencia-darkmode.png)
+![Efficiency and memory](docs/screenshots/benchmarks-eficiencia-darkmode.png)
 
-- salida frente a primer token en un gráfico de burbujas;
-- eficiencia por parámetro activo y aprovechamiento del ancho de banda de memoria
-  del GB10.
+- output versus first token in a bubble chart;
+- efficiency per active parameter and use of the GB10's memory
+  bandwidth.
 
-![Velocidad y reconocimiento de voz](docs/screenshots/benchmarks-voz-darkmode.png)
+![Speed and speech recognition](docs/screenshots/benchmarks-voz-darkmode.png)
 
-- velocidad frente a parámetros activos en escala logarítmica, distinguiendo MoE y
-  modelos densos;
-- ranking de reconocimiento de voz: tiempo real y tasa de error de palabras.
+- speed versus active parameters on a logarithmic scale, distinguishing MoE and
+  dense models;
+- speech recognition ranking: real-time factor and word error rate.
 
-![Síntesis de voz e imagen](docs/screenshots/benchmarks-sintesis-voz-darkmode.png)
+![Speech and image synthesis](docs/screenshots/benchmarks-sintesis-voz-darkmode.png)
 
-- síntesis de voz: score, tiempo real e inteligibilidad comprobada con Whisper
-  local;
-- generación de imagen: tiempo y reproducibilidad con semilla fija.
+- speech synthesis: score, real-time factor and intelligibility checked with local
+  Whisper;
+- image generation: time and reproducibility with a fixed seed.
 
-![Fichas por modelo](docs/screenshots/benchmarks-fichas-darkmode.png)
+![Model cards](docs/screenshots/benchmarks-fichas-darkmode.png)
 
-- **fichas por modelo** con score, salida, primer token, estabilidad, memoria
-  pico, tamaño, parámetros y cuantización;
-- búsqueda, orden por categoría y score, e importación de resultados.
+- **model cards** with score, output, first token, stability, peak
+  memory, size, parameters and quantization;
+- search, sorting by category and score, and results import.
 
-![Detalle de fichas](docs/screenshots/benchmarks-fichas-detalle-darkmode.png)
+![Model card details](docs/screenshots/benchmarks-fichas-detalle-darkmode.png)
 
-- descripción, licencia, idiomas, modelo base y etiquetas de Hugging Face;
-- evolución del score, histórico del artefacto, repetición de la medida y ficha
-  completa descargable.
+- description, license, languages, base model and Hugging Face tags;
+- score evolution, artifact history, re-run of the measurement and full
+  downloadable card.
 
-Detalle en [Benchmarks](docs/benchmarks.md).
+Details in [Benchmarks](docs/en/benchmarks.md).
 
-> **¿Qué modelo uso?** Consulta el
-> **[ranking de modelos soportados y probados en DGX Spark](docs/modelos-probados.md#ranking-de-modelos-de-texto)**:
-> 32 modelos de texto, voz, imagen y visión medidos en un Spark real, con
-> velocidad, tamaño, parámetros y enlace a Hugging Face u Ollama.
+> **Which model should I use?** See the
+> **[ranking of supported and tested models on DGX Spark](docs/en/modelos-probados.md#text-model-ranking)**:
+> 32 text, voice, image and vision models measured on a real Spark, with
+> speed, size, parameters and a link to Hugging Face or Ollama.
 
-### Almacenamiento
+### Storage
 
-![Almacenamiento, NVMe y SMART](docs/screenshots/almacenamiento-darkmode.png)
+![Storage, NVMe and SMART](docs/screenshots/almacenamiento-darkmode.png)
 
-Estado de los discos y en qué se va el espacio.
+Disk status and where the space goes.
 
-- **unidades NVMe y salud SMART**: temperatura, vida utilizada, reserva, horas y
-  ciclos de encendido, errores, apagados inseguros y datos leídos y escritos;
-- **mapa de almacenamiento** con el mismo estilo que el de memoria;
-- **uso real**: distribución del espacio por tipo de dato (sistema, modelos, apps,
-  MyDGX…), medida en segundo plano y guardada en caché;
-- **apps de usuario**: cada directorio del home con su tamaño;
-- capacidad de cada partición, sin los montajes de solo lectura de snap.
+- **NVMe drives and SMART health**: temperature, life used, spare, power-on hours and
+  power cycles, errors, unsafe shutdowns and data read and written;
+- **storage map** in the same style as the memory map;
+- **actual usage**: space breakdown by data type (system, models, apps,
+  MyDGX…), measured in the background and cached;
+- **user apps**: each home directory with its size;
+- capacity of each partition, excluding read-only snap mounts.
 
-### Motores
+### Engines
 
-![Motores de inferencia y modo memoria](docs/screenshots/motores-darkmode.png)
+![Inference engines and memory mode](docs/screenshots/motores-darkmode.png)
 
-MyDGX instala llama.cpp, Ollama y un servicio Whisper OpenAI-compatible
-acelerado con CUDA sobre la imagen oficial NVIDIA PyTorch para GB10. También
-descubre vLLM, SGLang, TensorRT-LLM, LM Studio, ComfyUI, NVIDIA Riva y NVIDIA
-NIM; esos motores externos se registran por endpoint sin mezclar necesariamente
-sus stacks CUDA o Python.
+MyDGX installs llama.cpp, Ollama and an OpenAI-compatible Whisper service
+accelerated with CUDA on top of the official NVIDIA PyTorch image for GB10. It also
+discovers vLLM, SGLang, TensorRT-LLM, LM Studio, ComfyUI, NVIDIA Riva and NVIDIA
+NIM; those external engines are registered by endpoint without necessarily mixing
+their CUDA or Python stacks.
 
-- tarjeta de cada runtime con versión, estado y capacidades (chat, visión,
-  embeddings, métricas, GGUF…);
-- ComfyUI, Whisper y SearXNG se activan o desactivan de forma persistente;
-- **modo memoria**: elige qué parar (perfiles llama.cpp, ComfyUI, Whisper, TTS,
-  Open WebUI, SearXNG, gateway, modelos de Ollama), muestra cuánto libera cada
-  uno y vacía la caché de páginas para hacer sitio a un modelo grande;
-- *Restaurar* vuelve a arrancar exactamente lo que se paró.
+- card for each runtime with version, status and capabilities (chat, vision,
+  embeddings, metrics, GGUF…);
+- ComfyUI, Whisper and SearXNG are enabled or disabled persistently;
+- **memory mode**: choose what to stop (llama.cpp profiles, ComfyUI, Whisper, TTS,
+  Open WebUI, SearXNG, gateway, Ollama models), shows how much each one frees
+  and drops the page cache to make room for a large model;
+- *Restore* starts again exactly what was stopped.
 
-Detalle en la [Guía de uso](docs/guia-de-uso.md#motores).
+Details in the [User guide](docs/en/guia-de-uso.md#engines).
 
-### Laboratorio IA
+### AI Lab
 
-![Laboratorio multimodal](docs/screenshots/laboratorio-ia-darkmode.png)
+![Multimodal lab](docs/screenshots/laboratorio-ia-darkmode.png)
 
-Prueba el perfil activo y los motores administrados sin salir del panel.
+Test the active profile and the managed engines without leaving the dashboard.
 
-- generación de imagen y vídeo con ComfyUI;
-- texto a voz, transcripción, visión, embeddings y reranking;
-- muestra el endpoint OpenAI que se usa (`/v1/images/generations`…) y el tipo de
-  entrada y salida;
-- las entradas y resultados no se guardan en SQLite.
+- image and video generation with ComfyUI;
+- text to speech, transcription, vision, embeddings and reranking;
+- shows the OpenAI endpoint being used (`/v1/images/generations`…) and the
+  input and output type;
+- inputs and results are not stored in SQLite.
 
-Detalle en [Laboratorio IA](docs/laboratorio-ia.md).
+Details in [AI Lab](docs/en/laboratorio-ia.md).
 
-### Configuración
+### Settings
 
-![Configuración y gateway](docs/screenshots/configuracion-darkmode.png)
+![Settings and gateway](docs/screenshots/configuracion-darkmode.png)
 
-Preferencias del navegador y del gateway.
+Browser and gateway preferences.
 
-- apariencia automática, día o noche, e idioma (automático, español o inglés);
-- clave de acceso MyDGX, guardada solo en `sessionStorage`;
-- estado de las integraciones (token de Hugging Face, actualizaciones, servicios);
-- **Gateway OpenAI del perfil activo**: arranque automático, búsqueda web con
-  SearXNG para OpenCode y Claude Code, interfaz de escucha, puerto, timeout,
-  tamaño máximo de petición y modelos publicados con su alias.
+- automatic, day or night appearance, and language (automatic, Spanish or English);
+- MyDGX access key, stored only in `sessionStorage`;
+- integration status (Hugging Face token, updates, services);
+- **Active profile's OpenAI Gateway**: autostart, web search with
+  SearXNG for OpenCode and Claude Code, listen interface, port, timeout,
+  maximum request size and published models with their alias.
 
-### Sistema
+### System
 
-![Sistema y servicios](docs/screenshots/sistema-darkmode.png)
+![System and services](docs/screenshots/sistema-darkmode.png)
 
-La página Sistema diferencia claramente DGX OS, Ubuntu, Debian y otros sistemas,
-y muestra comprobaciones con estados correcto, aviso u opcional.
+The System page clearly distinguishes DGX OS, Ubuntu, Debian and other systems,
+and shows checks with pass, warning or optional states.
 
-- comprobaciones agrupadas: base, DGX OS, GPU, contenedores, seguridad y
-  servicios;
-- versiones de kernel, driver NVIDIA, CUDA, llama.cpp, Ollama, Docker, Python y
-  paquetes relevantes;
-- integridad de la instalación, servicios systemd y actualizaciones APT
-  controladas;
-- tras una actualización comprueba APT, DKMS, NVIDIA Container Toolkit y la
-  necesidad de recompilar llama.cpp, y ofrece una reparación guiada.
+- grouped checks: base, DGX OS, GPU, containers, security and
+  services;
+- versions of the kernel, NVIDIA driver, CUDA, llama.cpp, Ollama, Docker, Python and
+  relevant packages;
+- installation integrity, systemd services and controlled APT
+  updates;
+- after an update it checks APT, DKMS, NVIDIA Container Toolkit and whether
+  llama.cpp needs rebuilding, and offers a guided repair.
 
 ### Logs
 
-![Logs persistentes](docs/screenshots/logs-darkmode.png)
+![Persistent logs](docs/screenshots/logs-darkmode.png)
 
-Diagnóstico y auditoría persistentes.
+Persistent diagnostics and audit trail.
 
-- totales de eventos, avisos y errores de las últimas 24 horas y retención
-  configurada;
-- filtros por nivel, categoría y texto, y modo *En directo*;
-- cada evento muestra acción, entidad y categoría (perfiles, benchmarks,
+- totals of events, warnings and errors in the last 24 hours and the configured
+  retention;
+- filters by level, category and text, and *Live* mode;
+- each event shows action, entity and category (profiles, benchmarks,
   runtime, HTTP…);
-- los tokens y secretos nunca se registran.
+- tokens and secrets are never logged.
 
-## Perfiles
+## Profiles
 
-Un **perfil** es la configuración editable de uno o varios modelos: cómo se
-descargan, cuánto contexto usan y en qué motores y puertos se ejecutan. Se
-arranca y se detiene desde *Perfiles* o la app de la barra de menús. Además
-existen dos perfiles de solo lectura que se gestionan desde *Modelos*:
-**Default** (arranca siempre) y **Quick** (encendido inmediato de un modelo).
+A **profile** is the editable configuration of one or more models: how they are
+downloaded, how much context they use and on which engines and ports they run. It is
+started and stopped from *Profiles* or the menu bar app. There are also
+two read-only profiles managed from *Models*:
+**Default** (always starts) and **Quick** (instant start of a model).
 
-### App del perfil
+### Profile app
 
-Un perfil puede tener una **app** asociada: un directorio del home del usuario
-del servicio (por ejemplo `/home/nvidia/ragkit`) con su propio `start.sh` que
-acepta `start`, `stop`, `restart` y `status` (código 0 si está en marcha).
+A profile can have an associated **app**: a directory in the service user's
+home (for example `/home/nvidia/ragkit`) with its own `start.sh` that
+accepts `start`, `stop`, `restart` and `status` (exit code 0 if running).
 
-- Al cargar el perfil, cuando la inferencia ya responde, MyDGX ejecuta
-  `start.sh status` y, si no está en marcha, `start.sh start` en segundo plano.
-- Al detener el perfil, MyDGX ejecuta `start.sh stop` antes de bajar los modelos,
-  salvo que otro perfil cargado use la misma app.
-- La app usa su propio `.env`. MyDGX no le pasa sus secretos: solo `PATH`,
-  `HOME`, el idioma y `MYDGX_GATEWAY_URL` (`http://127.0.0.1:<puerto>/v1`).
-- La salida queda en `logs/apps/<app>.log`. Solo se aceptan directorios propios,
-  sin enlaces simbólicos y con un `start.sh` no escribible por otros usuarios;
-  `PROFILE_APPS` restringe la lista y `PROFILE_APPS_ROOT` cambia el directorio.
+- When the profile is loaded, once inference is responding, MyDGX runs
+  `start.sh status` and, if it is not running, `start.sh start` in the background.
+- When the profile is stopped, MyDGX runs `start.sh stop` before unloading the models,
+  unless another loaded profile uses the same app.
+- The app uses its own `.env`. MyDGX does not pass its secrets to it: only `PATH`,
+  `HOME`, the language and `MYDGX_GATEWAY_URL` (`http://127.0.0.1:<port>/v1`).
+- Output goes to `logs/apps/<app>.log`. Only directories you own are accepted,
+  without symbolic links and with a `start.sh` that is not writable by other users;
+  `PROFILE_APPS` restricts the list and `PROFILE_APPS_ROOT` changes the directory.
 
-## Gateway OpenAI compatible
+## OpenAI-compatible Gateway
 
-Cada perfil activo actúa como un catálogo independiente. Sus modelos y alias se
-publican por un único puerto, de forma parecida a OpenAI u OpenRouter:
+Each active profile acts as an independent catalog. Its models and aliases are
+published through a single port, much like OpenAI or OpenRouter:
 
 ```text
 http://127.0.0.1:4000/v1
 ```
 
-Endpoints principales:
+Main endpoints:
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
@@ -595,32 +597,32 @@ Endpoints principales:
 - `POST /v1/videos`
 - `POST /v1/rerank`
 
-Ejemplo:
+Example:
 
 ```bash
 curl http://127.0.0.1:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"MODEL_ALIAS","messages":[{"role":"user","content":"Hola"}]}'
+  -d '{"model":"MODEL_ALIAS","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-Si el gateway escucha fuera de localhost, configura `GATEWAY_API_KEY` y envía
+If the gateway listens outside localhost, set `GATEWAY_API_KEY` and send
 `Authorization: Bearer YOUR_GATEWAY_API_KEY`.
 
-## Instalación manual (Linux o desarrollo)
+## Manual installation (Linux or development)
 
-En macOS es más fácil la
-[instalación rápida con MyDGXTray](#instalación-rápida-desde-macos-recomendada).
-Esta vía instala MyDGX a mano, directamente en el equipo, o lo despliega desde
-una copia del código con `./start.sh deploy`.
+On macOS the
+[quick install with MyDGXTray](#quick-install-from-macos-recommended) is easier.
+This path installs MyDGX by hand, directly on the machine, or deploys it from
+a copy of the source code with `./start.sh deploy`.
 
-### Requisitos
+### Requirements
 
-- DGX OS o Ubuntu compatible;
-- Python 3.10 o posterior;
-- Node.js 20 o posterior;
+- DGX OS or a compatible Ubuntu;
+- Python 3.10 or later;
+- Node.js 20 or later;
 - npm.
 
-### Instalación local
+### Local installation
 
 ```bash
 cp .env.example .env
@@ -628,9 +630,9 @@ cp .env.example .env
 ./start.sh start
 ```
 
-Abre [http://127.0.0.1:8088](http://127.0.0.1:8088).
+Open [http://127.0.0.1:8088](http://127.0.0.1:8088).
 
-Comandos:
+Commands:
 
 ```bash
 ./start.sh start
@@ -647,105 +649,105 @@ Comandos:
 ./start.sh claude
 ```
 
-`start.sh` es idempotente: puede ejecutarse de nuevo sin borrar la base de datos,
-los perfiles ni los modelos descargados.
+`start.sh` is idempotent: it can be run again without deleting the database,
+the profiles or the downloaded models.
 
 ### OpenCode
 
-MyDGX puede instalar OpenCode y configurarlo contra el gateway del perfil
-cargado. El workspace y los archivos generados se guardan fuera del repositorio,
-en `~/opencode`:
+MyDGX can install OpenCode and configure it against the gateway of the loaded
+profile. The workspace and generated files are stored outside the repository,
+in `~/opencode`:
 
 ```bash
 ./start.sh install-opencode
-./start.sh install-opencode mi-proyecto
+./start.sh install-opencode my-project
 cd ~/opencode
-/ruta/a/MyDGX-Dashboard/start.sh opencode
-/ruta/a/MyDGX-Dashboard/start.sh opencode --active
-/ruta/a/MyDGX-Dashboard/start.sh opencode MODEL_ALIAS
+/path/to/MyDGX-Dashboard/start.sh opencode
+/path/to/MyDGX-Dashboard/start.sh opencode --active
+/path/to/MyDGX-Dashboard/start.sh opencode MODEL_ALIAS
 ```
 
-OpenCode y Claude Code necesitan un modelo cargado con al menos 32 768 tokens de
-contexto: su prompt de sistema y sus herramientas ocupan unos 16 000 antes del
-primer mensaje. Los modelos con menos contexto no aparecen en el selector, y si
-pides uno, el script se niega a arrancar y explica cómo subir el contexto del
-perfil. El mínimo se puede cambiar con `MYDGX_AGENT_MIN_CONTEXT`.
+OpenCode and Claude Code need a loaded model with at least 32,768 tokens of
+context: their system prompt and tools take up about 16,000 before the
+first message. Models with less context do not appear in the selector, and if
+you ask for one, the script refuses to start and explains how to raise the
+profile's context. The minimum can be changed with `MYDGX_AGENT_MIN_CONTEXT`.
 
-El modo predeterminado es `plan` y solo lectura. `--active` permite edición,
-solicita confirmación para bash y activa los MCP de Playwright, Shodan y NVD.
-La búsqueda web está activada por defecto en los dos modos: OpenCode consulta
-SearXNG local a través de `POST /v1/search`. Se apaga en Configuración → Gateway
-y OpenCode deja de ofrecer la herramienta la próxima vez que se abre. `webfetch`
-y el `websearch` nativo siguen desactivados.
-La configuración incluye automáticamente todos los modelos de chat o visión
-publicados por el gateway; puedes seleccionar cualquiera por su alias. Sin
-alias, se elige un modelo del perfil con tool calling, de chat y con más
-contexto. Cada modelo hereda del gateway su contexto, tool calling, razonamiento
-y entrada de imagen; el límite de salida es una octava parte del contexto (entre
-4096 y 32000 tokens, ajustable con `MYDGX_OPENCODE_MAX_OUTPUT_TOKENS`). Las
-reglas de MyDGX se añaden como `instructions` sin sustituir el prompt base de
-OpenCode, y ambos modos bloquean la lectura de `.env`, `*.pem` y `*.key`.
-La instalación añade en `~/opencode/.opencode/skills/` los workflows
-`authorized-pentest` y `blackbox-wordpress`, adaptados del laboratorio
-BugHunter. Los skills respetan el alcance documentado y no habilitan acciones
-invasivas sin autorización.
-Las claves opcionales se inyectan únicamente mediante `MYDGX_GATEWAY_API_KEY`,
-`SHODAN_API_KEY` y `NVD_API_KEY`; no se escriben en la configuración.
-`SHODAN_API_KEY` y `NVD_API_KEY` se leen del entorno o, si faltan, del `.env` de
-MyDGX. `scripts/mcp_env.py` lee solo esos dos nombres y los pasa al proceso del
-MCP correspondiente, no a la shell del agente. Shodan se activa cuando hay clave
-y NVD funciona sin ella con el límite público.
+The default mode is `plan` and read-only. `--active` allows editing,
+asks for confirmation for bash and enables the Playwright, Shodan and NVD MCPs.
+Web search is enabled by default in both modes: OpenCode queries
+local SearXNG through `POST /v1/search`. It is turned off in Settings → Gateway
+and OpenCode stops offering the tool the next time it is opened. `webfetch`
+and the native `websearch` remain disabled.
+The configuration automatically includes every chat or vision model
+published by the gateway; you can select any of them by its alias. Without an
+alias, a profile model with tool calling, chat and the most
+context is chosen. Each model inherits its context, tool calling, reasoning
+and image input from the gateway; the output limit is one eighth of the context (between
+4096 and 32000 tokens, adjustable with `MYDGX_OPENCODE_MAX_OUTPUT_TOKENS`). The
+MyDGX rules are added as `instructions` without replacing OpenCode's base
+prompt, and both modes block reading `.env`, `*.pem` and `*.key`.
+The installation adds the `authorized-pentest` and `blackbox-wordpress`
+workflows to `~/opencode/.opencode/skills/`, adapted from the
+BugHunter lab. The skills respect the documented scope and do not enable invasive
+actions without authorization.
+Optional keys are injected only through `MYDGX_GATEWAY_API_KEY`,
+`SHODAN_API_KEY` and `NVD_API_KEY`; they are not written to the configuration.
+`SHODAN_API_KEY` and `NVD_API_KEY` are read from the environment or, if missing, from the
+MyDGX `.env`. `scripts/mcp_env.py` reads only those two names and passes them to the
+corresponding MCP process, not to the agent's shell. Shodan is enabled when there is a key
+and NVD works without one under the public rate limit.
 
 ### Claude Code
 
-Claude Code se conecta al endpoint Anthropic Messages del gateway (`/v1/messages`)
-con la misma detección automática que OpenCode: gateway local, túnel del Tray o
-`MYDGX_GATEWAY_URL`. El workspace se guarda en `~/claude-code`:
+Claude Code connects to the gateway's Anthropic Messages endpoint (`/v1/messages`)
+with the same automatic detection as OpenCode: local gateway, Tray tunnel or
+`MYDGX_GATEWAY_URL`. The workspace is stored in `~/claude-code`:
 
 ```bash
 ./start.sh install-claude-code
 cd ~/claude-code
-/ruta/a/MyDGX-Dashboard/start.sh claude
-/ruta/a/MyDGX-Dashboard/start.sh claude --active
-/ruta/a/MyDGX-Dashboard/start.sh claude MODEL_ALIAS
-/ruta/a/MyDGX-Dashboard/start.sh claude -- -p "Resume este repositorio"
+/path/to/MyDGX-Dashboard/start.sh claude
+/path/to/MyDGX-Dashboard/start.sh claude --active
+/path/to/MyDGX-Dashboard/start.sh claude MODEL_ALIAS
+/path/to/MyDGX-Dashboard/start.sh claude -- -p "Summarize this repository"
 ```
 
-Cada ejecución descubre los modelos de chat o visión del gateway y genera
-`~/claude-code/.claude/mydgx-settings.json`, que se pasa con `--settings`. Todos
-los niveles de modelo de Claude Code (Fable, Opus, Sonnet, Haiku y subagentes)
-apuntan al alias seleccionado, la compactación usa el contexto real del modelo y
-se desactivan telemetría, autoactualización, la memoria automática (que
-guardaría notas del proyecto en `~/.claude`) y la cabecera de atribución que
-invalida la caché KV de los motores locales. `~/.claude` no se modifica. La
-cabecera del lanzador va a stderr, así que `-p --output-format json` produce
-JSON limpio para scripts y CI.
+Each run discovers the gateway's chat or vision models and generates
+`~/claude-code/.claude/mydgx-settings.json`, which is passed with `--settings`. All
+Claude Code model tiers (Fable, Opus, Sonnet, Haiku and subagents)
+point to the selected alias, compaction uses the model's real context and
+telemetry, auto-update, automatic memory (which
+would save project notes in `~/.claude`) and the attribution header that
+invalidates the KV cache of local engines are disabled. `~/.claude` is not modified. The
+launcher's header goes to stderr, so `-p --output-format json` produces
+clean JSON for scripts and CI.
 
-Los modos equivalen a los de OpenCode: `plan` y solo lectura por defecto;
-`--active` acepta ediciones, pide confirmación para bash y carga únicamente los
-MCP Playwright, NVD y, si existe `SHODAN_API_KEY` en el entorno o en `.env`,
+The modes match OpenCode's: `plan` and read-only by default;
+`--active` accepts edits, asks for confirmation for bash and loads only the
+Playwright and NVD MCPs and, if `SHODAN_API_KEY` exists in the environment or in `.env`,
 Shodan (`--strict-mcp-config`).
-La búsqueda web está activada por defecto en los dos modos, con el mismo MCP
-`searxng` que OpenCode y la misma casilla de Configuración → Gateway. `WebSearch`
-y `WebFetch` nativos siguen bloqueados. Ambos modos bloquean subagentes y la
-lectura de `.env` y claves privadas. Los skills se copian en
-`~/claude-code/.claude/skills/` y las instrucciones en `~/claude-code/CLAUDE.md`.
-La clave del gateway se entrega solo mediante `MYDGX_GATEWAY_API_KEY` y
-`ANTHROPIC_API_KEY` se elimina del entorno de la sesión.
+Web search is enabled by default in both modes, with the same `searxng` MCP
+as OpenCode and the same checkbox in Settings → Gateway. Native `WebSearch`
+and `WebFetch` remain blocked. Both modes block subagents and
+reading `.env` and private keys. The skills are copied to
+`~/claude-code/.claude/skills/` and the instructions to `~/claude-code/CLAUDE.md`.
+The gateway key is provided only through `MYDGX_GATEWAY_API_KEY` and
+`ANTHROPIC_API_KEY` is removed from the session environment.
 
-## Prueba de aceptación del DGX Spark
+## DGX Spark acceptance test
 
-`./start.sh test` integra una prueba de hardware y salud por SSH. La primera
-ejecución crea un archivo local con permisos `0600`:
+`./start.sh test` integrates a hardware and health test over SSH. The first
+run creates a local file with `0600` permissions:
 
-> Si estás evaluando una unidad nueva o usada antes de pagar, sigue la guía
-> **[Cómo comprobar un DGX Spark antes de comprarlo](docs/comprobar-spark.md)**.
+> If you are evaluating a new or used unit before paying, follow the guide
+> **[How to check a DGX Spark before buying it](docs/en/comprobar-spark.md)**.
 
 ```text
 config/dgx-health-check/dgx-spark.env
 ```
 
-También puedes ejecutarla directamente sin preparar la configuración:
+You can also run it directly without preparing the configuration:
 
 ```bash
 ./start.sh test root@192.168.1.100
@@ -753,21 +755,21 @@ También puedes ejecutarla directamente sin preparar la configuración:
 ./start.sh test root@192.168.1.100 -p 2222
 ```
 
-El puerto es opcional y por defecto es `22`. En este formato OpenSSH prueba
-primero las claves disponibles; si ninguna autentica, solicita la contraseña
-directamente en la terminal. MyDGX nunca recibe ni almacena esa contraseña.
+The port is optional and defaults to `22`. In this format OpenSSH first tries
+the available keys; if none authenticates, it asks for the password
+directly in the terminal. MyDGX never receives or stores that password.
 
-En la red local, puedes crear o actualizar la configuración inicial mediante
-Bonjour/mDNS. Solo selecciona servicios SSH cuyo nombre identifica un
-DGX, Spark o NVIDIA y reutiliza una clave local únicamente si autentica:
+On the local network, you can create or update the initial configuration through
+Bonjour/mDNS. It only selects SSH services whose name identifies a
+DGX, Spark or NVIDIA and reuses a local key only if it authenticates:
 
 ```bash
 ./start.sh --autodiscover --config
-# Equivalente:
+# Equivalent:
 ./start.sh test --autodiscover
 ```
 
-Edita al menos `DGX_HOST`, revisa el usuario y selecciona el SSD adquirido:
+Edit at least `DGX_HOST`, check the user and select the SSD you purchased:
 
 ```dotenv
 DGX_HOST=spark-xxxx.local
@@ -779,134 +781,134 @@ DGX_ACCEPT_NEW=0
 DGX_STRICT=0
 ```
 
-Después ejecuta:
+Then run:
 
 ```bash
 ./start.sh test
 ./start.sh test --strict
 ./start.sh test --interactive --accept-new
-./start.sh test --expect-fingerprint SHA256:HUELLA_VERIFICADA
+./start.sh test --expect-fingerprint SHA256:VERIFIED_FINGERPRINT
 ./start.sh test --help
 ```
 
-Las opciones de línea de comandos prevalecen sobre las variables de entorno y
-el archivo de configuración. También puedes usar un archivo alternativo:
+Command-line options take precedence over environment variables and
+the configuration file. You can also use an alternative file:
 
 ```bash
-./start.sh test --config /ruta/segura/dgx-spark.env
+./start.sh test --config /secure/path/dgx-spark.env
 ```
 
-La prueba verifica DGX OS, `aarch64`, GB10, memoria unificada, almacenamiento,
-NVMe SMART, temperaturas, errores NVIDIA Xid y ejercicios breves de memoria,
-disco y CUDA. Crea y elimina un archivo remoto temporal de 256 MiB; no escribe
-en dispositivos de bloques.
+The test verifies DGX OS, `aarch64`, GB10, unified memory, storage,
+NVMe SMART, temperatures, NVIDIA Xid errors and short memory,
+disk and CUDA exercises. It creates and deletes a temporary 256 MiB remote file; it does not write
+to block devices.
 
-No acepta contraseñas como argumentos, variables o configuración. Para la
-primera conexión compara la huella SSH con la consola del Spark antes de usar
+It does not accept passwords as arguments, variables or configuration. For the
+first connection, compare the SSH fingerprint with the Spark's console before using
 `--accept-new`.
 
-Una clave antigua se reemplaza automáticamente sin ejecutar `ssh-keygen -R`
-cuando `DGX_ACCEPT_NEW=1`. Se muestra un aviso y la operación afecta únicamente
-a la entrada exacta de host y puerto, algo útil con equipos alquilados que
-reutilizan direcciones. `DGX_EXPECT_FINGERPRINT` es un bloqueo estricto opcional
-para equipos permanentes.
+An old key is replaced automatically without running `ssh-keygen -R`
+when `DGX_ACCEPT_NEW=1`. A warning is shown and the operation only affects
+the exact host and port entry, which is useful with rented machines that
+reuse addresses. `DGX_EXPECT_FINGERPRINT` is an optional strict lock
+for permanent machines.
 
-## Despliegue en DGX OS o Ubuntu
+## Deployment on DGX OS or Ubuntu
 
 ```bash
 ./start.sh deploy
 ```
 
-Para instalar opcionalmente un actualizador horario de DuckDNS, define
-`DUCKDNS_DOMAIN` y `DUCKDNS_TOKEN` únicamente en el `.env` del DGX y ejecuta:
+To optionally install an hourly DuckDNS updater, define
+`DUCKDNS_DOMAIN` and `DUCKDNS_TOKEN` only in the DGX's `.env` and run:
 
 ```bash
 ./start.sh deploy --duckdns --repair --interactive
 ```
 
-El token no se copia desde el Mac ni se imprime. Tras la primera instalación,
-los despliegues normales conservan y actualizan el servicio.
+The token is not copied from the Mac or printed. After the first installation,
+regular deployments keep and update the service.
 
-Para publicar únicamente cambios de la interfaz, sin instalar paquetes ni
-reiniciar servicios:
+To publish only interface changes, without installing packages or
+restarting services:
 
 ```bash
 ./start.sh deploy --frontend
 ```
 
-Este modo compila React localmente, transfiere solo `frontend/dist`, activa la
-nueva versión de forma atómica y conserva la anterior como respaldo. Si no se
-indica `USUARIO@HOST`, utiliza primero la conexión activa de MyDGXTray.
+This mode builds React locally, transfers only `frontend/dist`, activates the
+new version atomically and keeps the previous one as a backup. If
+`USER@HOST` is not given, it first uses MyDGXTray's active connection.
 
-Para desplegar exactamente lo publicado en GitHub, en lugar de la copia de
-trabajo local:
+To deploy exactly what is published on GitHub, instead of the local working
+copy:
 
 ```bash
-./start.sh deploy --github            # último commit de main en origin
-./start.sh deploy --github v1.2.0     # una rama o un tag concretos
+./start.sh deploy --github            # latest commit of main on origin
+./start.sh deploy --github v1.2.0     # a specific branch or tag
 ```
 
-Se ejecuta en el Mac, desde el clon git: descarga `origin`, extrae el commit
-con `git archive` a una carpeta temporal (sin cambios sin confirmar, archivos
-ignorados ni `.env`) y despliega desde ahí con las mismas copias de seguridad y
-la misma vuelta atrás. El DGX no necesita acceso a GitHub ni credenciales. El
-commit desplegado queda en `.mydgx-source-commit`. Con
-`MYDGX_REQUIRE_SIGNED_TAG=1` solo se aceptan tags con firma válida
-(`git verify-tag`). Se combina con los demás modos, por ejemplo
+It runs on the Mac, from the git clone: it fetches `origin`, extracts the commit
+with `git archive` to a temporary folder (without uncommitted changes, ignored
+files or `.env`) and deploys from there with the same backups and
+the same rollback. The DGX needs neither GitHub access nor credentials. The
+deployed commit is recorded in `.mydgx-source-commit`. With
+`MYDGX_REQUIRE_SIGNED_TAG=1` only tags with a valid signature are accepted
+(`git verify-tag`). It can be combined with the other modes, for example
 `--github main --frontend`.
 
-El despliegue:
+The deployment:
 
-- instala las dependencias del panel y herramientas de diagnóstico;
-- habilita, arranca y verifica automáticamente el gateway MyDGX;
-- prepara CUDA y compila llama.cpp para GB10/sm_121 cuando corresponde;
-- detecta cambios de kernel, driver, CUDA o revisión de llama.cpp;
-- conserva la instalación anterior hasta completar las verificaciones;
-- instala `mydgx.service`, `mydgx-gateway.service` y el reparador del sistema;
-- habilita el panel para arrancar automáticamente con Linux;
-- puede preparar Ollama, Docker, NVIDIA Container Toolkit, Open WebUI, Whisper
-  como servicio GPU local, SearXNG como buscador privado y ComfyUI para imagen
-  y vídeo;
-- nunca copia `.env`, tokens ni claves privadas desde otra máquina;
-- termina listando las apps de perfil instaladas en `PROFILE_APPS_ROOT` (por
-  defecto el home del usuario SSH del DGX), el perfil que usa cada una y las
-  carpetas con `start.sh` que se ignoran por no cumplir las reglas de seguridad.
+- installs the dashboard dependencies and diagnostic tools;
+- automatically enables, starts and verifies the MyDGX gateway;
+- prepares CUDA and builds llama.cpp for GB10/sm_121 when applicable;
+- detects changes to the kernel, driver, CUDA or llama.cpp revision;
+- keeps the previous installation until verifications are complete;
+- installs `mydgx.service`, `mydgx-gateway.service` and the system repair tool;
+- enables the dashboard to start automatically with Linux;
+- can set up Ollama, Docker, NVIDIA Container Toolkit, Open WebUI, Whisper
+  as a local GPU service, SearXNG as a private search engine and ComfyUI for image
+  and video;
+- never copies `.env`, tokens or private keys from another machine;
+- finishes by listing the profile apps installed in `PROFILE_APPS_ROOT` (by
+  default the home of the DGX's SSH user), the profile each one uses and the
+  folders with a `start.sh` that are ignored for not meeting the security rules.
 
-Whisper se instala por defecto con el modelo `turbo` sobre
-`nvcr.io/nvidia/pytorch:25.09-py3`. Puede ajustarse antes del despliegue con
-`MYDGX_WHISPER_MODEL`, `MYDGX_WHISPER_BASE_IMAGE` o desactivarse explícitamente
-con `MYDGX_INSTALL_WHISPER=0`.
+Whisper is installed by default with the `turbo` model on
+`nvcr.io/nvidia/pytorch:25.09-py3`. It can be adjusted before deployment with
+`MYDGX_WHISPER_MODEL`, `MYDGX_WHISPER_BASE_IMAGE` or explicitly disabled
+with `MYDGX_INSTALL_WHISPER=0`.
 
-SearXNG se instala por defecto con Open WebUI, solo escucha en
-`127.0.0.1:8888` y no necesita claves externas. Puede desactivarse con
-`MYDGX_INSTALL_SEARXNG=0` o fijar una imagen mediante
-`MYDGX_SEARXNG_IMAGE=searxng/searxng@sha256:DIGEST`. El deployment usa el contenedor
-cuando Docker está operativo y cambia automáticamente a una instalación nativa
-aislada cuando el proveedor no permite ejecutar el daemon.
+SearXNG is installed by default with Open WebUI, listens only on
+`127.0.0.1:8888` and needs no external keys. It can be disabled with
+`MYDGX_INSTALL_SEARXNG=0` or pinned to an image through
+`MYDGX_SEARXNG_IMAGE=searxng/searxng@sha256:DIGEST`. The deployment uses the container
+when Docker is working and automatically switches to an isolated native installation
+when the provider does not allow running the daemon.
 
-ComfyUI se instala con PyTorch CUDA 13 y ajustes seguros para la memoria
-unificada del GB10. El deployment descarga FLUX.1 Schnell FP8 y Wan 2.1 T2V
-1.3B desde los repositorios oficiales de Comfy-Org, valida sus SHA-256 y conecta
-automáticamente imagen y herramientas multimedia en Open WebUI. Puede omitirse
-con `MYDGX_INSTALL_COMFYUI=0`, descargar el runtime sin modelos mediante
-`MYDGX_INSTALL_COMFYUI_MODELS=0` o fijar la revisión con `MYDGX_COMFYUI_REF`.
+ComfyUI is installed with PyTorch CUDA 13 and safe settings for the GB10's unified
+memory. The deployment downloads FLUX.1 Schnell FP8 and Wan 2.1 T2V
+1.3B from the official Comfy-Org repositories, validates their SHA-256 and automatically
+connects image and multimedia tools in Open WebUI. It can be skipped
+with `MYDGX_INSTALL_COMFYUI=0`, download the runtime without models through
+`MYDGX_INSTALL_COMFYUI_MODELS=0` or pin the revision with `MYDGX_COMFYUI_REF`.
 
-![Workflow «MyDGX - Imagen Flux» en ComfyUI con FLUX.1 Schnell, imágenes generadas y cola de trabajos](docs/images/comfyui-flux-workflow.png)
+![«MyDGX - Imagen Flux» workflow in ComfyUI with FLUX.1 Schnell, generated images and job queue](docs/images/comfyui-flux-workflow.png)
 
-Todo lo que se descarga queda fijado: la imagen de SearXNG por digest, ComfyUI y
-llama.cpp por commit, Open WebUI y Ollama por versión, el instalador de Ollama y
-el archivo de Hashcat por SHA-256 y el repositorio de NodeSource por la huella de
-su clave. Si un proveedor cambia algo, el deployment se detiene en lugar de
-ejecutar código no revisado; para actualizar, revisa la novedad y cambia el valor
-fijado (`MYDGX_SEARXNG_IMAGE`, `MYDGX_COMFYUI_REF`, `MYDGX_LLAMA_CPP_REF` con un
-commit completo, `MYDGX_OPENWEBUI_VERSION`, `MYDGX_HASHCAT_SHA256` o las
-constantes del inicio del script remoto de `deploy.sh`).
+Everything that is downloaded is pinned: the SearXNG image by digest, ComfyUI and
+llama.cpp by commit, Open WebUI and Ollama by version, the Ollama installer and
+the Hashcat archive by SHA-256 and the NodeSource repository by its key
+fingerprint. If a provider changes something, the deployment stops instead of
+running unreviewed code; to update, review the change and update the pinned
+value (`MYDGX_SEARXNG_IMAGE`, `MYDGX_COMFYUI_REF`, `MYDGX_LLAMA_CPP_REF` with a
+full commit, `MYDGX_OPENWEBUI_VERSION`, `MYDGX_HASHCAT_SHA256` or the
+constants at the top of the remote script in `deploy.sh`).
 
-En Linux sin systemd se utiliza el supervisor local de `start.sh`.
+On Linux without systemd the local `start.sh` supervisor is used.
 
-## Configuración
+## Configuration
 
-Copia `.env.example` a `.env` y modifica únicamente el archivo local:
+Copy `.env.example` to `.env` and only edit the local file:
 
 ```dotenv
 HOST=127.0.0.1
@@ -923,96 +925,95 @@ MYDGX_API_KEY=YOUR_DASHBOARD_API_KEY
 GATEWAY_API_KEY=YOUR_GATEWAY_API_KEY
 ```
 
-Variables destacadas:
+Key variables:
 
-- `HF_HOME`: caché de Hugging Face;
-- `OLLAMA_URL`, `OPENWEBUI_URL`, `DGX_DASHBOARD_URL`: servicios locales;
-- `ASSISTANT_ENABLED`, `ASSISTANT_MODEL`: asistente operativo local y su modelo preferido;
-- `ASSISTANT_FALLBACK_TO_AVAILABLE`: permite usar otro modelo local si el preferido no responde;
-- `LLAMA_CPP_SERVER_PATH`: ejecutable de llama-server;
-- `ENABLE_PROFILE_AUTOSTART`: arranque del perfil predeterminado;
-- `GATEWAY_HOST`, `GATEWAY_PORT`: endpoint OpenAI del perfil activo;
-- `METRICS_INTERVAL_SECONDS`, `METRICS_RETENTION_HOURS`: histórico;
-- `ENABLE_SYSTEM_UPDATES`, `ENABLE_SERVICE_CONTROL`: operaciones privilegiadas;
-- `DEVICE_VARIANT_OVERRIDE`: `nvidia`, `asus`, `hp`, `lenovo`, `dell` o `generic` cuando
-  la detección automática del chasis no sea suficiente;
-- `TRUSTED_HOSTS`: nombres extra aceptados en `Host` si accedes por un nombre DNS
-  propio;
-- `PROFILE_APPS_ROOT`, `PROFILE_APPS`: dónde se buscan las apps de perfil y lista
-  blanca opcional.
+- `HF_HOME`: Hugging Face cache;
+- `OLLAMA_URL`, `OPENWEBUI_URL`, `DGX_DASHBOARD_URL`: local services;
+- `ASSISTANT_ENABLED`, `ASSISTANT_MODEL`: local operations assistant and its preferred model;
+- `ASSISTANT_FALLBACK_TO_AVAILABLE`: allows using another local model if the preferred one does not respond;
+- `LLAMA_CPP_SERVER_PATH`: llama-server executable;
+- `ENABLE_PROFILE_AUTOSTART`: startup of the default profile;
+- `GATEWAY_HOST`, `GATEWAY_PORT`: OpenAI endpoint of the active profile;
+- `METRICS_INTERVAL_SECONDS`, `METRICS_RETENTION_HOURS`: history;
+- `ENABLE_SYSTEM_UPDATES`, `ENABLE_SERVICE_CONTROL`: privileged operations;
+- `DEVICE_VARIANT_OVERRIDE`: `nvidia`, `asus`, `hp`, `lenovo`, `dell` or `generic` when
+  automatic chassis detection is not enough;
+- `TRUSTED_HOSTS`: extra names accepted in `Host` if you connect through your own DNS
+  name;
+- `PROFILE_APPS_ROOT`, `PROFILE_APPS`: where profile apps are looked up and an optional
+  allowlist.
 
-Las opciones peligrosas están desactivadas por defecto. La lista completa de
-variables, con valores por defecto, está en [Configuración](docs/configuracion.md).
+Dangerous options are disabled by default. The full list of
+variables, with default values, is in [Configuration](docs/en/configuracion.md).
 
-## Persistencia
+## Persistence
 
-SQLite conserva:
+SQLite keeps:
 
-- telemetría general y por modelo;
-- perfiles, favoritos y perfil predeterminado;
-- trabajos, progreso y eventos;
-- logs estructurados y auditoría;
-- preferencias no secretas.
+- general and per-model telemetry;
+- profiles, favorites and default profile;
+- jobs, progress and events;
+- structured logs and audit trail;
+- non-secret preferences.
 
-Los modelos permanecen en las cachés estándar de Hugging Face y Ollama. Los
-tokens, contraseñas, cookies y claves API nunca se almacenan en la base de datos.
+Models stay in the standard Hugging Face and Ollama caches.
+Tokens, passwords, cookies and API keys are never stored in the database.
 
-## Seguridad
+## Security
 
-- MyDGX escucha únicamente en `127.0.0.1` por defecto.
-- Para acceso remoto se recomienda un túnel SSH o un proxy HTTPS autenticado.
-- El navegador no puede enviar comandos arbitrarios al sistema.
-- Las acciones privilegiadas usan una lista cerrada de servicios y comandos.
-- El despliegue no concede `NOPASSWD: ALL`.
-- Cabeceras de autorización, cookies, cuerpos de petición y secretos no se
-  escriben en los logs.
-- Los campos sensibles se redactan antes de persistir eventos.
-- Dashboard y gateway rechazan peticiones de navegador de otras webs (`Origin`,
-  `Sec-Fetch-Site`) y cabeceras `Host` no reconocidas (DNS rebinding).
-- El despliegue verifica la clave SSH del DGX, los instaladores por checksum o
-  firma, fija versiones de imágenes y repositorios, y nunca copia archivos `.env`.
-- Las apps de perfil se ejecutan sin los secretos de MyDGX y solo si su
-  `start.sh` es del usuario de MyDGX y no lo puede modificar nadie más.
+- MyDGX listens only on `127.0.0.1` by default.
+- For remote access, an SSH tunnel or an authenticated HTTPS proxy is recommended.
+- The browser cannot send arbitrary commands to the system.
+- Privileged actions use a closed list of services and commands.
+- The deployment does not grant `NOPASSWD: ALL`.
+- Authorization headers, cookies, request bodies and secrets are not
+  written to the logs.
+- Sensitive fields are redacted before events are persisted.
+- Dashboard and gateway reject browser requests from other websites (`Origin`,
+  `Sec-Fetch-Site`) and unrecognized `Host` headers (DNS rebinding).
+- The deployment verifies the DGX's SSH key and the installers by checksum or
+  signature, pins image and repository versions, and never copies `.env` files.
+- Profile apps run without MyDGX's secrets and only if their
+  `start.sh` is owned by the MyDGX user and nobody else can modify it.
 
-No confirmes `.env`, bases de datos, cachés de modelos ni claves privadas en Git.
-Modelo completo en [Seguridad](docs/seguridad.md).
+Do not commit `.env`, databases, model caches or private keys to Git.
+Full model in [Security](docs/en/seguridad.md).
 
-## Documentación adicional
+## Additional documentation
 
-- **[Quickstart: desde GitHub hasta el primer despliegue](docs/quickstart.md)**
-- **[Cómo comprobar un DGX Spark antes de comprarlo](docs/comprobar-spark.md)**
-- **[Modelos soportados y probados: ranking con benchmarks reales](docs/modelos-probados.md)**
-- [Guía de uso por secciones](docs/guia-de-uso.md)
-- [Configuración: variables, secretos y servicios opcionales](docs/configuracion.md)
-- [Referencia completa de la API](docs/api.md)
-- [Seguridad y modelo de amenazas](docs/seguridad.md)
-- [Asistente MyDGX y su API](docs/asistente-mydgx.md)
-- [Benchmarks reproducibles y API](docs/benchmarks.md)
-- [Clientes del Gateway OpenAI](docs/gateway-clientes.md)
-- [Laboratorio IA multimodal](docs/laboratorio-ia.md)
-- [Conversión segura a modo servidor](docs/modo-servidor.md)
-- [MyDGXTray para macOS](macos/MyDGXTray/README.md)
-- [Campos configurables de MyDGXTray](macos/MyDGXTray/PREFERENCIAS.md)
+- **[Quickstart: from GitHub to the first deployment](docs/en/quickstart.md)**
+- **[How to check a DGX Spark before buying it](docs/en/comprobar-spark.md)**
+- **[Supported and tested models: ranking with real benchmarks](docs/en/modelos-probados.md)**
+- [User guide by section](docs/en/guia-de-uso.md)
+- [Configuration: variables, secrets and optional services](docs/en/configuracion.md)
+- [Full API reference](docs/en/api.md)
+- [Security and threat model](docs/en/seguridad.md)
+- [MyDGX assistant and its API](docs/en/asistente-mydgx.md)
+- [Reproducible benchmarks and API](docs/en/benchmarks.md)
+- [OpenAI Gateway clients](docs/en/gateway-clientes.md)
+- [Multimodal AI Lab](docs/en/laboratorio-ia.md)
+- [Safe conversion to server mode](docs/en/modo-servidor.md)
+- [MyDGXTray for macOS](macos/MyDGXTray/README.md)
+- [MyDGXTray configurable fields](macos/MyDGXTray/PREFERENCIAS.md)
 
-## Estado del proyecto
+## Project status
 
-MyDGX está en desarrollo activo. La interfaz puede probarse en macOS, pero las
-operaciones GPU, DGX OS y systemd deben validarse en hardware GB10 real antes de
-usarse en producción.
+MyDGX is under active development. The interface can be tried on macOS, but
+GPU, DGX OS and systemd operations must be validated on real GB10 hardware before
+being used in production.
 
-Las capturas de esta página se generaron con la vista de identidad de cada
-fabricante en un entorno de desarrollo; los servicios no disponibles aparecen
-como tales de forma intencionada.
+The screenshots on this page were generated with each vendor's identity
+view in a development environment; unavailable services appear
+as such on purpose.
 
-## Marcas e imágenes
+## Trademarks and images
 
-NVIDIA, DGX, ASUS, HP, Lenovo, Dell y sus logotipos son marcas de sus respectivos
-titulares. Las imágenes de producto proceden de páginas oficiales de producto o
-prensa y se utilizan únicamente para identificar el equipo administrado.
+NVIDIA, DGX, ASUS, HP, Lenovo, Dell and their logos are trademarks of their respective
+owners. Product images come from official product or
+press pages and are used solely to identify the managed hardware.
 
-## Licencia
+## License
 
-El código de MyDGX se distribuye bajo la [licencia MIT](LICENSE). Las marcas,
-modelos y recursos gráficos de terceros conservan los derechos de sus
-respectivos titulares.
-
+MyDGX code is distributed under the [MIT license](LICENSE). Third-party trademarks,
+models and graphic assets remain the property of their
+respective owners.

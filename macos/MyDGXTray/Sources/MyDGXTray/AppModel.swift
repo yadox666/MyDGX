@@ -2397,7 +2397,7 @@ final class AppModel: ObservableObject {
         let remoteDirectory = profile.deployment.remoteDirectory
         let openWebUIPublicURL = "http://127.0.0.1:\(profile.tunnel.localOpenWebUIPort)"
         let comfyUIPublicURL = "http://127.0.0.1:\(profile.tunnel.localComfyUIPort)"
-        let remoteCommand = "cd \(shellQuote(remoteDirectory)) && chmod +x scripts/deploy-from-tray.sh && MYDGX_OPENWEBUI_PUBLIC_URL=\(shellQuote(openWebUIPublicURL)) MYDGX_COMFYUI_PUBLIC_URL=\(shellQuote(comfyUIPublicURL)) ./scripts/deploy-from-tray.sh"
+        let remoteCommand = "cd \(shellQuote(remoteDirectory)) && chmod +x scripts/deploy-from-tray.sh && MYDGX_LANGUAGE=\(AppLanguage.active.rawValue) MYDGX_OPENWEBUI_PUBLIC_URL=\(shellQuote(openWebUIPublicURL)) MYDGX_COMFYUI_PUBLIC_URL=\(shellQuote(comfyUIPublicURL)) ./scripts/deploy-from-tray.sh"
         let sshStatus = try await runProcess(
             executable: "/usr/bin/ssh",
             arguments: sshBaseArguments(profile) + [remoteTarget(profile), remoteCommand],

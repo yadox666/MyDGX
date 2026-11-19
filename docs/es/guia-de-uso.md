@@ -9,7 +9,7 @@ hay detrás. La referencia completa de endpoints está en [API](api.md).
 |---|---|
 | **Modelo** | Pesos descargados en la caché de Hugging Face (`HF_HOME`) o en Ollama. Descargar no implica cargar en memoria. |
 | **Perfil** | Receta de inferencia: uno o varios modelos con su motor (llama.cpp, Ollama, vLLM, SGLang, TensorRT-LLM, ComfyUI, Whisper...), puerto, contexto y parámetros. Puede haber **hasta dos perfiles o modelos Quick cargados** a la vez si caben en memoria. |
-| **Perfil predeterminado** | Perfil que MyDGX vuelve a cargar al arrancar (`ENABLE_PROFILE_AUTOSTART`). Se fija con *Activar*. |
+| **Perfil predeterminado** | Perfil que MyDGX vuelve a cargar al arrancar (`ENABLE_PROFILE_AUTOSTART`). Se fija con *Solo predeterminado*. |
 | **App del perfil** | Aplicación propia (por ejemplo `~/ragkit`) que arranca y se para con el perfil mediante su `start.sh`. |
 | **Perfil Default** | Perfil de solo lectura con los modelos marcados como *Default* en *Modelos* (por ejemplo un modelo de embeddings que siempre debe estar disponible). Arranca siempre al iniciar MyDGX y no cuenta para el límite de dos perfiles. |
 | **Perfil Quick** | Perfil de solo lectura que se crea al pulsar *Encender* en un modelo de *Modelos*. Se carga al momento si cabe y se vacía con *Apagar*. Se conserva si solo se reinicia MyDGX (por ejemplo con un `deploy` normal), pero se vacía al reiniciar el equipo o con `deploy --repair`. No cuenta para el límite de dos perfiles. |
@@ -223,12 +223,12 @@ de descarga, plan de memoria y, si tiene, la app asociada.
     conserva mientras siga libre. Con *Manual* se usa el número indicado.
   - Puedes añadir hasta 12 modelos adicionales: embeddings, reranking, visión,
     audio, imagen...
-  - *Ajustar contexto automáticamente* reduce el contexto si no cabe en memoria,
+  - *Reducir contexto automáticamente tras OOM* reduce el contexto si no cabe en memoria,
     sin bajar del mínimo indicado.
 - **Arrancar**: descarga lo que falte y carga todos los modelos del perfil. Si ya
   hay otro perfil cargado, el plan conjunto comprueba memoria, puertos y alias.
 - **Detener**: para el perfil o todos, y sus apps.
-- **Activar**: lo marca como predeterminado para el próximo arranque de MyDGX.
+- **Solo predeterminado**: lo marca como predeterminado para el próximo arranque de MyDGX, sin arrancarlo.
 - **Default y Quick** llevan la etiqueta *Solo lectura*: se pueden arrancar o
   detener, pero no editar, activar ni borrar; se gestionan desde
   *Modelos*. Default no cuenta para el límite de dos cargados; cada modelo de

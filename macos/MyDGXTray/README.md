@@ -10,7 +10,7 @@ apagado remoto confirmado.
 
 ![MyDGX Tray: el menú de la barra explicado por bloques](../../docs/images/mydgx-tray.png)
 
-El [README principal](../../README.md#mydgx-tray-tu-spark-desde-la-barra-de-menús)
+El [README principal](../../README.es.md#mydgx-tray-tu-spark-desde-la-barra-de-menús)
 explica cada bloque del menú.
 
 ### Preferencias y perfiles
@@ -140,7 +140,7 @@ Si todavía no hay ningún Spark configurado (primera instalación, sin
 solo ofrece ese asistente y Salir. El mismo asistente se abre desde la varita de
 Preferencias para añadir otros Sparks, o con `--setup-assistant`.
 
-Las capturas de `docs/quickstart.md` se generan sin red ni permisos de pantalla,
+Las capturas de `docs/es/quickstart.md` se generan sin red ni permisos de pantalla,
 con datos de ejemplo y un `HOME` aislado:
 
 ```bash
@@ -181,7 +181,7 @@ alternativa con Terminal (`--interactive`). Para actualizaciones posteriores usa
 limitadas instaladas durante el primer despliegue.
 
 La guía completa para usuarios nuevos está en
-[`docs/quickstart.md`](../../docs/quickstart.md).
+[`docs/es/quickstart.md`](../../docs/es/quickstart.md).
 
 ## Acciones remotas
 

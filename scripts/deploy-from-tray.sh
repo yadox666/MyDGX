@@ -3,15 +3,22 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+if [[ -f "$ROOT/scripts/lib/language.sh" ]]; then
+  # shellcheck source=lib/language.sh
+  source "$ROOT/scripts/lib/language.sh"
+else
+  pick() { if [[ "${MYDGX_LANGUAGE:-en}" == "es" ]]; then printf '%s' "$1"; else printf '%s' "${2:-$1}"; fi; }
+  say() { pick "$@"; printf '\n'; }
+fi
 OPENWEBUI_PUBLIC_URL="${MYDGX_OPENWEBUI_PUBLIC_URL:-http://127.0.0.1:13000}"
 [[ "$OPENWEBUI_PUBLIC_URL" =~ ^https?://(127\.0\.0\.1|localhost):[0-9]{1,5}/?$ ]] || {
-  echo "MYDGX_OPENWEBUI_PUBLIC_URL no es una URL loopback válida." >&2
+  say "MYDGX_OPENWEBUI_PUBLIC_URL no es una URL loopback válida." "MYDGX_OPENWEBUI_PUBLIC_URL is not a valid loopback URL." >&2
   exit 2
 }
 openwebui_public_port="${OPENWEBUI_PUBLIC_URL%/}"
 openwebui_public_port="${openwebui_public_port##*:}"
 ((openwebui_public_port >= 1 && openwebui_public_port <= 65535)) || {
-  echo "El puerto público de Open WebUI no es válido." >&2
+  say "El puerto público de Open WebUI no es válido." "The Open WebUI public port is not valid." >&2
   exit 2
 }
 
@@ -27,14 +34,14 @@ if ! command -v node >/dev/null 2>&1 ||
    ! command -v npm >/dev/null 2>&1 ||
    (( "$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)" < 20 )); then
   export MYDGX_USE_PREBUILT_FRONTEND=1
-  echo "Node.js 20 no está disponible; se usará el frontend precompilado."
+  say "Node.js 20 no está disponible; se usará el frontend precompilado." "Node.js 20 is not available; the prebuilt frontend will be used."
 fi
 systemd_active=0
 if [[ -d /run/systemd/system ]] && systemctl show-environment >/dev/null 2>&1; then
   systemd_active=1
   for unit in mydgx-repair mydgx mydgx-gateway open-webui; do
     systemctl cat "$unit" >/dev/null 2>&1 || {
-      echo "Falta el servicio $unit. Ejecuta primero ./start.sh deploy --interactive." >&2
+      say "Falta el servicio $unit. Ejecuta primero ./start.sh deploy --interactive." "The $unit service is missing. Run ./start.sh deploy --interactive first." >&2
       exit 1
     }
   done
@@ -179,7 +186,7 @@ if [[ "$systemd_active" == "1" ]]; then
     sleep 1
   done
   curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1 ||
-    { echo "Open WebUI no respondió en el puerto 3000." >&2; exit 1; }
+    { say "Open WebUI no respondió en el puerto 3000." "Open WebUI did not respond on port 3000." >&2; exit 1; }
 else
   ./start.sh restart
   for _ in {1..300}; do
@@ -187,7 +194,7 @@ else
     sleep 1
   done
   curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1 ||
-    { echo "Open WebUI no respondió en el puerto 3000." >&2; exit 1; }
+    { say "Open WebUI no respondió en el puerto 3000." "Open WebUI did not respond on port 3000." >&2; exit 1; }
 fi
 
 ./start.sh status

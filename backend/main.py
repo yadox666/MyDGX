@@ -18746,9 +18746,11 @@ class AssistantActionRequest(BaseModel):
     action_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
 
 
-ASSISTANT_DOC_PATHS = (
-    ROOT / "README.md",
-    ROOT / "docs",
+ASSISTANT_DOC_PATHS = {
+    "en": (ROOT / "README.md", ROOT / "docs" / "en"),
+    "es": (ROOT / "README.es.md", ROOT / "docs" / "es"),
+}
+ASSISTANT_SHARED_DOC_PATHS = (
     ROOT / "config" / "dgx-health-check" / "README.md",
     ROOT / "macos" / "MyDGXTray" / "README.md",
 )
@@ -19119,10 +19121,10 @@ Reglas:
 """.strip()
 
 
-@lru_cache(maxsize=1)
-def assistant_document_chunks() -> list[dict[str, str]]:
+@lru_cache(maxsize=len(ASSISTANT_DOC_PATHS))
+def assistant_document_chunks(language: str = DEFAULT_LANGUAGE) -> list[dict[str, str]]:
     files: list[Path] = []
-    for configured in ASSISTANT_DOC_PATHS:
+    for configured in (*ASSISTANT_DOC_PATHS.get(language, ASSISTANT_DOC_PATHS[DEFAULT_LANGUAGE]), *ASSISTANT_SHARED_DOC_PATHS):
         if configured.is_file():
             files.append(configured)
         elif configured.is_dir():
@@ -19158,7 +19160,7 @@ def assistant_document_chunks() -> list[dict[str, str]]:
     return chunks
 
 
-def search_assistant_documents(query: str) -> dict[str, Any]:
+def search_assistant_documents(query: str, language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
     terms = {
         term for term in re.findall(r"[a-záéíóúüñ0-9._/-]{3,}", query.casefold())
         if term not in {"para", "como", "cómo", "esta", "este", "mydgx", "sobre"}
@@ -19166,7 +19168,7 @@ def search_assistant_documents(query: str) -> dict[str, Any]:
     if not terms:
         terms = {query.casefold().strip()}
     ranked: list[tuple[int, dict[str, str]]] = []
-    for chunk in assistant_document_chunks():
+    for chunk in assistant_document_chunks(language):
         body = f"{chunk['source']} {chunk['heading']} {chunk['text']}".casefold()
         score = sum(body.count(term) for term in terms)
         score += sum(3 for term in terms if term in chunk["heading"].casefold())
@@ -19186,14 +19188,17 @@ def search_assistant_documents(query: str) -> dict[str, Any]:
     }
 
 
-API_REFERENCE_PATH = ROOT / "docs" / "api.md"
 API_REFERENCE_ROW = re.compile(r"\| (GET|POST|PUT|PATCH|DELETE) \| `([^`]+)` \| (.+) \|")
 
 
-@lru_cache(maxsize=1)
-def api_reference_entries() -> tuple[dict[str, str], ...]:
+def api_reference_relative_path(language: str) -> str:
+    return f"docs/{language if language in ASSISTANT_DOC_PATHS else DEFAULT_LANGUAGE}/api.md"
+
+
+@lru_cache(maxsize=len(ASSISTANT_DOC_PATHS))
+def api_reference_entries(language: str = DEFAULT_LANGUAGE) -> tuple[dict[str, str], ...]:
     try:
-        text = API_REFERENCE_PATH.read_text(encoding="utf-8")
+        text = (ROOT / api_reference_relative_path(language)).read_text(encoding="utf-8")
     except OSError:
         return ()
     entries: list[dict[str, str]] = []
@@ -19211,8 +19216,8 @@ def api_reference_entries() -> tuple[dict[str, str], ...]:
     return tuple(entries)
 
 
-def assistant_api_reference(query: str, limit: int) -> dict[str, Any]:
-    entries = api_reference_entries()
+def assistant_api_reference(query: str, limit: int, language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
+    entries = api_reference_entries(language)
     terms = {
         term for term in re.findall(r"[a-záéíóúüñ0-9._/{}-]{3,}", query.casefold())
         if term not in {"api", "endpoint", "endpoints", "ruta", "rutas", "para", "como", "cómo", "mydgx", "llamar", "usar"}
@@ -19251,7 +19256,7 @@ def assistant_api_reference(query: str, limit: int) -> dict[str, Any]:
         ],
         "total_endpoints": len(entries),
         "endpoints": endpoints,
-        "reference": "docs/api.md",
+        "reference": api_reference_relative_path(language),
     }
 
 
@@ -19453,7 +19458,7 @@ def compact_profiles(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def execute_assistant_read_tool(name: str, arguments: dict[str, Any]) -> Any:
+async def execute_assistant_read_tool(name: str, arguments: dict[str, Any], language: str = DEFAULT_LANGUAGE) -> Any:
     if name == "get_assistant_capabilities":
         names = [str(tool["function"]["name"]) for tool in ASSISTANT_TOOLS]
         return {
@@ -19463,7 +19468,7 @@ async def execute_assistant_read_tool(name: str, arguments: dict[str, Any]) -> A
             "excluded": ["comandos arbitrarios", "SQL arbitrario", "borrados", "lectura de secretos"],
         }
     if name == "search_mydgx_docs":
-        return search_assistant_documents(str(arguments.get("query") or "")[:300])
+        return search_assistant_documents(str(arguments.get("query") or "")[:300], language)
     if name == "get_overview":
         return await overview()
     if name == "get_metrics_summary":
@@ -19755,7 +19760,7 @@ async def execute_assistant_read_tool(name: str, arguments: dict[str, Any]) -> A
             limit = max(1, min(40, int(arguments.get("limit") or 15)))
         except (TypeError, ValueError):
             limit = 15
-        return assistant_api_reference(str(arguments.get("query") or "")[:200], limit)
+        return assistant_api_reference(str(arguments.get("query") or "")[:200], limit, language)
     if name == "get_config":
         return await public_config()
     if name == "get_memory_mode":
@@ -20186,7 +20191,8 @@ def assistant_direct_recommendation_arguments(message: str) -> dict[str, Any] | 
 
 
 @app.post("/api/assistant/chat", dependencies=secure)
-async def assistant_chat(payload: AssistantChatRequest) -> dict[str, Any]:
+async def assistant_chat(payload: AssistantChatRequest, request: Request) -> dict[str, Any]:
+    language = request_language(request.headers)
     ensure_interactive_inference_available()
     if not settings.assistant_enabled:
         raise HTTPException(status_code=503, detail="El asistente está desactivado")
@@ -20196,6 +20202,7 @@ async def assistant_chat(payload: AssistantChatRequest) -> dict[str, Any]:
             result = await execute_assistant_read_tool(
                 "recommend_models",
                 direct_recommendation,
+                language,
             )
             status = "ok"
         except (HTTPException, ValueError, TypeError) as exc:
@@ -20294,7 +20301,7 @@ async def assistant_chat(payload: AssistantChatRequest) -> dict[str, Any]:
                             "expires_at": action["expires_at"],
                         }
                     else:
-                        result = await execute_assistant_read_tool(name, arguments)
+                        result = await execute_assistant_read_tool(name, arguments, language)
                     tools_used.append({"name": name, "status": "ok"})
                 except (HTTPException, ValueError, TypeError) as exc:
                     detail = exc.detail if isinstance(exc, HTTPException) else str(exc)

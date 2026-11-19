@@ -47,7 +47,7 @@ shasum -a 256 -c MyDGXTray-*-macos-universal.zip.sha256
 ```
 
 Debe responder `OK`. Si prefieres compilarla tú, sigue el
-[README de MyDGXTray](../macos/MyDGXTray/README.md).
+[README de MyDGXTray](../../macos/MyDGXTray/README.md).
 
 ## 2. Paso 1 · Buscar
 
@@ -79,7 +79,7 @@ puede saber antes de entrar, el sistema operativo.
 - ¿Spark nuevo sin encender? Despliega **¿Tu Spark es nuevo…?** para abrir la
   guía oficial de NVIDIA o preparar un USB OEMDATA.
 
-![Paso 1: equipos encontrados en la red](images/setup-find.png)
+![Paso 1: equipos encontrados en la red](../images/setup-find.png)
 
 ## 3. Paso 2 · Conectar
 
@@ -106,12 +106,12 @@ Si el usuario necesita contraseña para `sudo` y no la escribiste aquí, el paso
 te la pide antes de instalar. El nombre del equipo se rellena con el modelo
 detectado y puedes cambiarlo.
 
-![Paso 2: usuario y contraseña del Spark](images/setup-connect.png)
+![Paso 2: usuario y contraseña del Spark](../images/setup-connect.png)
 
 Con una clave propia, la lista marca **no hacía falta** en la autorización y debajo
 aparece lo detectado: equipo, sistema, GPU y estado de MyDGX.
 
-![Paso 2: comprobaciones completadas con una clave SSH existente](images/setup-connect-checks.png)
+![Paso 2: comprobaciones completadas con una clave SSH existente](../images/setup-connect-checks.png)
 
 ## 4. Paso 3 · Instalar
 
@@ -127,7 +127,7 @@ funcionando, verás **Conectar** (y **Reinstalar** para actualizarlo).
 Si algo falla, pulsa **Ver registro detallado** o **Reintentar**: lo ya instalado
 se conserva.
 
-![Paso 3: MyDGX ya instalado, con Conectar y Reinstalar](images/setup-install.png)
+![Paso 3: MyDGX ya instalado, con Conectar y Reinstalar](../images/setup-install.png)
 
 ## 5. Paso 4 · Listo
 
@@ -135,7 +135,7 @@ El asistente muestra un resumen del equipo. Pulsa **Abrir Dashboard** o
 **Terminar**; el menú de MyDGXTray ya aparece completo. Desde él puedes abrir Open
 WebUI, ComfyUI, Terminal SSH y las aplicaciones web de los perfiles.
 
-![Paso 4: Spark listo](images/setup-done.png)
+![Paso 4: Spark listo](../images/setup-done.png)
 
 Si el administrador activó una contraseña web, introdúcela en la pantalla de
 inicio de sesión del dashboard.

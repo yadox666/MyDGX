@@ -4604,6 +4604,17 @@ class ProfileApiTests(unittest.TestCase):
         self.assertNotIn('".env"', json.dumps([item["source"] for item in result["results"]]))
         self.assertNotIn("test-only-secret-value", encoded)
 
+    def test_assistant_searches_documentation_in_the_request_language(self) -> None:
+        for language, query, own, other in (
+            ("en", "gateway OpenAI profiles", ("README.md", "docs/en/"), ("README.es.md", "docs/es/")),
+            ("es", "gateway OpenAI perfiles", ("README.es.md", "docs/es/"), ("README.md", "docs/en/")),
+        ):
+            sources = [item["source"] for item in main_module.search_assistant_documents(query, language)["results"]]
+            self.assertTrue(any(source.startswith(own) for source in sources), (language, sources))
+            self.assertFalse(any(source.startswith(other) for source in sources), (language, sources))
+        reference = asyncio.run(main_module.execute_assistant_read_tool("get_api_reference", {}, "en"))
+        self.assertEqual(reference["reference"], "docs/en/api.md")
+
     def test_assistant_executes_read_tools_and_returns_trace(self) -> None:
         first = {
             "role": "assistant",
@@ -7464,22 +7475,33 @@ class DocumentationTests(unittest.TestCase):
 
         import backend.gateway as gateway_module
 
-        reference = (Path(__file__).resolve().parent.parent / "docs" / "api.md").read_text(encoding="utf-8")
-        missing = []
-        for application in (app, gateway_module.app):
-            for route in application.routes:
-                if not isinstance(route, APIRoute) or route.path == "/{path:path}":
-                    continue
-                path = route.path.replace(":path}", "}")
-                for method in sorted(route.methods - {"HEAD"}):
-                    if f"| {method} | `{path}` |" not in reference:
-                        missing.append(f"{method} {path}")
-        self.assertEqual(missing, [])
+        for language in ("en", "es"):
+            reference = (Path(__file__).resolve().parent.parent / "docs" / language / "api.md").read_text(encoding="utf-8")
+            missing = []
+            for application in (app, gateway_module.app):
+                for route in application.routes:
+                    if not isinstance(route, APIRoute) or route.path == "/{path:path}":
+                        continue
+                    path = route.path.replace(":path}", "}")
+                    for method in sorted(route.methods - {"HEAD"}):
+                        if f"| {method} | `{path}` |" not in reference:
+                            missing.append(f"{method} {path}")
+            self.assertEqual(missing, [], language)
 
     def test_every_setting_is_documented(self) -> None:
-        reference = (Path(__file__).resolve().parent.parent / "docs" / "configuracion.md").read_text(encoding="utf-8")
-        missing = [name.upper() for name in type(settings).model_fields if f"| `{name.upper()}` |" not in reference]
-        self.assertEqual(missing, [])
+        for language in ("en", "es"):
+            reference = (Path(__file__).resolve().parent.parent / "docs" / language / "configuracion.md").read_text(encoding="utf-8")
+            missing = [name.upper() for name in type(settings).model_fields if f"| `{name.upper()}` |" not in reference]
+            self.assertEqual(missing, [], language)
+
+    def test_documentation_exists_in_both_languages(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        self.assertTrue((root / "README.md").is_file())
+        self.assertTrue((root / "README.es.md").is_file())
+        self.assertEqual(
+            sorted(path.name for path in (root / "docs" / "en").glob("*.md")),
+            sorted(path.name for path in (root / "docs" / "es").glob("*.md")),
+        )
 
 
 class TranslationTests(unittest.TestCase):

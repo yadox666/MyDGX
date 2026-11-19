@@ -14,10 +14,24 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 
+from mcp_env import secret_available
+
+SPANISH = os.environ.get("MYDGX_LANGUAGE") == "es"
+
+
+def tr(spanish: str, english: str) -> str:
+    return spanish if SPANISH else english
+
 PLAYWRIGHT_MCP = "@playwright/mcp@0.0.83"
 SHODAN_MCP = "@burtthecoder/mcp-shodan@1.0.32"
 NVD_MCP = "@cyanheads/nist-nvd-mcp-server@0.3.2"
 SEARXNG_MCP = Path(__file__).resolve().parent / "opencode_searxng_mcp.py"
+# Inyecta SHODAN_API_KEY/NVD_API_KEY (entorno o .env de MyDGX) solo en el MCP.
+MCP_ENV = Path(__file__).resolve().parent / "mcp_env.py"
+
+
+def with_secrets(names: list[str], command: list[str]) -> list[str]:
+    return [sys.executable, str(MCP_ENV), *names, "--", *command]
 DEFAULT_CONTEXT = 262_144
 DEFAULT_STEPS = 8192
 DEFAULT_MAX_OUTPUT = 32_000
@@ -107,7 +121,7 @@ def discover(base_url: str, api_key: str) -> tuple[list[dict], bool]:
     root = base_url.removesuffix("/v1").rstrip("/")
     health = request_json(f"{root}/health", api_key)
     if health.get("status") != "ok":
-        raise RuntimeError("el gateway está desactivado")
+        raise RuntimeError(tr("el gateway está desactivado", "the gateway is disabled"))
     web_search = health.get("web_search", True)
     if not isinstance(web_search, bool):
         web_search = True
@@ -134,7 +148,12 @@ def discover(base_url: str, api_key: str) -> tuple[list[dict], bool]:
                 "profile": str(item.get("owned_by") or "").removeprefix("mydgx:"),
             })
     if not models:
-        raise RuntimeError("el gateway no publica ningún modelo de chat o visión")
+        raise RuntimeError(
+            tr(
+                "el gateway no publica ningún modelo de chat o visión",
+                "the gateway does not publish any chat or vision models",
+            )
+        )
     return models, web_search
 
 
@@ -172,16 +191,25 @@ def min_agent_context() -> int:
 def context_error(models: list[dict], minimum: int) -> str:
     loaded = ", ".join(
         f"{model['id']} ({model['context']} tokens"
-        + (f", perfil {model['profile']}" if model.get("profile") else "")
+        + (
+            f", {tr('perfil', 'profile')} {model['profile']}"
+            if model.get("profile")
+            else ""
+        )
         + ")"
         for model in models
     )
-    return (
+    return tr(
         f"ERROR: los agentes de código necesitan un modelo con al menos {minimum} tokens de contexto.\n"
         f"       Su prompt de sistema y sus herramientas ocupan unos 16 000 antes del primer mensaje.\n"
         f"       Cargados: {loaded}.\n"
         "       Sube el contexto del perfil en el dashboard (Perfiles → editar → contexto, p. ej. 65536)\n"
-        "       y vuelve a cargarlo, o fija MYDGX_AGENT_MIN_CONTEXT si sabes lo que haces."
+        "       y vuelve a cargarlo, o fija MYDGX_AGENT_MIN_CONTEXT si sabes lo que haces.",
+        f"ERROR: code agents need a model with at least {minimum} context tokens.\n"
+        f"       System prompt and tools use about 16,000 before the first message.\n"
+        f"       Loaded: {loaded}.\n"
+        "       Raise profile context in the dashboard (Profiles → edit → context, e.g. 65536)\n"
+        "       and reload it, or set MYDGX_AGENT_MIN_CONTEXT if you know what you're doing.",
     )
 
 
@@ -191,7 +219,12 @@ def select_model(models: list[dict], requested: str) -> dict:
         selected = next((model for model in models if model["id"] == requested), None)
         if selected is None:
             available = ", ".join(model["id"] for model in models)
-            raise SystemExit(f"ERROR: el modelo {requested!r} no está cargado. Disponibles: {available}")
+            raise SystemExit(
+                tr(
+                    f"ERROR: el modelo {requested!r} no está cargado. Disponibles: {available}",
+                    f"ERROR: model {requested!r} is not loaded. Available: {available}",
+                )
+            )
         if selected["context"] < minimum:
             raise SystemExit(context_error([selected], minimum))
     else:
@@ -208,8 +241,12 @@ def select_model(models: list[dict], requested: str) -> dict:
         )
     if not selected["tools"]:
         print(
-            f"AVISO: {selected['id']} no admite tool calling en el gateway "
-            "(llama.cpp sin --jinja); el agente no podrá usar herramientas.",
+            tr(
+                f"AVISO: {selected['id']} no admite tool calling en el gateway "
+                "(llama.cpp sin --jinja); el agente no podrá usar herramientas.",
+                f"WARNING: {selected['id']} does not support tool calling on the gateway "
+                "(llama.cpp without --jinja); the agent cannot use tools.",
+            ),
             file=sys.stderr,
         )
     return selected
@@ -378,17 +415,15 @@ def write_config(
             },
             "shodan": {
                 "type": "local",
-                "command": ["npx", "-y", SHODAN_MCP],
-                "environment": {"SHODAN_API_KEY": "{env:SHODAN_API_KEY}"},
-                "enabled": bool(os.environ.get("SHODAN_API_KEY")),
+                "command": with_secrets(["SHODAN_API_KEY"], ["npx", "-y", SHODAN_MCP]),
+                "enabled": secret_available("SHODAN_API_KEY"),
                 "timeout": 30_000,
             },
             "nvd": {
                 "type": "local",
-                "command": ["npx", "-y", NVD_MCP],
+                "command": with_secrets(["NVD_API_KEY"], ["npx", "-y", NVD_MCP]),
                 "environment": {
                     "MCP_TRANSPORT_TYPE": "stdio",
-                    "NVD_API_KEY": "{env:NVD_API_KEY}",
                     "NVD_REQUEST_TIMEOUT_MS": "30000",
                 },
                 "enabled": True,
@@ -422,7 +457,12 @@ def create_workspace(workspace: Path, slug: str, version: str) -> None:
     )
     skills_target = workspace / ".opencode" / "skills"
     if not SKILLS_SOURCE.is_dir():
-        raise SystemExit(f"ERROR: no se encontraron las plantillas de skills en {SKILLS_SOURCE}")
+        raise SystemExit(
+            tr(
+                f"ERROR: no se encontraron las plantillas de skills en {SKILLS_SOURCE}",
+                f"ERROR: skill templates not found at {SKILLS_SOURCE}",
+            )
+        )
     skills_target.mkdir(parents=True, exist_ok=True)
     for source in SKILLS_SOURCE.iterdir():
         if source.is_dir():
@@ -437,7 +477,12 @@ def create_workspace(workspace: Path, slug: str, version: str) -> None:
         )
     if slug:
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", slug):
-            raise SystemExit("ERROR: el nombre debe usar minúsculas, números, _ o -.")
+            raise SystemExit(
+                tr(
+                    "ERROR: el nombre debe usar minúsculas, números, _ o -.",
+                    "ERROR: name must use lowercase letters, digits, _ or -.",
+                )
+            )
         project = workspace / slug
         project.mkdir(parents=True, exist_ok=True)
         pentest = project / "pentest"
@@ -468,10 +513,18 @@ def main() -> int:
     try:
         models, web_search = discover(args.base_url, os.environ.get("MYDGX_GATEWAY_API_KEY", ""))
     except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"ERROR: no se pudo configurar OpenCode desde {args.base_url}: {exc}") from exc
+        raise SystemExit(
+            tr(
+                f"ERROR: no se pudo configurar OpenCode desde {args.base_url}: {exc}",
+                f"ERROR: could not configure OpenCode from {args.base_url}: {exc}",
+            )
+        ) from exc
     if not web_search:
         print(
-            "AVISO: la búsqueda web del gateway está desactivada; OpenCode no recibe la herramienta.",
+            tr(
+                "AVISO: la búsqueda web del gateway está desactivada; OpenCode no recibe la herramienta.",
+                "WARNING: gateway web search is disabled; OpenCode will not get the tool.",
+            ),
             file=sys.stderr,
         )
     selected = select_model(models, args.model)

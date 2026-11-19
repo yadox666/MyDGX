@@ -541,6 +541,7 @@ final class SparkSetupWizard: ObservableObject {
         process.currentDirectoryURL = URL(fileURLWithPath: source)
         var environment = ProcessInfo.processInfo.environment
         environment["MYDGX_KNOWN_HOSTS"] = SupportLayout.knownHosts.path
+        environment["MYDGX_LANGUAGE"] = AppLanguage.active.rawValue
         environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
         process.environment = environment
         let output = Pipe()

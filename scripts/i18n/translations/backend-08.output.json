@@ -1,0 +1,16 @@
+{
+  "Clave o valor inválido para .env": "Invalid key or value for .env",
+  "Descarga cancelada · se borraron los archivos incompletos": "Download cancelled · incomplete files were deleted",
+  "El token de Hugging Face debe empezar por hf_ y no contener espacios": "The Hugging Face token must start with hf_ and contain no spaces",
+  "Elige guardar o quitar el token, no ambas cosas": "Choose either saving or removing the token, not both",
+  "Hugging Face rechazó el token: es inválido o ha caducado": "Hugging Face rejected the token: it is invalid or expired",
+  "No se pudo escribir .env; revisa los permisos del archivo": "Could not write .env; check the file permissions",
+  "No se pudo verificar el token con Hugging Face": "Could not verify the token with Hugging Face",
+  "Solo hay drafter o proyector de visión: falta el modelo principal": "Only a drafter or vision projector is present: the main model is missing",
+  "{0} debe estar entre {1} y {2}": "{0} must be between {1} and {2}",
+  "{0} debe ser un número entero": "{0} must be an integer",
+  "{0} debe ser verdadero o falso": "{0} must be true or false",
+  "{0} contiene caracteres no permitidos": "{0} contains characters that are not allowed",
+  "{0} no se puede cambiar desde Configuración": "{0} cannot be changed from Settings",
+  "{0} · se borraron los archivos incompletos": "{0} · incomplete files were deleted"
+}

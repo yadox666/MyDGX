@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=lib/language.sh
+if [[ -f "$(dirname "${BASH_SOURCE[0]}")/lib/language.sh" ]]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/language.sh"
+else
+  pick() { if [[ "${MYDGX_LANGUAGE:-en}" == "es" ]]; then printf '%s' "$1"; else printf '%s' "${2:-$1}"; fi; }
+  say() { pick "$@"; printf '\n'; }
+fi
+
 ROOT="${1:-}"
 GATEWAY_PORT="${2:-4000}"
 OPENWEBUI_VERSION="${3:-0.13.4}"
@@ -11,28 +19,28 @@ MYDGX_TOOL_API_KEY="${7:-}"
 MYDGX_PORT="${8:-8088}"
 
 fail() {
-  printf 'ERROR: %s\n' "$*" >&2
+  printf 'ERROR: %s\n' "$(pick "$@")" >&2
   exit 1
 }
 
 [[ -n "$ROOT" && "$ROOT" == /* && -x "$ROOT/.venv/bin/python" ]] ||
-  fail "La instalación de MyDGX no está preparada."
+  fail "La instalación de MyDGX no está preparada." "The MyDGX installation is not ready."
 [[ "$GATEWAY_PORT" =~ ^[0-9]+$ ]] && ((GATEWAY_PORT >= 1 && GATEWAY_PORT <= 65535)) ||
-  fail "El puerto del gateway no es válido."
+  fail "El puerto del gateway no es válido." "The gateway port is not valid."
 [[ -z "$OPENWEBUI_VERSION" || "$OPENWEBUI_VERSION" =~ ^[A-Za-z0-9._+-]+$ ]] ||
-  fail "La versión de Open WebUI no es válida."
+  fail "La versión de Open WebUI no es válida." "The Open WebUI version is not valid."
 [[ -z "$SEARXNG_QUERY_URL" || "$SEARXNG_QUERY_URL" =~ ^http://127\.0\.0\.1:[0-9]+/search$ ]] ||
-  fail "La URL local de SearXNG no es válida."
+  fail "La URL local de SearXNG no es válida." "The local SearXNG URL is not valid."
 [[ -z "$COMFYUI_WORKFLOW_FILE" ||
    ( "$COMFYUI_WORKFLOW_FILE" == /* && -f "$COMFYUI_WORKFLOW_FILE" && ! -L "$COMFYUI_WORKFLOW_FILE" ) ]] ||
-  fail "El workflow de ComfyUI no es válido."
+  fail "El workflow de ComfyUI no es válido." "The ComfyUI workflow is not valid."
 [[ -z "$COMFYUI_NODES_FILE" ||
    ( "$COMFYUI_NODES_FILE" == /* && -f "$COMFYUI_NODES_FILE" && ! -L "$COMFYUI_NODES_FILE" ) ]] ||
-  fail "El mapa de nodos de ComfyUI no es válido."
+  fail "El mapa de nodos de ComfyUI no es válido." "The ComfyUI node map is not valid."
 [[ -z "$MYDGX_TOOL_API_KEY" || "$MYDGX_TOOL_API_KEY" =~ ^[A-Za-z0-9_-]{32,}$ ]] ||
-  fail "La credencial de herramientas no es válida."
+  fail "La credencial de herramientas no es válida." "The tool credential is not valid."
 [[ "$MYDGX_PORT" =~ ^[0-9]+$ ]] && ((MYDGX_PORT >= 1 && MYDGX_PORT <= 65535)) ||
-  fail "El puerto de MyDGX no es válido."
+  fail "El puerto de MyDGX no es válido." "The MyDGX port is not valid."
 
 OPENWEBUI_ROOT="$HOME/.local/share/mydgx/open-webui"
 VENV="$OPENWEBUI_ROOT/venv"
@@ -42,7 +50,7 @@ mkdir -p "$OPENWEBUI_ROOT" "$DATA_DIR"
 chmod 0700 "$OPENWEBUI_ROOT" "$DATA_DIR"
 
 force_install="${MYDGX_FORCE_INSTALL:-0}"
-[[ "$force_install" =~ ^[01]$ ]] || fail "MYDGX_FORCE_INSTALL debe valer 0 o 1."
+[[ "$force_install" =~ ^[01]$ ]] || fail "MYDGX_FORCE_INSTALL debe valer 0 o 1." "MYDGX_FORCE_INSTALL must be 0 or 1."
 fingerprint="$(
   {
     printf 'open-webui=%s\n' "${OPENWEBUI_VERSION:-latest-installed}"
@@ -74,10 +82,10 @@ if [[ "$install_required" == "1" ]]; then
   "$VENV/bin/python" -m pip install "$package"
   printf '%s\n' "$fingerprint" >"$OPENWEBUI_ROOT/.install-fingerprint"
 else
-  echo "Open WebUI ya está preparado; se omite la instalación pip."
+  say "Open WebUI ya está preparado; se omite la instalación pip." "Open WebUI is already ready; skipping pip install."
 fi
 [[ -x "$VENV/bin/open-webui" ]] ||
-  fail "La instalación no creó el ejecutable open-webui."
+  fail "La instalación no creó el ejecutable open-webui." "The installation did not create the open-webui executable."
 "$VENV/bin/python" -c 'import open_webui'
 
 "$ROOT/.venv/bin/python" - \
@@ -90,6 +98,7 @@ fi
   "$MYDGX_TOOL_API_KEY" \
   "$MYDGX_PORT" <<'PY'
 import json
+import os
 import pathlib
 import secrets
 import shlex
@@ -165,7 +174,11 @@ if comfyui_workflow_file and comfyui_nodes_file:
     workflow = json.loads(pathlib.Path(comfyui_workflow_file).read_text(encoding="utf-8"))
     nodes = json.loads(pathlib.Path(comfyui_nodes_file).read_text(encoding="utf-8"))
     if not isinstance(workflow, dict) or not isinstance(nodes, list):
-        raise SystemExit("La configuración ComfyUI no tiene el formato esperado.")
+        raise SystemExit(
+            "La configuración ComfyUI no tiene el formato esperado."
+            if os.environ.get("MYDGX_LANGUAGE") == "es"
+            else "The ComfyUI configuration does not have the expected format."
+        )
     values.update({
         "ENABLE_IMAGE_GENERATION": "True",
         "IMAGE_GENERATION_ENGINE": "comfyui",
@@ -203,4 +216,4 @@ env_path.write_text(
 )
 PY
 chmod 0600 "$ENV_FILE"
-printf 'Open WebUI preparado en %s para el gateway local :%s.\n' "$OPENWEBUI_ROOT" "$GATEWAY_PORT"
+say "Open WebUI preparado en $OPENWEBUI_ROOT para el gateway local :$GATEWAY_PORT." "Open WebUI ready at $OPENWEBUI_ROOT for the local gateway :$GATEWAY_PORT."

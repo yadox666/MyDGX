@@ -1,0 +1,10 @@
+{
+  "Descarga fallida": "Download failed",
+  "Error arrancando perfil": "Error starting profile",
+  "Error cargando modelo": "Error loading model",
+  "Error ejecutando benchmark": "Error running benchmark",
+  "Modelo defectuoso": "Defective model",
+  "Modelo incompleto": "Incomplete model",
+  "{0}: llama-server agotó el tiempo de arranque ({1} s)": "{0}: llama-server timed out while starting ({1} s)",
+  "{0}{1}: el benchmark falló y se ha marcado como {2}": "{0}{1}: the benchmark failed and it has been flagged as {2}"
+}

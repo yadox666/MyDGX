@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# shellcheck source=lib/language.sh
+if [[ -f "$(dirname "${BASH_SOURCE[0]}")/lib/language.sh" ]]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/language.sh"
+else
+  pick() { if [[ "${MYDGX_LANGUAGE:-en}" == "es" ]]; then printf '%s' "$1"; else printf '%s' "${2:-$1}"; fi; }
+  say() { pick "$@"; printf '\n'; }
+fi
+
 VERSION="${MYDGX_HASHCAT_VERSION:-7.1.2}"
 INSTALL_ROOT="${MYDGX_HASHCAT_ROOT:-$HOME/.local/share/mydgx/hashcat}"
 BIN_DIR="${MYDGX_LOCAL_BIN:-$HOME/.local/bin}"
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-  echo "MYDGX_HASHCAT_VERSION no es válida." >&2
+  say "MYDGX_HASHCAT_VERSION no es válida." "MYDGX_HASHCAT_VERSION is not valid." >&2
   exit 2
 }
 case "$VERSION" in
@@ -15,11 +23,11 @@ case "$VERSION" in
 esac
 ARCHIVE_SHA256="${MYDGX_HASHCAT_SHA256:-$default_sha256}"
 [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
-  echo "Hashcat $VERSION necesita MYDGX_HASHCAT_SHA256 con el SHA-256 del .7z publicado." >&2
+  say "Hashcat $VERSION necesita MYDGX_HASHCAT_SHA256 con el SHA-256 del .7z publicado." "Hashcat $VERSION requires MYDGX_HASHCAT_SHA256 with the SHA-256 of the published .7z." >&2
   exit 2
 }
 [[ "$INSTALL_ROOT" == "$HOME/"* && "$BIN_DIR" == "$HOME/"* ]] || {
-  echo "Hashcat solo puede instalarse dentro del directorio del usuario." >&2
+  say "Hashcat solo puede instalarse dentro del directorio del usuario." "Hashcat can only be installed within the user home directory." >&2
   exit 2
 }
 
@@ -69,7 +77,7 @@ if [[ -x "$INSTALL_ROOT/hashcat.bin" &&
   write_runtime_wrapper "$INSTALL_ROOT"
   write_launcher
   "$BIN_DIR/hashcat" --version >/dev/null
-  printf 'Hashcat %s ya está instalado en %s.\n' "$VERSION" "$INSTALL_ROOT"
+  say "Hashcat $VERSION ya está instalado en $INSTALL_ROOT." "Hashcat $VERSION is already installed at $INSTALL_ROOT."
   exit 0
 fi
 
@@ -84,7 +92,7 @@ curl --fail --location --retry 5 \
   "https://github.com/hashcat/hashcat/releases/download/v${VERSION}/hashcat-${VERSION}.7z" \
   --output "$archive"
 printf '%s  %s\n' "$ARCHIVE_SHA256" "$archive" | sha256sum --check --status || {
-  echo "El archivo de Hashcat $VERSION no coincide con el SHA-256 fijado." >&2
+  say "El archivo de Hashcat $VERSION no coincide con el SHA-256 fijado." "The Hashcat $VERSION archive does not match the pinned SHA-256." >&2
   exit 1
 }
 7z x -y "-o$work/release" "$archive" >/dev/null
@@ -94,7 +102,8 @@ if [[ -x "$release_root/hashcat.bin" ]] &&
    "$release_root/hashcat.bin" --version >/dev/null 2>&1; then
   cp -a "$release_root/." "$candidate/"
 else
-  echo "El binario publicado no funciona en $(uname -m); compilando Hashcat $VERSION."
+  machine="$(uname -m)"
+  say "El binario publicado no funciona en $machine; compilando Hashcat $VERSION." "The published binary does not work on $machine; building Hashcat $VERSION."
   source_root="$work/source"
   git clone \
     --depth 1 \
@@ -121,5 +130,5 @@ write_launcher
 trap - EXIT
 rm -rf -- "$work"
 
-printf 'Hashcat %s instalado en %s.\n' "$VERSION" "$INSTALL_ROOT"
-printf 'Añade %s a PATH si todavía no está incluido.\n' "$BIN_DIR"
+say "Hashcat $VERSION instalado en $INSTALL_ROOT." "Hashcat $VERSION installed at $INSTALL_ROOT."
+say "Añade $BIN_DIR a PATH si todavía no está incluido." "Add $BIN_DIR to PATH if it is not already included."

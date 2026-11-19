@@ -17,12 +17,7 @@
   <strong>Actualizaciones seguras</strong>
 </p>
 
-> **¿Primera instalación?** Sigue el
-> **[Quickstart para desplegar un Spark con MyDGXTray](docs/quickstart.md)**.
-> Explica paso a paso la descarga desde GitHub, detección del equipo, acceso SSH,
-> primer despliegue y conexión local o remota.
-
-![Resumen de MyDGX en NVIDIA DGX Spark](docs/screenshots/summary-nvidia.png)
+![Resumen de MyDGX en NVIDIA DGX Spark](docs/screenshots/resumen-darkmode.png)
 
 ## ¿Qué es MyDGX?
 
@@ -30,7 +25,11 @@ MyDGX reúne en una sola interfaz las tareas habituales de un equipo de IA local
 
 - monitorización de GPU, CPU, memoria unificada, temperatura, potencia, red y disco;
 - histórico persistente en SQLite con navegación de 1 hora a 7 días;
-- inventario, búsqueda, descarga, inspección y eliminación de modelos;
+- inventario, inspección y eliminación de modelos;
+- búsqueda en Hugging Face con recomendador para el Spark y comprobación previa
+  de las cabeceras GGUF antes de descargar;
+- descarga por nombre con Ollama e importación de GGUF propios desde un ZIP, con
+  prueba automática al terminar;
 - hasta dos perfiles simultáneos, cada uno con varios modelos, motores y puertos;
 - deduplicación de modelos compartidos y preflight conjunto de memoria, alias y puertos;
 - cálculo preventivo de memoria para pesos, contexto, caché KV y reserva del sistema;
@@ -38,14 +37,17 @@ MyDGX reúne en una sola interfaz las tareas habituales de un equipo de IA local
 - apps propias que arrancan y se paran con el perfil (por ejemplo un RAG que usa sus modelos);
 - encendido inmediato de un modelo desde *Modelos* (perfil Quick: sobrevive a un deploy, no a un reinicio del equipo) y perfil Default con los modelos que deben arrancar siempre;
 - modo memoria para pausar servicios opcionales y restaurarlos después;
-- benchmarks reproducibles con cola automática para modelos nuevos;
+- benchmarks reproducibles con cola automática para modelos nuevos y un
+  [ranking de modelos probados en el Spark](docs/modelos-probados.md);
 - chat local, Open WebUI y laboratorio multimodal;
 - asistente MyDGX local con documentación, telemetría en vivo y acciones confirmadas;
 - catálogo OpenAI compatible para todos los modelos del perfil activo;
 - comprobación de DGX OS, CUDA, kernel, drivers, llama.cpp, paquetes y servicios;
 - actualizaciones controladas con verificación posterior de integridad;
 - logs técnicos, trabajos y auditoría persistentes;
-- modos día y noche, diseño responsive e identidad automática del fabricante.
+- modos día y noche, diseño responsive e identidad automática del fabricante;
+- prueba de aceptación por SSH para [comprobar un DGX Spark antes de comprarlo](docs/comprobar-spark.md),
+  nuevo o de segunda mano.
 
 Todo funciona de forma local. Los tokens y claves se leen desde `.env`; no se
 guardan en SQLite ni se devuelven al navegador.
@@ -70,56 +72,254 @@ También funciona en Ubuntu y otros entornos de desarrollo. Las funciones
 dependientes de NVIDIA, systemd, APT, NVMe o SMART se muestran como no disponibles
 cuando el sistema no las ofrece.
 
+## Instalación rápida desde macOS (recomendada)
+
+Si tienes un Mac, no necesitas Terminal, Git, Python ni Node.js. **MyDGXTray**, la
+app de la barra de menús, trae MyDGX dentro y un asistente lo instala en el
+Spark por SSH. El Spark compila e instala todo lo demás.
+
+**Necesitas:**
+- macOS 13 o posterior (Apple Silicon o Intel);
+- un DGX Spark (o un equipo GB10 compatible) con el primer arranque ya hecho;
+- el usuario y la contraseña de ese primer arranque, con permiso `sudo`;
+- los dos equipos en la misma red, o acceso SSH remoto, e Internet durante la
+  instalación.
+
+**Pasos:**
+
+1. Descarga `MyDGXTray-<versión>-macos-universal.zip` desde
+   [Releases](https://github.com/yadox666/MyDGX/releases), descomprímelo y
+   arrastra **MyDGXTray** a `Aplicaciones`.
+2. Ábrela. Si macOS la bloquea, ve a **Ajustes del Sistema › Privacidad y
+   seguridad** y pulsa **Abrir igualmente**. El **Asistente de instalación
+   Spark** se abre solo.
+3. **Buscar:** pulsa **Buscar mi Spark** y acepta el permiso de **Red local**.
+   Elige el equipo o escribe su IP o nombre, por ejemplo `spark-1a2b.local`.
+4. **Conectar:** escribe el usuario y la contraseña del Spark. El asistente
+   guarda su huella SSH, crea una clave solo para este Mac y la autoriza. La
+   contraseña se usa una vez y no se guarda.
+5. **Instalar:** pulsa **Instalar MyDGX**. La primera vez tarda entre 20 y 40
+   minutos; el Mac no se duerme mientras tanto. Si algo falla, **Reintentar**
+   conserva lo ya instalado.
+6. **Listo:** pulsa **Abrir Dashboard**.
+
+<table>
+  <tr>
+    <td width="50%"><strong>1 · Buscar</strong><br><img src="docs/images/setup-find.png" alt="Asistente: buscar el Spark en la red"></td>
+    <td width="50%"><strong>2 · Conectar</strong><br><img src="docs/images/setup-connect.png" alt="Asistente: usuario y contraseña del Spark"></td>
+  </tr>
+  <tr>
+    <td width="50%"><strong>3 · Instalar</strong><br><img src="docs/images/setup-install.png" alt="Asistente: instalar MyDGX en el Spark"></td>
+    <td width="50%"><strong>4 · Listo</strong><br><img src="docs/images/setup-done.png" alt="Asistente: Spark listo"></td>
+  </tr>
+</table>
+
+Desde entonces, MyDGX vive en la barra de menús, junto al reloj:
+- mantiene un túnel SSH, así que el dashboard abre en una dirección local del
+  Mac (`http://127.0.0.1:…`) sin abrir puertos en el router, y se reconecta solo;
+- da acceso a Open WebUI, ComfyUI, la terminal SSH y las apps de los perfiles;
+- para actualizar, instala la nueva versión de la app y pulsa **Preferencias →
+  Despliegue → Guardar y desplegar**. Conserva `.env`, modelos y bases de datos;
+- para añadir otro Spark o un servidor remoto, usa la **varita mágica** de
+  *Preferencias*.
+
+Guía completa, con permisos, claves SSH propias, acceso remoto y solución de
+problemas: **[Inicio rápido con MyDGXTray](docs/quickstart.md)**. Sin Mac, o para
+desarrollar, sigue la [instalación manual](#instalación-manual-linux-o-desarrollo).
+
 ## Recorrido por la aplicación
 
-### Perfiles multimodelo
+Cada apartado corresponde a una entrada del menú principal. Las capturas están
+tomadas en modo noche sobre un NVIDIA DGX Spark real. La interfaz está disponible
+en español e inglés: el idioma se toma del navegador y se cambia con el botón de
+idioma de la cabecera o desde *Configuración*.
 
-Un perfil describe un grupo operativo completo: modelos, alias, motores, puertos,
-contextos, slots, cuantización, parámetros de sampling, caché KV, modalidades y
-límites de memoria.
+- [Barra lateral](#barra-lateral)
+- [Resumen](#resumen)
+- [Chat](#chat)
+- [Modelos](#modelos)
+- [Perfiles](#perfiles-multimodelo)
+- [Benchmarks](#benchmarks)
+- [Almacenamiento](#almacenamiento)
+- [Motores](#motores)
+- [Laboratorio IA](#laboratorio-ia)
+- [Configuración](#configuración)
+- [Sistema](#sistema)
+- [Logs](#logs)
 
-![Perfiles multimodelo](docs/screenshots/profiles.png)
+### Barra lateral
 
-Antes de arrancar, MyDGX:
+<img src="docs/screenshots/barra-lateral-darkmode.png" width="260" alt="Barra lateral con perfiles activos y memoria">
 
-1. comprueba que los puertos no se repitan;
-2. estima pesos, contexto, caché y reserva para el sistema;
-3. descarga y verifica los modelos ausentes;
-4. arranca los modelos en orden y valida su endpoint de salud;
-5. reduce el contexto y reintenta cuando detecta saturación de memoria;
-6. revierte el grupo completo si no puede dejarlo en un estado consistente.
+Siempre visible junto al menú. Identifica el equipo y resume lo que está cargado.
 
-El perfil activado se convierte en el predeterminado para el próximo arranque.
+- fabricante, modelo y sistema operativo detectados (DGX Spark, GB10, DGX OS);
+- perfiles activos con sus modelos y acceso directo a la app web del perfil;
+- barra de memoria unificada con el reparto por modelo y el total usado;
+- contadores de modelos y perfiles cargados junto a cada entrada del menú.
 
-### Sistema y servicios
+### Resumen
 
-La página Sistema diferencia claramente DGX OS, Ubuntu, Debian y otros sistemas,
-y muestra comprobaciones con estados correcto, aviso u opcional.
+![Resumen](docs/screenshots/resumen-darkmode.png)
 
-![Comprobación del sistema](docs/screenshots/system.png)
+Página de inicio: estado del equipo de un vistazo y accesos directos a las
+herramientas instaladas.
 
-Incluye versiones de kernel, driver NVIDIA, CUDA, llama.cpp, Ollama, Docker,
-Python y paquetes relevantes. Tras una actualización comprueba APT, DKMS,
-NVIDIA Container Toolkit y la necesidad de recompilar llama.cpp.
+- saludo con el estado del Spark, host, arquitectura y tiempo encendido;
+- plataforma, GPU, memoria unificada y disco detectados;
+- accesos a DGX Dashboard, Open WebUI, ComfyUI y a las apps web de los perfiles;
+- indicadores en vivo de GPU, CPU, memoria unificada y disco con umbrales;
+- **mapa de memoria unificada** en vivo: driver CUDA, cada modelo, caché de disco
+  recuperable y memoria libre;
+- botón *Parar modelos* en la cabecera para liberar toda la inferencia de golpe.
 
-### Motores de inferencia
+![Gateway y servicios en el Resumen](docs/screenshots/resumen-gateway-darkmode.png)
 
-![Motores de inferencia](docs/screenshots/engines.png)
+- recursos en vivo (temperatura de GPU, memoria usada y tráfico de red);
+- **Gateway API**: URL base OpenAI compatible, puerto, autenticación y modelos
+  publicados con el nombre exacto que hay que usar en el campo `model`;
+- estado de los servicios (Ollama, Open WebUI, ComfyUI, DGX Dashboard).
 
-MyDGX instala llama.cpp, Ollama y un servicio Whisper OpenAI-compatible
-acelerado con CUDA sobre la imagen oficial NVIDIA PyTorch para GB10. También
-descubre vLLM, SGLang, TensorRT-LLM, LM Studio, ComfyUI, NVIDIA Riva y NVIDIA
-NIM; esos motores externos se registran por endpoint sin mezclar necesariamente
-sus stacks CUDA o Python.
+![Telemetría del sistema](docs/screenshots/resumen-telemetria-darkmode.png)
 
-ComfyUI, Whisper y SearXNG pueden activarse o desactivarse de forma persistente
-desde *Motores*. El **modo memoria** pausa temporalmente los servicios opcionales
-(ComfyUI, Whisper, TTS, Open WebUI y SearXNG), descarga los modelos de Ollama y
-vacía la caché de páginas para hacer sitio a un modelo grande. *Restaurar* vuelve
-a arrancar exactamente lo que se paró. El **mapa de memoria unificada** muestra en
-vivo qué ocupa los 128 GB. Detalle en la [Guía de uso](docs/guia-de-uso.md#motores).
+- **telemetría histórica** persistente en SQLite, de 1 hora a 7 días, con
+  navegación hacia atrás;
+- gráficas de utilización y temperatura de GPU, potencia, CPU y memoria, red y
+  E/S de disco, con media y máximo del intervalo.
 
-### Recomendaciones para DGX Spark
+![Consumo de inferencia por modelo](docs/screenshots/resumen-consumo-darkmode.png)
+
+- **consumo por modelo**: GPU, memoria de GPU, RAM unificada y CPU de cada modelo
+  cargado, con su histórico;
+- indica si la métrica se atribuye al proceso, a Ollama o si el motor no la
+  expone.
+
+### Chat
+
+![Chat con el asistente MyDGX](docs/screenshots/chat-darkmode.png)
+
+Chat local con cualquier modelo cargado y con el **asistente MyDGX**.
+
+- selector de modelo entre el asistente y los modelos de los perfiles activos;
+- el asistente consulta telemetría, sistema, modelos, perfiles y documentación
+  con herramientas de solo lectura;
+- las acciones que propone (arrancar perfiles, liberar memoria…) siempre
+  requieren confirmación en la interfaz;
+- sugerencias de preguntas frecuentes y acceso a Open WebUI para una experiencia
+  avanzada.
+
+Detalle en [Asistente MyDGX](docs/asistente-mydgx.md).
+
+### Modelos
+
+![Modelos instalados y mapa de memoria](docs/screenshots/modelos-darkmode.png)
+
+Biblioteca local y descarga de modelos.
+
+- pestañas *Instalados*, *Explorar Hugging Face*, *Descargar con Ollama* e
+  *Importar ZIP*;
+- mapa de memoria unificada para ver qué cabe antes de encender nada;
+- filtros por estado (cargados), modalidad (texto, visión, voz, imagen y vídeo),
+  origen (Ollama, Hugging Face) y tamaño;
+- ficha de cada modelo: parámetros, cuantización, familia, formato, contexto al
+  encender, digest y memoria estimada frente a la libre;
+- **Encender** carga un modelo al momento en el perfil Quick; la casilla
+  **Default** lo añade al perfil que arranca siempre con MyDGX;
+- verificación de integridad, favoritos, carga y descarga de Ollama en memoria y
+  borrado de modelos que no use ningún perfil.
+
+#### Explorar Hugging Face
+
+![Recomendador de Hugging Face para el Spark](docs/screenshots/modelos-huggingface-darkmode.png)
+
+Busca modelos en el Hub y los ordena por lo que cabe y rinde en este Spark, no
+solo por popularidad.
+
+**Búsqueda**
+
+- tres vistas: *Para este Spark* (recomendador), *Todo Hugging Face* (búsqueda
+  general por nombre, autor o arquitectura) y *Favoritos*, que se guardan con su
+  ficha para revisarlos después;
+- filtros por tarea, tamaño (*Mejor calidad que cabe*, por ejemplo), contenido
+  (todos o solo sin censura, con enlace al catálogo de modelos sin censura),
+  modalidad de entrada, runtime y formato;
+- número de resultados por búsqueda y botón para analizar más candidatos;
+- se descartan los modelos que exigen runtimes que MyDGX no instala (por
+  ejemplo, las variantes REAP).
+
+**Recomendador**
+
+- cada tarjeta muestra la puntuación MyDGX (0–100), el estado (*Ideal*,
+  *Compatible*, *Ajustado* o *No recomendado*), si ya está instalado y etiquetas
+  como *Chat*, *Reasoning* o *Uncensored*;
+- el ranking usa la telemetría en vivo: memoria libre real y reserva del sistema;
+- orden alternativo por recomendación, rendimiento estimado (tok/s), menor
+  memoria, score de la comunidad, descargas, likes o tendencia;
+- ayuda integrada que explica en lenguaje llano Q8, MTP, Heretic, Abliterated y
+  otros términos.
+
+**Elegir archivos y descargar**
+
+- la ficha del repositorio lista las cuantizaciones, los shards, los proyectores
+  de visión (`mmproj`) y los drafters para decodificación especulativa;
+- antes de descargar, la **comprobación previa** lee las cabeceras GGUF remotas y
+  muestra arquitectura, cuantización, contexto nativo, MTP integrado y memoria
+  estimada con 32K de contexto;
+- avisa si faltan shards, si llama.cpp no reconoce la arquitectura, si el modelo
+  supera la memoria segura, si solo has elegido un drafter o un proyector, o si el
+  repositorio ofrece un drafter que no has seleccionado;
+- rechaza los ficheros que ya están descargados y reutiliza la descarga en curso
+  si el repositorio ya se está bajando;
+- al terminar, Benchmarks comprueba que el modelo arranca y responde y compara la
+  memoria real con la estimada.
+
+#### Descargar con Ollama
+
+![Descarga de modelos con Ollama](docs/screenshots/modelos-ollama-darkmode.png)
+
+Descarga un modelo por su nombre exacto. No es un buscador: para descubrir
+modelos usa *Explorar Hugging Face*.
+
+- acepta nombres de la biblioteca de Ollama (`qwen3:8b`) y GGUF de Hugging Face
+  con la ruta `hf.co/autor/repositorio:CUANTIZACIÓN`;
+- ejemplos de un clic (`qwen3:8b`, `llama3.2:3b`, `gemma3:12b`,
+  `nomic-embed-text`…) y enlace a la biblioteca de Ollama;
+- progreso en vivo y botón para cancelar;
+- MyDGX cancela la descarga si el tamaño no cabe en la memoria unificada;
+- al terminar, el modelo aparece en *Instalados* con su cuantización, familia y
+  parámetros, y si el modo automático está activo se encola su benchmark;
+- paneles de actividad de Ollama y de tareas recientes con el histórico de
+  descargas.
+
+#### Importar ZIP
+
+![Importación de un modelo GGUF desde un ZIP](docs/screenshots/modelos-importar-zip-darkmode.png)
+
+Sube un modelo GGUF que ya tienes en el ordenador: modelos que no están en
+Hugging Face, compilaciones propias o equipos sin conexión.
+
+- muestra el espacio libre, el tamaño máximo que admite el ZIP en ese momento y
+  el límite del modelo principal; el máximo absoluto es 512 GB y se cambia con
+  `MODEL_IMPORT_MAX_GB`;
+- una guía en cuatro pasos explica qué meter en el ZIP:
+  - el modelo `.gguf` (con todas sus partes `-0000N-of-0000M` si está dividido);
+  - el proyector `mmproj-*.gguf` para visión (opcional);
+  - un drafter `mtp-…`, `dspark-…` o `eagle3-…` para ganar velocidad (opcional);
+  - `README.md` y `LICENSE` (opcional);
+- el `mydgx.json` opcional fija nombre, descripción, licencia, modelo base,
+  etiquetas, tarea (`chat` o `vision`) y los ajustes del editor de modelos
+  (contexto, temperatura, `top_p`, ficheros del modelo, del `mmproj` y del
+  drafter…); hay una plantilla descargable;
+- la importación va en cinco pasos con progreso: subida, revisión del ZIP,
+  extracción, análisis del modelo y prueba;
+- se rechazan ZIP cifrados, enlaces simbólicos, rutas peligrosas, ficheros
+  duplicados, compresión anómala y GGUF dañados; el resto de ficheros se ignora
+  y se avisa;
+- el modelo queda en la biblioteca como `imported/nombre` y, si la prueba está
+  activada, se arranca igual que con **Encender** y se ejecuta un benchmark corto
+  con velocidad, latencia, memoria real y aceptación del drafter.
+
+#### Recomendaciones para DGX Spark
 
 La búsqueda de Hugging Face calcula el ranking con la memoria libre real y el
 presupuesto reservado para el sistema. Además de formato, cuantización, contexto,
@@ -139,34 +339,190 @@ cuatro Sparks enlazados; valores mayores que uno solo son válidos si ConnectX-7
 tensor parallel están realmente configurados. El ancho de banda base se ajusta con
 `SPARK_MEMORY_BANDWIDTH_GBPS` (273 GB/s por defecto).
 
-<details>
-<summary><strong>Ver la galería completa</strong></summary>
+### Perfiles multimodelo
 
-#### Modelos
+![Perfiles activos](docs/screenshots/perfiles-darkmode.png)
 
-![Inventario y descarga de modelos](docs/screenshots/models.png)
+Un perfil describe un grupo operativo completo: modelos, alias, motores, puertos,
+contextos, slots, cuantización, parámetros de sampling, caché KV, modalidades y
+límites de memoria.
 
-#### Chat local
+- hasta dos perfiles de usuario cargados a la vez, más **Default** y **Quick**;
+- cada tarjeta muestra modelos, puertos, memoria estimada y capacidad segura, con
+  una barra que indica si el conjunto cabe en memoria;
+- lista de modelos con motor, tarea, puerto y contexto;
+- perfil predeterminado (se recarga al iniciar MyDGX), favoritos, búsqueda,
+  edición, detención y borrado;
+- el editor avisa de los cambios sin guardar antes de cerrar.
 
-![Chat local](docs/screenshots/chat.png)
+![Perfil con app web](docs/screenshots/perfiles-app-darkmode.png)
 
-#### Laboratorio multimodal
+- **app del perfil**: un `start.sh` propio que arranca y se para con el perfil,
+  con estado, reinicio y botón *Abrir* cuando publica una web.
 
-![Laboratorio multimodal](docs/screenshots/laboratory.png)
+Antes de arrancar, MyDGX:
 
-#### Almacenamiento
+1. comprueba que los puertos no se repitan;
+2. estima pesos, contexto, caché y reserva para el sistema;
+3. descarga y verifica los modelos ausentes;
+4. arranca los modelos en orden y valida su endpoint de salud;
+5. reduce el contexto y reintenta cuando detecta saturación de memoria;
+6. revierte el grupo completo si no puede dejarlo en un estado consistente.
 
-![Almacenamiento, NVMe y SMART](docs/screenshots/storage.png)
+El perfil activado se convierte en el predeterminado para el próximo arranque.
 
-#### Logs persistentes
+### Benchmarks
 
-![Logs persistentes](docs/screenshots/logs.png)
+![Benchmarks](docs/screenshots/benchmarks-darkmode.png)
 
-#### Configuración
+Mide cada modelo del equipo con el mismo protocolo y dice cuál rinde mejor en esta
+máquina. No son cifras de catálogo: cada resultado sale de ejecutar el modelo aquí,
+aislado y con pruebas versionadas por tipo de tarea.
 
-![Configuración y gateway](docs/screenshots/settings.png)
+- flujo en cuatro pasos: elige, aísla (libera memoria y calienta solo ese
+  modelo), mide y compara;
+- pruebas por modalidad: texto (tok/s, primer token, estabilidad), voz (tiempo
+  real, error de palabras, inteligibilidad), imagen y vídeo (tiempo,
+  reproducibilidad), visión y embeddings (calidad semántica, NDCG);
+- **suite multimodal secuencial** para medir todos los modelos pendientes de una
+  vez; restaura después los perfiles y modelos residentes;
+- cola automática para los modelos nuevos cuando el sistema está libre;
+- histórico de solo añadido y exportación e importación en JSON.
 
-</details>
+![Rendimiento por categoría](docs/screenshots/benchmarks-ranking-darkmode.png)
+
+- contadores de runs históricos, válidos y artefactos medidos;
+- **ranking por categoría** con score MyDGX /100, tokens por segundo y tiempo al
+  primer token;
+- comparación por entorno (versiones de llama.cpp, driver…) para comparar solo
+  en igualdad de condiciones.
+
+![Eficiencia y memoria](docs/screenshots/benchmarks-eficiencia-darkmode.png)
+
+- salida frente a primer token en un gráfico de burbujas;
+- eficiencia por parámetro activo y aprovechamiento del ancho de banda de memoria
+  del GB10.
+
+![Velocidad y reconocimiento de voz](docs/screenshots/benchmarks-voz-darkmode.png)
+
+- velocidad frente a parámetros activos en escala logarítmica, distinguiendo MoE y
+  modelos densos;
+- ranking de reconocimiento de voz: tiempo real y tasa de error de palabras.
+
+![Síntesis de voz e imagen](docs/screenshots/benchmarks-sintesis-voz-darkmode.png)
+
+- síntesis de voz: score, tiempo real e inteligibilidad comprobada con Whisper
+  local;
+- generación de imagen: tiempo y reproducibilidad con semilla fija.
+
+![Fichas por modelo](docs/screenshots/benchmarks-fichas-darkmode.png)
+
+- **fichas por modelo** con score, salida, primer token, estabilidad, memoria
+  pico, tamaño, parámetros y cuantización;
+- búsqueda, orden por categoría y score, e importación de resultados.
+
+![Detalle de fichas](docs/screenshots/benchmarks-fichas-detalle-darkmode.png)
+
+- descripción, licencia, idiomas, modelo base y etiquetas de Hugging Face;
+- evolución del score, histórico del artefacto, repetición de la medida y ficha
+  completa descargable.
+
+Detalle en [Benchmarks](docs/benchmarks.md).
+
+> **¿Qué modelo uso?** Consulta el
+> **[ranking de modelos soportados y probados en DGX Spark](docs/modelos-probados.md#ranking-de-modelos-de-texto)**:
+> 32 modelos de texto, voz, imagen y visión medidos en un Spark real, con
+> velocidad, tamaño, parámetros y enlace a Hugging Face u Ollama.
+
+### Almacenamiento
+
+![Almacenamiento, NVMe y SMART](docs/screenshots/almacenamiento-darkmode.png)
+
+Estado de los discos y en qué se va el espacio.
+
+- **unidades NVMe y salud SMART**: temperatura, vida utilizada, reserva, horas y
+  ciclos de encendido, errores, apagados inseguros y datos leídos y escritos;
+- **mapa de almacenamiento** con el mismo estilo que el de memoria;
+- **uso real**: distribución del espacio por tipo de dato (sistema, modelos, apps,
+  MyDGX…), medida en segundo plano y guardada en caché;
+- **apps de usuario**: cada directorio del home con su tamaño;
+- capacidad de cada partición, sin los montajes de solo lectura de snap.
+
+### Motores
+
+![Motores de inferencia y modo memoria](docs/screenshots/motores-darkmode.png)
+
+MyDGX instala llama.cpp, Ollama y un servicio Whisper OpenAI-compatible
+acelerado con CUDA sobre la imagen oficial NVIDIA PyTorch para GB10. También
+descubre vLLM, SGLang, TensorRT-LLM, LM Studio, ComfyUI, NVIDIA Riva y NVIDIA
+NIM; esos motores externos se registran por endpoint sin mezclar necesariamente
+sus stacks CUDA o Python.
+
+- tarjeta de cada runtime con versión, estado y capacidades (chat, visión,
+  embeddings, métricas, GGUF…);
+- ComfyUI, Whisper y SearXNG se activan o desactivan de forma persistente;
+- **modo memoria**: elige qué parar (perfiles llama.cpp, ComfyUI, Whisper, TTS,
+  Open WebUI, SearXNG, gateway, modelos de Ollama), muestra cuánto libera cada
+  uno y vacía la caché de páginas para hacer sitio a un modelo grande;
+- *Restaurar* vuelve a arrancar exactamente lo que se paró.
+
+Detalle en la [Guía de uso](docs/guia-de-uso.md#motores).
+
+### Laboratorio IA
+
+![Laboratorio multimodal](docs/screenshots/laboratorio-ia-darkmode.png)
+
+Prueba el perfil activo y los motores administrados sin salir del panel.
+
+- generación de imagen y vídeo con ComfyUI;
+- texto a voz, transcripción, visión, embeddings y reranking;
+- muestra el endpoint OpenAI que se usa (`/v1/images/generations`…) y el tipo de
+  entrada y salida;
+- las entradas y resultados no se guardan en SQLite.
+
+Detalle en [Laboratorio IA](docs/laboratorio-ia.md).
+
+### Configuración
+
+![Configuración y gateway](docs/screenshots/configuracion-darkmode.png)
+
+Preferencias del navegador y del gateway.
+
+- apariencia automática, día o noche, e idioma (automático, español o inglés);
+- clave de acceso MyDGX, guardada solo en `sessionStorage`;
+- estado de las integraciones (token de Hugging Face, actualizaciones, servicios);
+- **Gateway OpenAI del perfil activo**: arranque automático, búsqueda web con
+  SearXNG para OpenCode y Claude Code, interfaz de escucha, puerto, timeout,
+  tamaño máximo de petición y modelos publicados con su alias.
+
+### Sistema
+
+![Sistema y servicios](docs/screenshots/sistema-darkmode.png)
+
+La página Sistema diferencia claramente DGX OS, Ubuntu, Debian y otros sistemas,
+y muestra comprobaciones con estados correcto, aviso u opcional.
+
+- comprobaciones agrupadas: base, DGX OS, GPU, contenedores, seguridad y
+  servicios;
+- versiones de kernel, driver NVIDIA, CUDA, llama.cpp, Ollama, Docker, Python y
+  paquetes relevantes;
+- integridad de la instalación, servicios systemd y actualizaciones APT
+  controladas;
+- tras una actualización comprueba APT, DKMS, NVIDIA Container Toolkit y la
+  necesidad de recompilar llama.cpp, y ofrece una reparación guiada.
+
+### Logs
+
+![Logs persistentes](docs/screenshots/logs-darkmode.png)
+
+Diagnóstico y auditoría persistentes.
+
+- totales de eventos, avisos y errores de las últimas 24 horas y retención
+  configurada;
+- filtros por nivel, categoría y texto, y modo *En directo*;
+- cada evento muestra acción, entidad y categoría (perfiles, benchmarks,
+  runtime, HTTP…);
+- los tokens y secretos nunca se registran.
 
 ## Perfiles
 
@@ -224,7 +580,12 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 Si el gateway escucha fuera de localhost, configura `GATEWAY_API_KEY` y envía
 `Authorization: Bearer YOUR_GATEWAY_API_KEY`.
 
-## Inicio rápido
+## Instalación manual (Linux o desarrollo)
+
+En macOS es más fácil la
+[instalación rápida con MyDGXTray](#instalación-rápida-desde-macos-recomendada).
+Esta vía instala MyDGX a mano, directamente en el equipo, o lo despliega desde
+una copia del código con `./start.sh deploy`.
 
 ### Requisitos
 
@@ -304,6 +665,10 @@ BugHunter. Los skills respetan el alcance documentado y no habilitan acciones
 invasivas sin autorización.
 Las claves opcionales se inyectan únicamente mediante `MYDGX_GATEWAY_API_KEY`,
 `SHODAN_API_KEY` y `NVD_API_KEY`; no se escriben en la configuración.
+`SHODAN_API_KEY` y `NVD_API_KEY` se leen del entorno o, si faltan, del `.env` de
+MyDGX. `scripts/mcp_env.py` lee solo esos dos nombres y los pasa al proceso del
+MCP correspondiente, no a la shell del agente. Shodan se activa cuando hay clave
+y NVD funciona sin ella con el límite público.
 
 ### Claude Code
 
@@ -332,7 +697,8 @@ JSON limpio para scripts y CI.
 
 Los modos equivalen a los de OpenCode: `plan` y solo lectura por defecto;
 `--active` acepta ediciones, pide confirmación para bash y carga únicamente los
-MCP Playwright, NVD y, si existe `SHODAN_API_KEY`, Shodan (`--strict-mcp-config`).
+MCP Playwright, NVD y, si existe `SHODAN_API_KEY` en el entorno o en `.env`,
+Shodan (`--strict-mcp-config`).
 La búsqueda web está activada por defecto en los dos modos, con el mismo MCP
 `searxng` que OpenCode y la misma casilla de Configuración → Gateway. `WebSearch`
 y `WebFetch` nativos siguen bloqueados. Ambos modos bloquean subagentes y la
@@ -587,6 +953,7 @@ Modelo completo en [Seguridad](docs/seguridad.md).
 
 - **[Quickstart: desde GitHub hasta el primer despliegue](docs/quickstart.md)**
 - **[Cómo comprobar un DGX Spark antes de comprarlo](docs/comprobar-spark.md)**
+- **[Modelos soportados y probados: ranking con benchmarks reales](docs/modelos-probados.md)**
 - [Guía de uso por secciones](docs/guia-de-uso.md)
 - [Configuración: variables, secretos y servicios opcionales](docs/configuracion.md)
 - [Referencia completa de la API](docs/api.md)

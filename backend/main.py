@@ -46,7 +46,14 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Qu
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+from huggingface_hub import HfApi, get_hf_file_metadata, hf_hub_download, hf_hub_url, snapshot_download
+from huggingface_hub.utils import (
+    EntryNotFoundError,
+    GatedRepoError,
+    HfHubHTTPError,
+    RepositoryNotFoundError,
+    RevisionNotFoundError,
+)
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -148,8 +155,120 @@ def huggingface_token() -> str | None:
     return token or None
 
 
+def huggingface_failure_reason(exc: BaseException, repo_id: str) -> str | None:
+    """Why Hugging Face refused or interrupted a transfer, worded for the person who launched it."""
+    has_token = huggingface_token() is not None
+    if isinstance(exc, GatedRepoError):
+        if has_token:
+            return (
+                f"Repositorio restringido: la cuenta del HF_TOKEN no tiene acceso a {repo_id}. "
+                "Acepta sus condiciones o pide acceso en Hugging Face y vuelve a intentarlo"
+            )
+        return (
+            f"Repositorio restringido: {repo_id} exige una cuenta de Hugging Face con sus condiciones aceptadas. "
+            "Sin HF_TOKEN no se puede descargar; acepta las condiciones y configura HF_TOKEN en el .env de MyDGX"
+        )
+    if isinstance(exc, RepositoryNotFoundError):
+        if has_token:
+            return f"Repositorio no encontrado: {repo_id} no existe o la cuenta del HF_TOKEN no puede verlo"
+        return f"Repositorio no encontrado: {repo_id} no existe o es privado y requiere HF_TOKEN"
+    if isinstance(exc, RevisionNotFoundError):
+        return f"Revisión no encontrada en {repo_id}; recarga el modelo y vuelve a intentarlo"
+    if isinstance(exc, EntryNotFoundError):
+        return f"Un archivo seleccionado ya no está en {repo_id}; recarga el modelo y vuelve a elegir archivos"
+    if isinstance(exc, HfHubHTTPError):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 401:
+            return "Hugging Face rechazó el HF_TOKEN: es inválido o ha caducado"
+        if status == 403:
+            return f"Hugging Face denegó el acceso a {repo_id}: el HF_TOKEN no tiene permiso de lectura"
+        if status == 429:
+            return "Hugging Face limitó las peticiones; espera unos minutos y vuelve a intentarlo"
+        if isinstance(status, int) and status >= 500:
+            return f"Hugging Face no está disponible ahora (HTTP {status}); vuelve a intentarlo más tarde"
+    if isinstance(exc, OSError) and exc.errno == 28:
+        return "Sin espacio en disco: libera espacio y vuelve a intentarlo"
+    if isinstance(exc, (httpx.TransportError, ConnectionError, TimeoutError)):
+        return "Sin conexión con Hugging Face: revisa la red del equipo y vuelve a intentarlo"
+    return None
+
+
 def huggingface_cache_dir() -> Path:
     return Path(settings.hf_home).expanduser() / "hub"
+
+
+def hf_repo_cache_dir(repo_id: str) -> Path | None:
+    base = huggingface_cache_dir().resolve()
+    target = (base / f"models--{repo_id.replace('/', '--')}").resolve()
+    return target if base in target.parents else None
+
+
+def hf_snapshot_entries(repo_id: str) -> set[str]:
+    directory = hf_repo_cache_dir(repo_id)
+    snapshots = directory / "snapshots" if directory else None
+    if not snapshots or not snapshots.is_dir():
+        return set()
+    return {str(path.relative_to(snapshots)) for path in snapshots.rglob("*") if not path.is_dir()}
+
+
+def discard_failed_hf_download(repo_id: str, before: set[str]) -> int:
+    """Remove what a failed or cancelled transfer left behind: partial blobs and files it added; files that existed before stay."""
+    directory = hf_repo_cache_dir(repo_id)
+    if not directory or not directory.is_dir():
+        return 0
+    removed = 0
+    blobs = directory / "blobs"
+    if blobs.is_dir():
+        for partial in blobs.glob("*.incomplete"):
+            with suppress(OSError):
+                partial.unlink()
+                removed += 1
+    snapshots = directory / "snapshots"
+    if snapshots.is_dir():
+        added_blobs: set[Path] = set()
+        for path in list(snapshots.rglob("*")):
+            if path.is_dir() or str(path.relative_to(snapshots)) in before:
+                continue
+            if path.is_symlink():
+                added_blobs.add(path.resolve(strict=False))
+            with suppress(OSError):
+                path.unlink()
+                removed += 1
+        referenced = {path.resolve(strict=False) for path in snapshots.rglob("*") if path.is_symlink()}
+        for blob in added_blobs - referenced:
+            if blobs in blob.parents:
+                with suppress(OSError):
+                    blob.unlink()
+        for folder in sorted((path for path in snapshots.rglob("*") if path.is_dir()), key=lambda item: len(item.parts), reverse=True):
+            with suppress(OSError):
+                folder.rmdir()
+    remaining = snapshots.is_dir() and any(not path.is_dir() for path in snapshots.rglob("*"))
+    if not before and not remaining:
+        shutil.rmtree(directory, ignore_errors=True)
+    return removed
+
+
+def sweep_orphan_hf_partials() -> int:
+    """Partial blobs from transfers that died with the process; only safe while no download is running."""
+    removed = 0
+    hub = huggingface_cache_dir()
+    if not hub.is_dir():
+        return removed
+    for partial in hub.glob("models--*/blobs/*.incomplete"):
+        with suppress(OSError):
+            partial.unlink()
+            removed += 1
+    return removed
+
+
+async def cleanup_failed_hf_download(repo_ids: list[str], before: dict[str, set[str]]) -> int:
+    removed = 0
+    for repo_id in dict.fromkeys(repo for repo in repo_ids if repo):
+        try:
+            removed += await asyncio.to_thread(discard_failed_hf_download, repo_id, before.get(repo_id, set()))
+        except Exception as exc:
+            db.audit("huggingface.cleanup", repo_id, False, type(exc).__name__)
+    return removed
 
 
 def huggingface_card_cache_dir() -> Path:
@@ -647,6 +766,18 @@ class Database:
                     success INTEGER NOT NULL,
                     detail TEXT NOT NULL DEFAULT ''
                 );
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    target TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL,
+                    message TEXT NOT NULL DEFAULT '',
+                    log TEXT NOT NULL DEFAULT '',
+                    read_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS notifications_unread ON notifications(read_at, id);
                 CREATE TABLE IF NOT EXISTS job_results (
                     job_id TEXT PRIMARY KEY,
                     result_json TEXT NOT NULL,
@@ -1274,8 +1405,69 @@ class Database:
             detail={"success": success, "detail": safe_detail},
         )
 
+    def notify(
+        self,
+        kind: str,
+        title: str,
+        message: str,
+        *,
+        target: str = "",
+        log: str = "",
+        level: str = "error",
+    ) -> None:
+        """Store a user-facing alert; the same alert repeated within a minute is kept once."""
+        safe = {
+            "level": level if level in {"info", "warning", "error"} else "error",
+            "target": redact_log_text(target, 300),
+            "title": redact_log_text(title, 200),
+            "message": redact_log_text(message, 1000),
+            "log": redact_log_text(log, NOTIFICATION_LOG_MAX_CHARS),
+        }
+        now = utc_now()
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+        with self.connect() as connection:
+            duplicate = connection.execute(
+                "SELECT 1 FROM notifications WHERE kind=? AND target=? AND message=? AND created_at>=? LIMIT 1",
+                (kind, safe["target"], safe["message"], cutoff),
+            ).fetchone()
+            if duplicate:
+                return
+            connection.execute(
+                """
+                INSERT INTO notifications(created_at,level,kind,target,title,message,log)
+                VALUES(?,?,?,?,?,?,?)
+                """,
+                (now, safe["level"], kind, safe["target"], safe["title"], safe["message"], safe["log"]),
+            )
+            connection.execute(
+                "DELETE FROM notifications WHERE id NOT IN (SELECT id FROM notifications ORDER BY id DESC LIMIT ?)",
+                (NOTIFICATION_RETENTION,),
+            )
+            connection.commit()
+
+
+NOTIFICATION_RETENTION = 500
+NOTIFICATION_LOG_MAX_CHARS = 6000
 
 db = Database(settings.database_path)
+
+
+def notify_safely(kind: str, title: str, message: str, **details: str) -> None:
+    try:
+        db.notify(kind, title, message, **details)
+    except Exception:
+        pass
+
+
+def log_tail(path: Path, lines: int = 40) -> str:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - 64 * 1024))
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "\n".join(text.splitlines()[-lines:])
 
 
 def preference_value(key: str) -> str | None:
@@ -3815,6 +4007,12 @@ async def launch_profile_model(
                 detail, oom = startup_log_detail(log_path)
                 await stop_model_process(model_id)
                 prefix = "OOM: " if oom else ""
+                if not oom:
+                    notify_safely(
+                        "model.load_failed", "Error cargando modelo", f"{model['name']}: {detail}",
+                        target=str(model.get("model_repo") or model.get("model_ref") or model["name"]),
+                        log=log_tail(log_path),
+                    )
                 raise RuntimeError(f"{prefix}{detail}")
             try:
                 response = await client.get(health_url)
@@ -3830,6 +4028,12 @@ async def launch_profile_model(
                 pass
             await asyncio.sleep(1)
     await stop_model_process(model_id)
+    notify_safely(
+        "model.load_failed", "Error cargando modelo",
+        f"{model['name']}: llama-server agotó el tiempo de arranque ({settings.profile_start_timeout_seconds} s)",
+        target=str(model.get("model_repo") or model.get("model_ref") or model["name"]),
+        log=log_tail(log_path),
+    )
     raise RuntimeError("llama-server agotó el tiempo de arranque")
 
 
@@ -4165,6 +4369,9 @@ async def lifespan(_: FastAPI):
                 shutil.rmtree(leftover, ignore_errors=True)
             else:
                 leftover.unlink(missing_ok=True)
+    with suppress(OSError):
+        if removed_partials := sweep_orphan_hf_partials():
+            db.audit("huggingface.cleanup", "startup", True, f"{removed_partials} partial(s)")
     for stale in stale_download_jobs:
         cancelled = bool(stale.get("cancel_requested")) or stale["status"] == "cancelling"
         db.update_job(
@@ -4507,6 +4714,205 @@ async def public_config() -> dict[str, Any]:
         "benchmark_enabled": settings.benchmark_enabled,
         "benchmark_auto_new_models": settings.benchmark_auto_new_models,
     }
+
+
+ENV_FILE = ROOT / ".env"
+ENV_MANAGED_HEADER = "# Ajustes gestionados desde Configuración de MyDGX"
+HF_TOKEN_PATTERN = re.compile(r"^hf_[A-Za-z0-9_-]{16,200}$")
+# Authentication, network exposure and privileged switches stay out on purpose: they are only changed by hand in .env.
+EDITABLE_ENV_SETTINGS: dict[str, dict[str, Any]] = {
+    "HF_DOWNLOAD_WORKERS": {"attr": "hf_download_workers", "type": "int", "min": 1, "max": 16, "restart": False},
+    "BENCHMARK_ENABLED": {"attr": "benchmark_enabled", "type": "bool", "restart": False},
+    "BENCHMARK_AUTO_NEW_MODELS": {"attr": "benchmark_auto_new_models", "type": "bool", "restart": False},
+    "BENCHMARK_REPETITIONS": {"attr": "benchmark_repetitions", "type": "int", "min": 1, "max": 10, "restart": False},
+    "BENCHMARK_QUIET_SECONDS": {"attr": "benchmark_quiet_seconds", "type": "int", "min": 0, "max": 3600, "restart": False},
+    "ASSISTANT_ENABLED": {"attr": "assistant_enabled", "type": "bool", "restart": False},
+    "ASSISTANT_MODEL": {"attr": "assistant_model", "type": "str", "pattern": r"^[A-Za-z0-9._:/-]{1,120}$", "restart": False},
+    "ENABLE_PROFILE_AUTOSTART": {"attr": "enable_profile_autostart", "type": "bool", "restart": True},
+    "DEFAULT_PROFILE_ID": {"attr": "default_profile_id", "type": "str", "pattern": r"^[A-Za-z0-9._-]{0,120}$", "restart": True},
+    "PROFILE_START_TIMEOUT_SECONDS": {"attr": "profile_start_timeout_seconds", "type": "int", "min": 30, "max": 1800, "restart": False},
+    "MYDGX_SESSION_TTL_MINUTES": {"attr": "mydgx_session_ttl_minutes", "type": "int", "min": 5, "max": 1440, "restart": False},
+    "METRICS_RETENTION_HOURS": {"attr": "metrics_retention_hours", "type": "int", "min": 1, "max": 8760, "restart": False},
+    "LOG_RETENTION_DAYS": {"attr": "log_retention_days", "type": "int", "min": 1, "max": 365, "restart": False},
+    "MODEL_IMPORT_MAX_GB": {"attr": "model_import_max_gb", "type": "int", "min": 1, "max": 4096, "restart": False},
+}
+_env_write_lock = asyncio.Lock()
+
+
+def env_setting_value(key: str, spec: dict[str, Any], raw: Any) -> Any:
+    if spec["type"] == "bool":
+        if not isinstance(raw, bool):
+            raise ValueError(f"{key} debe ser verdadero o falso")
+        return raw
+    if spec["type"] == "int":
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            raise ValueError(f"{key} debe ser un número entero")
+        if not spec["min"] <= raw <= spec["max"]:
+            raise ValueError(f"{key} debe estar entre {spec['min']} y {spec['max']}")
+        return raw
+    if not isinstance(raw, str) or not re.fullmatch(spec["pattern"], raw):
+        raise ValueError(f"{key} contiene caracteres no permitidos")
+    return raw
+
+
+def env_serialize(value: Any) -> str:
+    return ("true" if value else "false") if isinstance(value, bool) else str(value)
+
+
+def write_env_values(updates: dict[str, str]) -> None:
+    """Rewrite only the given keys in .env, keeping comments and order; the file stays private to its owner."""
+    for key, value in updates.items():
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key) or any(char in value for char in "\r\n\0"):
+            raise ValueError("Clave o valor inválido para .env")
+    lines = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.is_file() else []
+    pending = dict(updates)
+    written: set[str] = set()
+    result: list[str] = []
+    for line in lines:
+        match = re.match(r"^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=", line)
+        key = match.group(1) if match else ""
+        if key in updates:
+            if key not in written:
+                result.append(f"{key}={pending.pop(key)}")
+                written.add(key)
+            continue
+        result.append(line)
+    if pending:
+        if ENV_MANAGED_HEADER not in result:
+            result.extend(["", ENV_MANAGED_HEADER])
+        result.extend(f"{key}={value}" for key, value in pending.items())
+    temporary = ENV_FILE.with_name(f".env.{uuid.uuid4().hex}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(result).rstrip("\n") + "\n")
+        os.replace(temporary, ENV_FILE)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def verify_hf_token(token: str) -> str:
+    try:
+        identity = HfApi(token=token).whoami(token=token)
+    except HfHubHTTPError as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in {401, 403}:
+            raise HTTPException(status_code=400, detail="Hugging Face rechazó el token: es inválido o ha caducado") from exc
+        raise HTTPException(status_code=502, detail="No se pudo verificar el token con Hugging Face") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="No se pudo verificar el token con Hugging Face") from exc
+    return str(identity.get("name") or "") if isinstance(identity, dict) else ""
+
+
+class EnvSettingsPayload(BaseModel):
+    values: dict[str, bool | int | str] = Field(default_factory=dict, max_length=len(EDITABLE_ENV_SETTINGS))
+    hf_token: str | None = Field(default=None, max_length=256)
+    clear_hf_token: bool = False
+
+
+def env_settings_snapshot() -> dict[str, Any]:
+    return {
+        "env_file": ENV_FILE.is_file(),
+        "hf_token_configured": huggingface_token() is not None,
+        "settings": [
+            {
+                "key": key,
+                "type": spec["type"],
+                "value": getattr(settings, spec["attr"]),
+                "default": Settings.model_fields[spec["attr"]].default,
+                "min": spec.get("min"),
+                "max": spec.get("max"),
+                "restart": spec["restart"],
+            }
+            for key, spec in EDITABLE_ENV_SETTINGS.items()
+        ],
+    }
+
+
+@app.get("/api/settings/env", dependencies=secure)
+async def get_env_settings() -> dict[str, Any]:
+    return env_settings_snapshot()
+
+
+@app.put("/api/settings/env", dependencies=secure)
+async def update_env_settings(payload: EnvSettingsPayload) -> dict[str, Any]:
+    if payload.hf_token is not None and payload.clear_hf_token:
+        raise HTTPException(status_code=400, detail="Elige guardar o quitar el token, no ambas cosas")
+    parsed: dict[str, Any] = {}
+    for key, raw in payload.values.items():
+        spec = EDITABLE_ENV_SETTINGS.get(key)
+        if spec is None:
+            raise HTTPException(status_code=400, detail=f"{key} no se puede cambiar desde Configuración")
+        try:
+            parsed[key] = env_setting_value(key, spec, raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    updates = {key: env_serialize(value) for key, value in parsed.items()}
+    hf_user = ""
+    if payload.hf_token is not None:
+        token = payload.hf_token.strip()
+        if not HF_TOKEN_PATTERN.fullmatch(token):
+            raise HTTPException(status_code=400, detail="El token de Hugging Face debe empezar por hf_ y no contener espacios")
+        hf_user = await asyncio.to_thread(verify_hf_token, token)
+        updates["HF_TOKEN"] = token
+    elif payload.clear_hf_token:
+        updates["HF_TOKEN"] = ""
+    if not updates:
+        return {"updated": [], "restart_required": [], **env_settings_snapshot()}
+    async with _env_write_lock:
+        try:
+            await asyncio.to_thread(write_env_values, updates)
+        except OSError as exc:
+            db.audit("settings.env", ",".join(sorted(updates)), False, type(exc).__name__)
+            raise HTTPException(status_code=500, detail="No se pudo escribir .env; revisa los permisos del archivo") from exc
+    for key, value in parsed.items():
+        setattr(settings, EDITABLE_ENV_SETTINGS[key]["attr"], value)
+    if "HF_TOKEN" in updates:
+        settings.hf_token = updates["HF_TOKEN"] or None
+    db.audit("settings.env", ",".join(sorted(updates)), True, "hf_token changed" if "HF_TOKEN" in updates else "")
+    return {
+        "updated": sorted(updates),
+        "restart_required": sorted(key for key in parsed if EDITABLE_ENV_SETTINGS[key]["restart"]),
+        "hf_user": hf_user,
+        **env_settings_snapshot(),
+    }
+
+
+class NotificationReadPayload(BaseModel):
+    ids: list[int] = Field(default_factory=list, max_length=500)
+    all: bool = False
+
+
+@app.get("/api/notifications", dependencies=secure)
+async def list_notifications(limit: int = Query(default=100, ge=1, le=NOTIFICATION_RETENTION)) -> dict[str, Any]:
+    items = db.rows(
+        "SELECT id,created_at,level,kind,target,title,message,log,read_at FROM notifications ORDER BY id DESC LIMIT ?",
+        (limit,),
+    )
+    unread = db.rows("SELECT COUNT(*) AS count FROM notifications WHERE read_at IS NULL")[0]["count"]
+    return {"unread": int(unread), "items": items}
+
+
+@app.post("/api/notifications/read", dependencies=secure)
+async def mark_notifications_read(payload: NotificationReadPayload) -> dict[str, int]:
+    now = utc_now()
+    if payload.all:
+        db.execute("UPDATE notifications SET read_at=? WHERE read_at IS NULL", (now,))
+    elif payload.ids:
+        marks = ",".join("?" for _ in payload.ids)
+        db.execute(f"UPDATE notifications SET read_at=? WHERE read_at IS NULL AND id IN ({marks})", (now, *payload.ids))
+    unread = db.rows("SELECT COUNT(*) AS count FROM notifications WHERE read_at IS NULL")[0]["count"]
+    return {"unread": int(unread)}
+
+
+@app.post("/api/settings/hf-token/verify", dependencies=secure)
+async def verify_configured_hf_token() -> dict[str, Any]:
+    token = huggingface_token()
+    if token is None:
+        return {"configured": False, "valid": False, "user": ""}
+    user = await asyncio.to_thread(verify_hf_token, token)
+    return {"configured": True, "valid": True, "user": user}
 
 
 class GatewayConfigPayload(BaseModel):
@@ -5377,11 +5783,32 @@ def hf_card_task_hints(front_matter: str) -> tuple[str | None, list[str]]:
     return (pipeline.group(1) if pipeline else None), hints[:64]
 
 
+def local_hf_health(repo_id: str, files: list[dict[str, Any]], marks: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    ggufs = [file for file in files if str(file["name"]).lower().endswith(".gguf")]
+    has_main = any(
+        file["complete"]
+        and "mmproj" not in str(file["name"]).casefold()
+        and not GGUF_AUXILIARY_PATTERN.search(str(file["name"]))
+        for file in ggufs
+    )
+    if ggufs and not has_main:
+        return {
+            "status": "incomplete",
+            "reason": "Solo hay drafter o proyector de visión: falta el modelo principal",
+            "file": "",
+        }
+    return marks.get(repo_id.casefold())
+
+
 def local_hf_models() -> list[dict[str, Any]]:
     hub = huggingface_cache_dir()
     models = []
     if not hub.exists():
         return models
+    try:
+        health_marks = model_health_marks()
+    except Exception:
+        health_marks = {}
     for directory in hub.glob("models--*"):
         repo_id = directory.name.removeprefix("models--").replace("--", "/")
         size = sum(item.stat().st_size for item in directory.rglob("*") if item.is_file() and not item.is_symlink())
@@ -5445,6 +5872,7 @@ def local_hf_models() -> list[dict[str, Any]]:
             "shard_count": len(details["shards"]),
             "partial_downloads": len(details["partials"]),
             "incomplete_shards": sum(1 for item in details["shards"] if not item["complete"]),
+            "health": local_hf_health(repo_id, files, health_marks),
             "uncensored": bool(
                 UNCENSORED_MODEL_PATTERN.search(repo_id)
                 or UNCENSORED_MODEL_PATTERN.search(front_matter)
@@ -6170,6 +6598,91 @@ def save_huggingface_favorites(models: list[dict[str, Any]]) -> None:
     )
 
 
+MODEL_HEALTH_KEY = "models.health"
+MODEL_LOAD_FAILURE_PATTERN = re.compile(
+    r"(?i)model loading error|failed to load model|error loading model|llama_model_load|"
+    r"unknown model architecture|unknown architecture|invalid (?:model )?file|gguf_init|"
+    r"not within the file bounds|end of file|failed to read|truncated|corrupt|missing tensor"
+)
+MODEL_TRUNCATION_PATTERN = re.compile(
+    r"(?i)not within the file bounds|end of file|failed to read|truncated|missing tensor|split"
+)
+
+
+def model_health_marks() -> dict[str, dict[str, Any]]:
+    try:
+        values = json.loads(preference_value(MODEL_HEALTH_KEY) or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return {str(key): dict(value) for key, value in values.items() if isinstance(value, dict)} if isinstance(values, dict) else {}
+
+
+def save_model_health_marks(marks: dict[str, dict[str, Any]]) -> None:
+    db.execute(
+        """
+        INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+        """,
+        (MODEL_HEALTH_KEY, json.dumps(marks), utc_now()),
+    )
+
+
+def clear_model_health(repo_id: str, filename: str | None = None) -> None:
+    marks = model_health_marks()
+    key = repo_id.casefold()
+    mark = marks.get(key)
+    if mark is None or (filename and mark.get("file") and mark["file"] != filename):
+        return
+    marks.pop(key)
+    save_model_health_marks(marks)
+
+
+def hf_repo_lacks_complete_files(repo_id: str) -> bool:
+    directory = hf_repo_cache_dir(repo_id)
+    if not directory or not directory.is_dir():
+        return False
+    details = local_hf_repo_details(directory)
+    return bool(details["partials"]) or any(not item["complete"] for item in details["shards"])
+
+
+def mark_model_health_from_benchmark(model: dict[str, Any], reason: str, job_id: str) -> str:
+    """Flag a downloaded GGUF whose benchmark failed: INCOMPLETO when files are missing or truncated, otherwise DEFECTUOSO."""
+    repo_id = str(model.get("model_repo") or "")
+    if not repo_id:
+        return ""
+    filename = str(model.get("model_filename") or "")
+    incomplete = (
+        bool(MODEL_TRUNCATION_PATTERN.search(reason))
+        or hf_repo_lacks_complete_files(repo_id)
+        or (filename and gguf_file_role(filename, {}) != "main")
+    )
+    status = "incomplete" if incomplete else "defective"
+    marks = model_health_marks()
+    marks[repo_id.casefold()] = {
+        "status": status,
+        "reason": redact_log_text(reason, 300),
+        "file": filename,
+        "job_id": job_id,
+        "at": utc_now(),
+    }
+    save_model_health_marks(marks)
+    db.audit("model.health", repo_id, False, status)
+    notify_safely(
+        f"model.{status}",
+        "Modelo incompleto" if status == "incomplete" else "Modelo defectuoso",
+        f"{repo_id}{f' · {filename}' if filename else ''}: el benchmark falló y se ha marcado como {'INCOMPLETO' if status == 'incomplete' else 'DEFECTUOSO'}",
+        target=repo_id,
+        log=reason,
+    )
+    return status
+
+
+def benchmark_failure_blames_model(message: str, launching: bool) -> bool:
+    if MODEL_LOAD_FAILURE_PATTERN.search(message):
+        return True
+    return launching and not re.search(r"(?i)memoria|memory|puerto|port|cancel|aislamiento|isolation", message)
+
+
 def hf_is_uncensored(repo_id: str, tags: list[str]) -> bool:
     evidence = " ".join([repo_id, *tags]).casefold()
     return any(marker in evidence for marker in HF_UNCENSORED_MARKERS)
@@ -6277,7 +6790,10 @@ def hf_recommended_engines(tasks: list[str], formats: list[str]) -> list[str]:
     return list(dict.fromkeys(engines))
 
 
-GGUF_AUXILIARY_PATTERN = re.compile(r"(?i)(?:^|/)(mtp|dspark|dflash|draft|eagle3?|speculative)[-_/]")
+GGUF_AUXILIARY_PATTERN = re.compile(
+    r"(?i)(?:(?:^|/)(?=(?:mtp|dspark|dflash|draft|eagle3?|speculative)\d*[-_/])|[-_.](?=(?:dspark|dflash|eagle3)\d*[-_.]))"
+    r"(mtp|dspark|dflash|draft|eagle3|eagle|speculative)"
+)
 GGUF_SHARD_PATTERN = re.compile(r"(.+)-(\d{5})-of-(\d{5})\.gguf$", re.IGNORECASE)
 GGUF_SHARED_ENGRAM_PATTERN = re.compile(r"(?i)(?:^|[/_.-])engram(?:[/_.-]|$)")
 HF_UNSUPPORTED_REAP_PATTERN = re.compile(r"(?i)(?:^|[/_.-])reap(?:[-_.]?\d+)?(?:$|[/_.-])")
@@ -6326,6 +6842,16 @@ def gguf_file_role(filename: str, metadata: dict[str, Any], main_metadata: dict[
     if prefix or (tensors and main_tensors and tensors < main_tensors * DRAFTER_TENSOR_RATIO):
         return "draft-mtp" if gguf_arch_value(metadata, "nextn_predict_layers") else "draft-simple"
     return "main"
+
+
+def hf_has_local_main_gguf(repo_id: str) -> bool:
+    snapshots = huggingface_cache_dir() / f"models--{repo_id.replace('/', '--')}" / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    return any(
+        "mmproj" not in path.name.casefold() and not GGUF_AUXILIARY_PATTERN.search(path.name)
+        for path in snapshots.rglob("*.gguf")
+    )
 
 
 def hf_named_drafter(siblings: list[Any]) -> dict[str, Any] | None:
@@ -8708,6 +9234,12 @@ async def inspect_hf_model(repo_id: str, revision: str = Query(default="main", m
         return {
             "revision": resolved_revision,
             "gated": bool(getattr(info, "gated", False)),
+            "gated_mode": hf_gated_mode(info),
+            "access": hf_gated_access(
+                repo_id,
+                resolved_revision,
+                [str(sibling.rfilename) for sibling in siblings],
+            ) if getattr(info, "gated", False) else "public",
             "private": bool(getattr(info, "private", False)),
             "license": card.get("license"),
             "pipeline_tag": getattr(info, "pipeline_tag", None),
@@ -8754,6 +9286,28 @@ async def inspect_hf_model(repo_id: str, revision: str = Query(default="main", m
         "remote_error": remote_error,
         "download_limit_bytes": model_download_memory_limit_bytes(),
     }
+
+
+def hf_gated_mode(info: Any) -> str:
+    gated = getattr(info, "gated", False)
+    return gated if gated in {"auto", "manual"} else ("auto" if gated else "")
+
+
+def hf_gated_access(repo_id: str, revision: str, filenames: list[str]) -> str:
+    """Probe one file of a gated repo: granted, no_token, denied or unknown."""
+    token = huggingface_token()
+    weights = (".gguf", ".safetensors", ".bin", ".pt", ".pth")
+    probe = next((name for name in filenames if name.lower().endswith(weights)), None)
+    probe = probe or next((name for name in filenames if name.lower() not in {"readme.md", ".gitattributes"}), None)
+    if probe is None:
+        return "unknown"
+    try:
+        get_hf_file_metadata(hf_hub_url(repo_id, probe, revision=revision), token=token)
+    except GatedRepoError:
+        return "no_token" if token is None else "denied"
+    except Exception:
+        return "unknown"
+    return "granted"
 
 
 class ModelDownloadValidationError(RuntimeError):
@@ -8834,6 +9388,20 @@ async def validate_hf_download(
         total = sum(int(getattr(siblings[filename], "size")) for filename in requested)
         selected_siblings = [siblings[filename] for filename in requested]
         groups = hf_gguf_groups(selected_siblings)
+        selects_gguf = any(filename.lower().endswith(".gguf") for filename in requested)
+        if filenames is not None and selects_gguf and not groups and not hf_has_local_main_gguf(repo_id):
+            raise ModelDownloadValidationError(
+                (
+                    "La selección solo contiene drafters o el proyector de visión: falta el modelo principal. "
+                    "Elige también una cuantización del modelo que quepa en la memoria del equipo."
+                ),
+                status_code=409,
+            )
+        if getattr(info, "gated", False) and requested:
+            get_hf_file_metadata(
+                hf_hub_url(repo_id, requested[0], revision=str(getattr(info, "sha", None) or revision)),
+                token=huggingface_token(),
+            )
         shared_engrams = {
             filename
             for filename in requested
@@ -8852,6 +9420,9 @@ async def validate_hf_download(
     except ModelDownloadValidationError:
         raise
     except Exception as exc:
+        if reason := huggingface_failure_reason(exc, repo_id):
+            status = 403 if isinstance(exc, GatedRepoError) else 404 if isinstance(exc, RepositoryNotFoundError) else 502
+            raise ModelDownloadValidationError(reason, status_code=status) from exc
         raise ModelDownloadValidationError(
             f"No se pudo verificar el tamaño de {repo_id}: {type(exc).__name__}",
             status_code=502,
@@ -8985,6 +9556,7 @@ def queue_downloaded_gguf_benchmark(repo_id: str, files: list[str] | None) -> in
 
 
 async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_bytes: int = 0) -> None:
+    before = {payload.repo_id: await asyncio.to_thread(hf_snapshot_entries, payload.repo_id)}
     stop = asyncio.Event()
     batch_label = {"text": "Descargando"}
     monitor = asyncio.create_task(track_hf_download_progress(
@@ -8996,11 +9568,13 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
         workers = min(huggingface_download_workers(), len(payload.files))
         for offset in range(0, len(payload.files), workers):
             if db.job_cancel_requested(job_id):
+                await stop_hf_progress(stop, monitor)
+                await cleanup_failed_hf_download([payload.repo_id], before)
                 db.update_job(
                     job_id,
                     "cancelled",
                     offset / len(payload.files) * 100,
-                    "Descarga cancelada",
+                    "Descarga cancelada · se borraron los archivos incompletos",
                 )
                 return
             batch = payload.files[offset:offset + workers]
@@ -9025,7 +9599,9 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
                     token=huggingface_token(),
                 )
                 for filename in batch
-            ])
+            ], return_exceptions=True)
+            if failure := next((item for item in paths if isinstance(item, BaseException)), None):
+                raise failure
             downloaded_paths.update({
                 filename: Path(path)
                 for filename, path in zip(batch, paths, strict=True)
@@ -9066,6 +9642,7 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
             "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
             (job_id, json.dumps({"files": downloaded}), utc_now()),
         )
+        await asyncio.to_thread(clear_model_health, payload.repo_id)
         await asyncio.to_thread(
             queue_downloaded_gguf_benchmark,
             payload.repo_id,
@@ -9073,7 +9650,16 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
         )
         db.update_job(job_id, "completed", 100, f"{len(downloaded)} archivo(s) preparados")
     except Exception as exc:
-        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: descarga no completada")
+        message = huggingface_failure_reason(exc, payload.repo_id) or f"{type(exc).__name__}: descarga no completada"
+        await stop_hf_progress(stop, monitor)
+        if await cleanup_failed_hf_download([payload.repo_id], before):
+            message = f"{message} · se borraron los archivos incompletos"
+        db.update_job(job_id, "failed", 0, message)
+        db.audit("huggingface.files.download", payload.repo_id, False, type(exc).__name__)
+        notify_safely(
+            "download.failed", "Descarga fallida", f"{payload.repo_id}: {message}",
+            target=payload.repo_id, log=f"{type(exc).__name__}: {exc}\n{', '.join(payload.files)}",
+        )
     finally:
         await stop_hf_progress(stop, monitor)
 
@@ -9101,6 +9687,7 @@ async def start_hf_files_download(
         )
     except ModelDownloadValidationError as exc:
         db.audit("huggingface.files.download.rejected", payload.repo_id, False, exc.detail)
+        notify_safely("download.failed", "Descarga fallida", f"{payload.repo_id}: {exc.detail}", target=payload.repo_id, log=", ".join(payload.files))
         raise download_validation_http_error(exc) from exc
     payload = payload.model_copy(update={"revision": resolved_revision})
     if existing_job_id := active_hf_download_job(payload.repo_id):
@@ -9109,7 +9696,7 @@ async def start_hf_files_download(
         filename for filename in payload.files
         if hf_cached_model_file(payload.repo_id, resolved_revision, filename)
     ]
-    if already_downloaded:
+    if already_downloaded and len(already_downloaded) == len(payload.files):
         detail = (
             f"El archivo ya está descargado: {already_downloaded[0]}"
             if len(already_downloaded) == 1
@@ -9117,6 +9704,15 @@ async def start_hf_files_download(
         )
         db.audit("huggingface.files.download.rejected", payload.repo_id, False, detail)
         raise HTTPException(status_code=409, detail=detail)
+    if already_downloaded:
+        payload = payload.model_copy(update={
+            "files": [filename for filename in payload.files if filename not in already_downloaded],
+        })
+        try:
+            _revision, total_bytes = await validate_hf_download(payload.repo_id, resolved_revision, payload.files)
+        except ModelDownloadValidationError as exc:
+            db.audit("huggingface.files.download.rejected", payload.repo_id, False, exc.detail)
+            raise download_validation_http_error(exc) from exc
     job_id = db.create_job("huggingface.files.download", payload.repo_id)
     background.add_task(download_hf_files, job_id, payload, total_bytes)
     return {"job_id": job_id, "deduplicated": False}
@@ -9837,6 +10433,7 @@ async def pull_ollama(job_id: str, name: str) -> None:
         message = exc.detail if isinstance(exc, ModelDownloadValidationError) else f"{type(exc).__name__}: operación no completada"
         db.update_job(job_id, "failed", 0, message)
         db.audit("ollama.pull", name, False, message)
+        notify_safely("download.failed", "Descarga fallida", f"Ollama {name}: {message}", target=name, log=f"{type(exc).__name__}: {exc}")
     finally:
         _job_cancel_events.pop(job_id, None)
 
@@ -9919,6 +10516,7 @@ class HfDownloadRequest(BaseModel):
 
 async def download_hf(job_id: str, repo_id: str, revision: str, total_bytes: int = 0) -> None:
     db.update_job(job_id, "running", 0, "Descargando desde Hugging Face")
+    before = {repo_id: await asyncio.to_thread(hf_snapshot_entries, repo_id)}
     stop = asyncio.Event()
     monitor = asyncio.create_task(track_hf_download_progress(job_id, repo_id, total_bytes, stop))
     try:
@@ -9933,12 +10531,21 @@ async def download_hf(job_id: str, repo_id: str, revision: str, total_bytes: int
         await stop_hf_progress(stop, monitor)
         db.update_job(job_id, "running", 99, "Descarga completa · registrando el modelo")
         await asyncio.to_thread(refresh_hf_model_description, repo_id, revision)
+        await asyncio.to_thread(clear_model_health, repo_id)
         await asyncio.to_thread(queue_downloaded_gguf_benchmark, repo_id, None)
         db.update_job(job_id, "completed", 100, "Modelo almacenado en caché")
         db.audit("huggingface.download", repo_id, True)
     except Exception as exc:
-        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: operación no completada")
+        message = huggingface_failure_reason(exc, repo_id) or f"{type(exc).__name__}: operación no completada"
+        await stop_hf_progress(stop, monitor)
+        if await cleanup_failed_hf_download([repo_id], before):
+            message = f"{message} · se borraron los archivos incompletos"
+        db.update_job(job_id, "failed", 0, message)
         db.audit("huggingface.download", repo_id, False, type(exc).__name__)
+        notify_safely(
+            "download.failed", "Descarga fallida", f"{repo_id}: {message}",
+            target=repo_id, log=f"{type(exc).__name__}: {exc}",
+        )
     finally:
         await stop_hf_progress(stop, monitor)
 
@@ -9956,6 +10563,7 @@ async def start_hf_download(payload: HfDownloadRequest, background: BackgroundTa
         )
     except ModelDownloadValidationError as exc:
         db.audit("huggingface.download.rejected", payload.repo_id, False, exc.detail)
+        notify_safely("download.failed", "Descarga fallida", f"{payload.repo_id}: {exc.detail}", target=payload.repo_id)
         raise download_validation_http_error(exc) from exc
     if existing_job_id := active_hf_download_job(payload.repo_id):
         return {"job_id": existing_job_id, "deduplicated": True}
@@ -10008,6 +10616,7 @@ async def delete_hf_model(repo_id: str, confirm: str = Query()) -> dict[str, boo
         item for item in persistent_models()
         if model_identity(item) != f"huggingface:{repo_id.casefold()}"
     ])
+    await asyncio.to_thread(clear_model_health, repo_id)
     db.audit("huggingface.delete", repo_id, True)
     return {"deleted": True}
 
@@ -10901,6 +11510,10 @@ async def prepare_activate_and_start_profile(job_id: str, profile_id: str) -> No
             message = f"{str(exc)[:700]}{rollback_error}"
             db.update_job(job_id, "failed", 0, message)
             db.audit("profile.prepare_start", profile["name"], False, type(exc).__name__)
+            notify_safely(
+                "profile.start_failed", "Error arrancando perfil", f"{profile['name']}: {message}",
+                target=str(profile["id"]), log=redact_log_text(f"{type(exc).__name__}: {exc}", 4000),
+            )
 
 
 async def download_profile_models(job_id: str, profile: dict[str, Any]) -> None:
@@ -10923,6 +11536,8 @@ async def download_profile_models(job_id: str, profile: dict[str, Any]) -> None:
         db.update_job(job_id, "failed", 0, exc.detail)
         db.audit("profile.download.rejected", repo, False, exc.detail)
         return
+    touched_repos = [repo, str(profile.get("mmproj_repo") or repo)]
+    before = {item: await asyncio.to_thread(hf_snapshot_entries, item) for item in dict.fromkeys(touched_repos)}
     file_label = {"text": "Descargando"}
     stop = asyncio.Event()
     monitor = asyncio.create_task(track_hf_download_progress(
@@ -10980,8 +11595,16 @@ async def download_profile_models(job_id: str, profile: dict[str, Any]) -> None:
         db.update_job(job_id, "completed", 100, f"{total} archivo(s) GGUF preparados")
         db.audit("profile.download", profile["name"], True, repo)
     except Exception as exc:
-        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: descarga no completada")
+        message = huggingface_failure_reason(exc, repo) or f"{type(exc).__name__}: descarga no completada"
+        await stop_hf_progress(stop, monitor)
+        if await cleanup_failed_hf_download(touched_repos, before):
+            message = f"{message} · se borraron los archivos incompletos"
+        db.update_job(job_id, "failed", 0, message)
         db.audit("profile.download", profile["name"], False, type(exc).__name__)
+        notify_safely(
+            "download.failed", "Descarga fallida", f"{profile['name']} · {repo}: {message}",
+            target=repo, log=f"{type(exc).__name__}: {exc}\n{', '.join(files)}",
+        )
     finally:
         await stop_hf_progress(stop, monitor)
 
@@ -16230,6 +16853,9 @@ async def run_benchmark_job(
     run_created = False
     gguf_runtime_key = ""
     outcome = "failed"
+    model: dict[str, Any] = {}
+    launching = False
+    downloaded_gguf = request.target.startswith("gguf:")
     async with _benchmark_lock:
         _benchmark_active_job_id = job_id
         try:
@@ -16295,9 +16921,11 @@ async def run_benchmark_job(
             if request.target.startswith("gguf:") and suite_progress is None:
                 db.update_job(job_id, "running", 3, f"Arrancando {model['name']}")
                 gguf_runtime_key = f"benchmark-run:{job_id}"
+                launching = True
                 await launch_profile_model(
                     BENCHMARK_GGUF_PROFILE, model, int(model["_benchmark_context"]), gguf_runtime_key,
                 )
+                launching = False
             runtime["isolation"] = {
                 "strict": request.strict_isolation,
                 "automatic": automatic,
@@ -16410,6 +17038,15 @@ async def run_benchmark_job(
                 for table in ("benchmark_samples", "benchmark_telemetry"):
                     db.execute(f"DELETE FROM {table} WHERE run_id=?", (run_id,))
                 db.execute("DELETE FROM benchmark_runs WHERE id=?", (run_id,))
+                marked = ""
+                if downloaded_gguf and "Contaminación" not in invalid_reason:
+                    marked = await asyncio.to_thread(mark_model_health_from_benchmark, model, invalid_reason, job_id)
+                if not marked:
+                    notify_safely(
+                        "benchmark.failed", "Error ejecutando benchmark",
+                        f"{model.get('name') or request.target}: {invalid_reason}",
+                        target=request.target, log=invalid_reason,
+                    )
                 db.update_job(job_id, "failed", 0, invalid_reason)
                 db.audit("benchmark.run", request.target, False, "invalid-discarded")
                 return invalid_reason
@@ -16443,6 +17080,10 @@ async def run_benchmark_job(
                 "Benchmark válido" if valid else "Benchmark completado con muestras no válidas",
             )
             db.audit("benchmark.run", request.target, valid, run_id)
+            if downloaded_gguf and valid:
+                await asyncio.to_thread(
+                    clear_model_health, str(model.get("model_repo") or ""), str(model.get("model_filename") or ""),
+                )
             outcome = "completed"
         except BenchmarkCancelled:
             if run_created:
@@ -16482,6 +17123,17 @@ async def run_benchmark_job(
                     WHERE id=?
                     """,
                     (message, utc_now(), run_id),
+                )
+            status = ""
+            if downloaded_gguf and model and not retry and benchmark_failure_blames_model(message, launching):
+                status = await asyncio.to_thread(mark_model_health_from_benchmark, model, message, job_id)
+                if status:
+                    message = f"{'INCOMPLETO' if status == 'incomplete' else 'DEFECTUOSO'} · {message}"
+            if not retry and not status:
+                notify_safely(
+                    "benchmark.failed", "Error ejecutando benchmark",
+                    f"{model.get('name') or request.target}: {message}",
+                    target=request.target, log=redact_log_text(f"{type(exc).__name__}: {exc}", 4000),
                 )
             db.update_job(
                 job_id,
@@ -16878,9 +17530,15 @@ async def load_benchmark_suite_item(item: dict[str, Any]) -> str:
     if str(item["target"]).startswith("gguf:"):
         model = await resolve_benchmark_target(item["target"])
         runtime_key = f"benchmark-suite:{item['suite_id']}:{item['position']}"
-        await launch_profile_model(
-            BENCHMARK_GGUF_PROFILE, model, int(model["_benchmark_context"]), runtime_key,
-        )
+        try:
+            await launch_profile_model(
+                BENCHMARK_GGUF_PROFILE, model, int(model["_benchmark_context"]), runtime_key,
+            )
+        except Exception as exc:
+            message = redact_log_text(f"{type(exc).__name__}: {exc}", 500)
+            if benchmark_failure_blames_model(message, True):
+                await asyncio.to_thread(mark_model_health_from_benchmark, model, message, str(item.get("suite_id") or ""))
+            raise
         return item["target"]
     if str(item["target"]).startswith("tts:"):
         model = await resolve_benchmark_target(item["target"])

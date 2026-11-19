@@ -13,6 +13,12 @@ import tempfile
 import uuid
 from pathlib import Path
 
+SPANISH = os.environ.get("MYDGX_LANGUAGE") == "es"
+
+
+def tr(spanish: str, english: str) -> str:
+    return spanish if SPANISH else english
+
 
 SAFE_HOST = re.compile(r"^[A-Za-z0-9._:-]+$")
 
@@ -67,51 +73,87 @@ def allocate_ports(connections: list[dict]) -> tuple[int, int, int]:
             break
         if all(port not in used and port_available(port) for port in candidate):
             return candidate
-    raise SystemExit("ERROR: no hay tres puertos locales libres para el nuevo túnel.")
+    raise SystemExit(
+        tr(
+            "ERROR: no hay tres puertos locales libres para el nuevo túnel.",
+            "ERROR: no three free local ports for the new tunnel.",
+        )
+    )
 
 
 def main() -> int:
     if len(sys.argv) != 5:
-        print("Uso: add-dgx-to-tray.py HOST PUERTO IDENTIDAD RAÍZ", file=sys.stderr)
+        print(
+            tr(
+                "Uso: add-dgx-to-tray.py HOST PUERTO IDENTIDAD RAÍZ",
+                "Usage: add-dgx-to-tray.py HOST PORT IDENTITY ROOT",
+            ),
+            file=sys.stderr,
+        )
         return 2
     host, port_text, identity_value, source_value = sys.argv[1:]
     if not SAFE_HOST.fullmatch(host):
-        raise SystemExit("ERROR: host descubierto no válido.")
+        raise SystemExit(tr("ERROR: host descubierto no válido.", "ERROR: invalid discovered host."))
     try:
         port = int(port_text)
     except ValueError as exc:
-        raise SystemExit("ERROR: puerto SSH no válido.") from exc
+        raise SystemExit(tr("ERROR: puerto SSH no válido.", "ERROR: invalid SSH port.")) from exc
     if not 1 <= port <= 65_535:
-        raise SystemExit("ERROR: puerto SSH fuera de rango.")
+        raise SystemExit(tr("ERROR: puerto SSH fuera de rango.", "ERROR: SSH port out of range."))
 
     identity = Path(identity_value).expanduser()
     if not identity.is_file() or identity.is_symlink():
-        raise SystemExit("ERROR: se necesita una clave SSH privada verificada.")
+        raise SystemExit(
+            tr(
+                "ERROR: se necesita una clave SSH privada verificada.",
+                "ERROR: a verified private SSH key is required.",
+            )
+        )
     if stat.S_IMODE(identity.stat().st_mode) & 0o077:
-        raise SystemExit("ERROR: la clave SSH debe tener permisos 0600 o más restrictivos.")
+        raise SystemExit(
+            tr(
+                "ERROR: la clave SSH debe tener permisos 0600 o más restrictivos.",
+                "ERROR: SSH key must have permissions 0600 or stricter.",
+            )
+        )
     display_identity = str(identity)
     if identity.is_relative_to(Path.home()):
         display_identity = f"~/{identity.relative_to(Path.home())}"
 
     source = Path(source_value).resolve()
     if not (source / "start.sh").is_file():
-        raise SystemExit("ERROR: la raíz local de MyDGX no es válida.")
+        raise SystemExit(tr("ERROR: la raíz local de MyDGX no es válida.", "ERROR: invalid local MyDGX root."))
 
     config_dir = Path.home() / ".MyDGX"
     config_path = config_dir / "config"
     if config_path.is_symlink():
-        raise SystemExit("ERROR: ~/.MyDGX/config no puede ser un enlace simbólico.")
+        raise SystemExit(
+            tr(
+                "ERROR: ~/.MyDGX/config no puede ser un enlace simbólico.",
+                "ERROR: ~/.MyDGX/config cannot be a symbolic link.",
+            )
+        )
     if config_path.exists():
         try:
             config = json.loads(config_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise SystemExit(f"ERROR: configuración del Tray no válida: {exc}") from exc
+            raise SystemExit(
+                tr(
+                    f"ERROR: configuración del Tray no válida: {exc}",
+                    f"ERROR: invalid Tray configuration: {exc}",
+                )
+            ) from exc
     else:
         config = {"version": 2, "activeConnectionID": "", "connections": []}
 
     connections = config.get("connections")
     if not isinstance(connections, list):
-        raise SystemExit("ERROR: ~/.MyDGX/config no contiene perfiles válidos.")
+        raise SystemExit(
+            tr(
+                "ERROR: ~/.MyDGX/config no contiene perfiles válidos.",
+                "ERROR: ~/.MyDGX/config does not contain valid profiles.",
+            )
+        )
 
     discovered = addresses(host)
     for profile in connections:

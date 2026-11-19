@@ -1460,6 +1460,7 @@ final class AppModel: ObservableObject {
         let script = """
         #!/bin/zsh
         set -euo pipefail
+        export MYDGX_LANGUAGE=\(AppLanguage.active.rawValue)
         cd \(shellQuote(source))
         \(command)
         print
@@ -2421,19 +2422,21 @@ final class AppModel: ObservableObject {
         let lower = text.lowercased()
         let progress: Double
         let phase: String
-        if lower.contains("instalando mydgx") || lower.contains("mydgx preparado") {
+        // deploy.sh prints these markers in MYDGX_LANGUAGE (es or en).
+        if lower.contains("instalando mydgx") || lower.contains("mydgx preparado")
+            || lower.contains("installing mydgx") || lower.contains("mydgx ready") {
             progress = 0.55
             phase = String(localized: "Preparando MyDGX")
-        } else if lower.contains("open webui preparado") {
+        } else if lower.contains("open webui preparado") || lower.contains("open webui ready") {
             progress = 0.74
             phase = String(localized: "Preparando Open WebUI")
-        } else if lower.contains("systemd") || lower.contains("supervisor local") {
+        } else if lower.contains("systemd") || lower.contains("supervisor local") || lower.contains("local supervisor") {
             progress = 0.84
             phase = String(localized: "Reiniciando servicios")
-        } else if lower.contains("comprobando preparación") {
+        } else if lower.contains("comprobando preparación") || lower.contains("checking mydgx readiness") {
             progress = 0.93
             phase = String(localized: "Comprobando el sistema")
-        } else if lower.contains("versiones desplegadas") {
+        } else if lower.contains("versiones desplegadas") || lower.contains("deployed versions") {
             progress = 0.98
             phase = String(localized: "Verificando versiones")
         } else {
@@ -2522,6 +2525,9 @@ final class AppModel: ObservableObject {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
+            var environment = ProcessInfo.processInfo.environment
+            environment["MYDGX_LANGUAGE"] = AppLanguage.active.rawValue
+            process.environment = environment
             process.standardInput = FileHandle.nullDevice
             let pipe = onOutput == nil ? nil : Pipe()
             process.standardOutput = pipe ?? log

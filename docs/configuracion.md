@@ -12,6 +12,23 @@ aparecer en el código ni en Git. En los ejemplos se usan marcadores como
 Un test (`test_every_setting_is_documented`) falla si se añade una variable sin
 documentarla aquí.
 
+### Cambiar parámetros desde Configuración
+
+La tarjeta **Servidor · .env** de Configuración reescribe en `.env` solo estas
+claves y las aplica al momento, salvo las marcadas con reinicio:
+`HF_TOKEN`, `HF_DOWNLOAD_WORKERS`, `MODEL_IMPORT_MAX_GB`, `BENCHMARK_ENABLED`,
+`BENCHMARK_AUTO_NEW_MODELS`, `BENCHMARK_REPETITIONS`, `BENCHMARK_QUIET_SECONDS`,
+`ASSISTANT_ENABLED`, `ASSISTANT_MODEL`, `ENABLE_PROFILE_AUTOSTART` (reinicio),
+`DEFAULT_PROFILE_ID` (reinicio), `PROFILE_START_TIMEOUT_SECONDS`,
+`MYDGX_SESSION_TTL_MINUTES`, `METRICS_RETENTION_HOURS` y `LOG_RETENTION_DAYS`.
+
+El token de Hugging Face se comprueba con Hugging Face antes de guardarlo y
+nunca se vuelve a mostrar. El archivo queda con permisos `600` y se conservan
+sus comentarios. Las claves de autenticación, de red y de operaciones
+privilegiadas (`HOST`, `PORT`, `MYDGX_*_KEY`, `MYDGX_DASHBOARD_PASSWORD`,
+`GATEWAY_API_KEY`, `ENABLE_SYSTEM_UPDATES`, `ENABLE_SERVICE_CONTROL`…) solo se
+cambian a mano en `.env`.
+
 ## Servidor y acceso
 
 | Variable | Por defecto | Descripción |
@@ -114,6 +131,21 @@ siguiente arranque.
 
 Host, puerto, timeout y tamaño también se cambian desde *Configuración*. Lo
 guardado en la interfaz tiene prioridad sobre `.env`.
+
+Los mensajes de error del gateway (`error.message`) salen en inglés salvo que el
+cliente pida español con `X-MyDGX-Language: es` o `Accept-Language: es`. Nunca
+se traduce la salida de los modelos.
+
+## Idioma
+
+| Dónde | Cómo se elige |
+|---|---|
+| Interfaz web | Idioma del navegador; se cambia con el botón ES/EN de la cabecera o en *Configuración*. |
+| API del dashboard (`/api/`) | Cabecera `X-MyDGX-Language` o `Accept-Language`; por defecto, español. |
+| Gateway (`/v1/`) | Igual, pero por defecto inglés. |
+| `start.sh`, `deploy.sh`, `serverize` | `MYDGX_LANGUAGE=es` o `en`; si no está, `LC_ALL`, `LC_MESSAGES`, `LANG` o `LANGUAGE`; con `C`/`POSIX`, el idioma de macOS; si no, inglés. `deploy.sh` lo pasa al DGX. |
+
+Los logs internos (*Logs* y `logs/`) se guardan siempre en español.
 
 ## Dimensionado del DGX Spark
 

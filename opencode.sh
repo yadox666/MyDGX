@@ -8,6 +8,13 @@
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/language.sh
+if [[ -f "$ROOT/scripts/lib/language.sh" ]]; then
+  source "$ROOT/scripts/lib/language.sh"
+else
+  pick() { if [[ "${MYDGX_LANGUAGE:-en}" == "es" ]]; then printf '%s' "$1"; else printf '%s' "${2:-$1}"; fi; }
+  say() { pick "$@"; printf '\n'; }
+fi
 WORKSPACE="${MYDGX_OPENCODE_HOME:-$HOME/opencode}"
 CONFIG_WRITER="$ROOT/scripts/opencode_workspace.py"
 # shellcheck source=scripts/mydgx_gateway.sh
@@ -20,7 +27,8 @@ GATEWAY=""
 OPENCODE_ARGS=()
 
 usage() {
-  cat <<EOF
+  if [[ "$MYDGX_LANGUAGE" == es ]]; then
+    cat <<EOF
 Uso: $ROOT/start.sh install-opencode [nombre]
      $ROOT/start.sh opencode setup [--active] [--model ALIAS]
      $ROOT/start.sh opencode [ALIAS|--model ALIAS] [--active] [-- args de opencode]
@@ -41,6 +49,29 @@ Variables opcionales:
   MYDGX_OPENCODE_MAX_STEPS
   MYDGX_OPENCODE_MAX_OUTPUT_TOKENS  Límite de salida; por defecto, contexto/8.
 EOF
+  else
+    cat <<EOF
+Usage: $ROOT/start.sh install-opencode [name]
+       $ROOT/start.sh opencode setup [--active] [--model ALIAS]
+       $ROOT/start.sh opencode [ALIAS|--model ALIAS] [--active] [-- opencode args]
+
+  install-opencode  Installs the CLI if missing and prepares $WORKSPACE.
+  opencode setup    Refreshes configuration without opening the TUI.
+  opencode          Discovers compatible gateway models, refreshes
+                    configuration, and opens OpenCode with the given alias.
+  --active          Enables editing, bash with confirmation, and Playwright,
+                    Shodan, and NVD MCP. Without it, uses plan/read-only mode.
+                    Web search (SearXNG) is added in both modes when the
+                    gateway has it enabled.
+
+Optional variables:
+  MYDGX_GATEWAY_URL       OpenAI base URL; default is the local MyDGX gateway.
+  MYDGX_GATEWAY_API_KEY   Gateway key, via environment only.
+  MYDGX_OPENCODE_HOME     Workspace; default is $HOME/opencode.
+  MYDGX_OPENCODE_MAX_STEPS
+  MYDGX_OPENCODE_MAX_OUTPUT_TOKENS  Output limit; default is context/8.
+EOF
+  fi
 }
 
 ensure_cli() {
@@ -52,7 +83,7 @@ ensure_cli() {
   "$ROOT/install_opencode.sh"
   hash -r || true
   command -v opencode >/dev/null 2>&1 || {
-    printf 'ERROR: OpenCode no está disponible en PATH.\n' >&2
+    say "ERROR: OpenCode no está disponible en PATH." "ERROR: OpenCode is not available on PATH." >&2
     exit 1
   }
 }
@@ -94,17 +125,20 @@ install_workspace() {
     --version "$version" \
     --slug "$SLUG" \
     --assets-only >/dev/null
-  printf 'OpenCode configurado en %s\n' "$WORKSPACE"
-  printf 'Skills instalados en %s/.opencode/skills\n' "$WORKSPACE"
-  [[ -z "$SLUG" ]] || printf 'Proyecto creado: %s/%s\n' "$WORKSPACE" "$SLUG"
+  printf "$(pick 'OpenCode configurado en %s\n' 'OpenCode configured at %s\n')" "$WORKSPACE"
+  printf "$(pick 'Skills instalados en %s/.opencode/skills\n' 'Skills installed in %s/.opencode/skills\n')" "$WORKSPACE"
+  [[ -z "$SLUG" ]] || printf "$(pick 'Proyecto creado: %s/%s\n' 'Project created: %s/%s\n')" "$WORKSPACE" "$SLUG"
   if ! prepare_gateway; then
-    printf 'AVISO: assets instalados; opencode.json se generará al definir la clave.\n' >&2
+    say "AVISO: assets instalados; opencode.json se generará al definir la clave." \
+      "NOTE: assets installed; opencode.json will be generated once the key is set." >&2
   elif result="$(write_config)"; then
     printf 'Gateway: %s\n' "${result%%$'\t'*}"
   else
-    printf 'AVISO: assets instalados, pero falta un modelo de chat/visión cargado para generar opencode.json.\n' >&2
+    say "AVISO: assets instalados, pero falta un modelo de chat/visión cargado para generar opencode.json." \
+      "NOTE: assets installed, but no chat/vision model is loaded to generate opencode.json." >&2
   fi
-  printf 'Siguiente: cd "%s" && %s/start.sh opencode\n' "$WORKSPACE" "$ROOT"
+  printf "$(pick 'Siguiente: cd "%s" && %s/start.sh opencode\n' 'Next: cd "%s" && %s/start.sh opencode\n')" \
+    "$WORKSPACE" "$ROOT"
 }
 
 resolve_project() {
@@ -112,7 +146,9 @@ resolve_project() {
   if [[ "$PWD" == "$ROOT" ]]; then
     cd "$WORKSPACE"
   elif [[ "$PWD" != "$WORKSPACE" && "$PWD" != "$WORKSPACE"/* ]]; then
-    printf 'ERROR: ejecuta OpenCode desde %s o uno de sus subdirectorios.\n' "$WORKSPACE" >&2
+    printf 'ERROR: %s\n' "$(pick \
+      "ejecuta OpenCode desde $WORKSPACE o uno de sus subdirectorios." \
+      "run OpenCode from $WORKSPACE or one of its subdirectories.")" >&2
     exit 2
   fi
 }
@@ -121,15 +157,19 @@ run_opencode() {
   ensure_cli
   resolve_project
   "$ACTIVE" && ensure_node_for_mcp
-  if [[ "$ACTIVE" == true && -z "${SHODAN_API_KEY:-}" ]]; then
-    printf 'AVISO: SHODAN_API_KEY no está definida; Shodan MCP queda desactivado.\n' >&2
+  if [[ "$ACTIVE" == true ]] && ! python3 "$ROOT/scripts/mcp_env.py" --has SHODAN_API_KEY; then
+    printf "$(pick \
+      'AVISO: SHODAN_API_KEY no está en el entorno ni en %s/.env; Shodan MCP queda desactivado.\n' \
+      'NOTE: SHODAN_API_KEY is not in the environment or in %s/.env; Shodan MCP is disabled.\n')" \
+      "$ROOT" >&2
   fi
 
   local result url selected config
   prepare_gateway || pause_on_error $? || exit $?
   result="$(write_config)" || pause_on_error $? || exit $?
   [[ -n "$result" ]] || {
-    printf 'ERROR: no se recibió configuración de OpenCode.\n' >&2
+    say "ERROR: no se recibió configuración de OpenCode." \
+      "ERROR: did not receive OpenCode configuration." >&2
     exit 1
   }
   IFS=$'\t' read -r url selected config <<<"$result"
@@ -142,7 +182,7 @@ run_opencode() {
   export OPENCODE_DISABLE_DEFAULT_PLUGINS=1
 
   # A stderr: stdout queda limpio para `opencode run --format json`.
-  printf 'OpenCode: %s mediante %s, modo %s.\n' \
+  printf "$(pick 'OpenCode: %s mediante %s, modo %s.\n' 'OpenCode: %s via %s, mode %s.\n')" \
     "$selected" "$url" "$([[ "$ACTIVE" == true ]] && printf active || printf plan)" >&2
   printf 'Workspace: %s\nConfig: %s\n' "$PWD" "$config" >&2
   ((${#OPENCODE_ARGS[@]})) && exec opencode "${OPENCODE_ARGS[@]}"
@@ -170,7 +210,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --model)
       [[ $# -ge 2 && -z "$MODEL" ]] || {
-        printf 'ERROR: --model necesita un único alias.\n' >&2
+        say "ERROR: --model necesita un único alias." "ERROR: --model requires a single alias." >&2
         exit 2
       }
       MODEL="$2"
@@ -205,7 +245,7 @@ case "$COMMAND" in
     "$ACTIVE" && ensure_node_for_mcp
     prepare_gateway || exit $?
     result="$(write_config)" || exit $?
-    printf 'Configuración actualizada: %s\n' "${result##*$'\t'}"
+    printf "$(pick 'Configuración actualizada: %s\n' 'Configuration updated: %s\n')" "${result##*$'\t'}"
     ;;
   run)
     run_opencode

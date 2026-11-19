@@ -11,6 +11,13 @@ import sys
 import urllib.error
 from pathlib import Path
 
+from mcp_env import secret_available
+
+SPANISH = os.environ.get("MYDGX_LANGUAGE") == "es"
+
+
+def tr(spanish: str, english: str) -> str:
+    return spanish if SPANISH else english
 from opencode_workspace import (
     NVD_MCP,
     PLAYWRIGHT_MCP,
@@ -20,6 +27,7 @@ from opencode_workspace import (
     discover,
     max_output_tokens,
     select_model,
+    with_secrets,
 )
 
 TIMEOUT_MS = 1_800_000
@@ -98,21 +106,18 @@ def write_mcp(workspace: Path, base_url: str, active: bool, web_search: bool) ->
                 "HOME": "${HOME}",
             },
         }
+        nvd = with_secrets(["NVD_API_KEY"], ["npx", "-y", NVD_MCP])
         servers["nvd"] = {
-            "command": "npx",
-            "args": ["-y", NVD_MCP],
+            "command": nvd[0],
+            "args": nvd[1:],
             "env": {
                 "MCP_TRANSPORT_TYPE": "stdio",
-                "NVD_API_KEY": "${NVD_API_KEY:-}",
                 "NVD_REQUEST_TIMEOUT_MS": "30000",
             },
         }
-        if os.environ.get("SHODAN_API_KEY"):
-            servers["shodan"] = {
-                "command": "npx",
-                "args": ["-y", SHODAN_MCP],
-                "env": {"SHODAN_API_KEY": "${SHODAN_API_KEY}"},
-            }
+        if secret_available("SHODAN_API_KEY"):
+            shodan = with_secrets(["SHODAN_API_KEY"], ["npx", "-y", SHODAN_MCP])
+            servers["shodan"] = {"command": shodan[0], "args": shodan[1:]}
     if not servers:
         return None
     path = workspace / ".claude" / "mydgx-mcp.json"
@@ -182,7 +187,12 @@ def create_workspace(workspace: Path) -> None:
     config_dir.mkdir(parents=True, exist_ok=True)
     (workspace / "CLAUDE.md").write_text(INSTRUCTIONS, encoding="utf-8")
     if not SKILLS_SOURCE.is_dir():
-        raise SystemExit(f"ERROR: no se encontraron las plantillas de skills en {SKILLS_SOURCE}")
+        raise SystemExit(
+            tr(
+                f"ERROR: no se encontraron las plantillas de skills en {SKILLS_SOURCE}",
+                f"ERROR: skill templates not found at {SKILLS_SOURCE}",
+            )
+        )
     skills_target = config_dir / "skills"
     skills_target.mkdir(parents=True, exist_ok=True)
     for source in SKILLS_SOURCE.iterdir():
@@ -207,10 +217,18 @@ def main() -> int:
     try:
         models, web_search = discover(args.base_url, os.environ.get("MYDGX_GATEWAY_API_KEY", ""))
     except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"ERROR: no se pudo configurar Claude Code desde {args.base_url}: {exc}") from exc
+        raise SystemExit(
+            tr(
+                f"ERROR: no se pudo configurar Claude Code desde {args.base_url}: {exc}",
+                f"ERROR: could not configure Claude Code from {args.base_url}: {exc}",
+            )
+        ) from exc
     if not web_search:
         print(
-            "AVISO: la búsqueda web del gateway está desactivada; Claude Code no recibe la herramienta.",
+            tr(
+                "AVISO: la búsqueda web del gateway está desactivada; Claude Code no recibe la herramienta.",
+                "WARNING: gateway web search is disabled; Claude Code will not get the tool.",
+            ),
             file=sys.stderr,
         )
     selected = select_model(models, args.model)

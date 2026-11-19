@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=lib/language.sh
+if [[ -f "$(dirname "${BASH_SOURCE[0]}")/lib/language.sh" ]]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/language.sh"
+else
+  pick() { if [[ "${MYDGX_LANGUAGE:-en}" == "es" ]]; then printf '%s' "$1"; else printf '%s' "${2:-$1}"; fi; }
+  say() { pick "$@"; printf '\n'; }
+fi
+
 ROOT="${1:-}"
 SERVICE_USER="${2:-}"
 LLAMA_REF="${3:-v1.0.0}"
@@ -9,23 +17,23 @@ ENABLE_COMFYUI="${5:-1}"
 ENABLE_DUCKDNS="${6:-0}"
 
 fail() {
-  printf 'ERROR: %s\n' "$*" >&2
+  printf 'ERROR: %s\n' "$(pick "$@")" >&2
   exit 1
 }
 
-[[ "$EUID" -eq 0 ]] || fail "La instalación de systemd requiere root."
-[[ -n "$ROOT" && "$ROOT" == /* && "$ROOT" != *$'\n'* ]] || fail "Ruta de MyDGX inválida."
-[[ "$SERVICE_USER" =~ ^[A-Za-z0-9._-]+$ ]] || fail "Usuario de servicio inválido."
-[[ "$LLAMA_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Revisión llama.cpp inválida."
-[[ "$ENABLE_SEARXNG" =~ ^[01]$ ]] || fail "Estado de SearXNG inválido."
-[[ "$ENABLE_COMFYUI" =~ ^[01]$ ]] || fail "Estado de ComfyUI inválido."
-[[ "$ENABLE_DUCKDNS" =~ ^[01]$ ]] || fail "Estado de DuckDNS inválido."
+[[ "$EUID" -eq 0 ]] || fail "La instalación de systemd requiere root." "systemd installation requires root."
+[[ -n "$ROOT" && "$ROOT" == /* && "$ROOT" != *$'\n'* ]] || fail "Ruta de MyDGX inválida." "Invalid MyDGX path."
+[[ "$SERVICE_USER" =~ ^[A-Za-z0-9._-]+$ ]] || fail "Usuario de servicio inválido." "Invalid service user."
+[[ "$LLAMA_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Revisión llama.cpp inválida." "Invalid llama.cpp revision."
+[[ "$ENABLE_SEARXNG" =~ ^[01]$ ]] || fail "Estado de SearXNG inválido." "Invalid SearXNG state."
+[[ "$ENABLE_COMFYUI" =~ ^[01]$ ]] || fail "Estado de ComfyUI inválido." "Invalid ComfyUI state."
+[[ "$ENABLE_DUCKDNS" =~ ^[01]$ ]] || fail "Estado de DuckDNS inválido." "Invalid DuckDNS state."
 [[ -x "$ROOT/start.sh" && -x "$ROOT/scripts/system-repair.sh" ]] ||
-  fail "La instalación de MyDGX está incompleta."
-id "$SERVICE_USER" >/dev/null 2>&1 || fail "El usuario de servicio no existe."
-[[ -d /run/systemd/system ]] || fail "Este equipo Linux no está ejecutando systemd."
+  fail "La instalación de MyDGX está incompleta." "The MyDGX installation is incomplete."
+id "$SERVICE_USER" >/dev/null 2>&1 || fail "El usuario de servicio no existe." "The service user does not exist."
+[[ -d /run/systemd/system ]] || fail "Este equipo Linux no está ejecutando systemd." "This Linux system is not running systemd."
 SERVICE_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
-[[ -n "$SERVICE_HOME" && "$SERVICE_HOME" == /* ]] || fail "No se pudo resolver el home del usuario."
+[[ -n "$SERVICE_HOME" && "$SERVICE_HOME" == /* ]] || fail "No se pudo resolver el home del usuario." "Could not resolve the user home directory."
 OPENWEBUI_ROOT="$SERVICE_HOME/.local/share/mydgx/open-webui"
 SEARXNG_ROOT="$SERVICE_HOME/.local/share/mydgx/searxng"
 SEARXNG_RUNNER="$ROOT/scripts/searxng-container.sh"
@@ -33,10 +41,10 @@ COMFYUI_ROOT="$SERVICE_HOME/.local/share/mydgx/comfyui"
 NVME_SMART_READER="$ROOT/scripts/nvme-smart-reader.sh"
 DUCKDNS_UPDATER="$ROOT/scripts/duckdns-update.sh"
 [[ -f "$NVME_SMART_READER" && ! -L "$NVME_SMART_READER" ]] ||
-  fail "No se encontró el lector SMART seguro."
+  fail "No se encontró el lector SMART seguro." "The safe SMART reader was not found."
 if [[ "$ENABLE_DUCKDNS" == "1" ]]; then
   [[ -f "$DUCKDNS_UPDATER" && ! -L "$DUCKDNS_UPDATER" ]] ||
-    fail "No se encontró el actualizador DuckDNS seguro."
+    fail "No se encontró el actualizador DuckDNS seguro." "The safe DuckDNS updater was not found."
 fi
 comfyui_unit_existed=0
 comfyui_unit_was_enabled=0
@@ -105,7 +113,7 @@ if [[ "$systemd_fingerprint" == "$installed_fingerprint" &&
      >/dev/null 2>&1 &&
    { [[ "$ENABLE_DUCKDNS" == "0" ]] ||
      systemctl is-enabled mydgx-duckdns.timer >/dev/null 2>&1; }; then
-  printf 'Servicios systemd sin cambios; se omite su reinstalación.\n'
+  say "Servicios systemd sin cambios; se omite su reinstalación." "systemd services unchanged; skipping reinstall."
   exit 0
 fi
 
@@ -119,7 +127,7 @@ install -o root -g root -m 0755 "$DUCKDNS_UPDATER" /usr/local/libexec/mydgx-duck
 apt_get="$(command -v apt-get || true)"
 systemctl_bin="$(command -v systemctl || true)"
 env_bin="$(command -v env || true)"
-[[ -n "$apt_get" && -n "$systemctl_bin" && -n "$env_bin" ]] || fail "APT, env o systemctl no están disponibles."
+[[ -n "$apt_get" && -n "$systemctl_bin" && -n "$env_bin" ]] || fail "APT, env o systemctl no están disponibles." "APT, env, or systemctl is not available."
 cat >/etc/sudoers.d/mydgx <<EOF
 Cmnd_Alias MYDGX_APT = $apt_get check, $apt_get update, $env_bin DEBIAN_FRONTEND=noninteractive $apt_get upgrade --with-new-pkgs -y
 Cmnd_Alias MYDGX_REPAIR = /usr/local/libexec/mydgx-system-repair --repair, /usr/local/libexec/mydgx-system-repair --drop-caches
@@ -130,7 +138,7 @@ EOF
 chmod 0440 /etc/sudoers.d/mydgx
 visudo -cf /etc/sudoers.d/mydgx >/dev/null || {
   rm -f /etc/sudoers.d/mydgx
-  fail "La regla sudoers generada no es válida."
+  fail "La regla sudoers generada no es válida." "The generated sudoers rule is not valid."
 }
 
 cat >/etc/systemd/system/mydgx-repair.service <<EOF
@@ -412,4 +420,4 @@ fi
 printf '%s\n' "$systemd_fingerprint" >"$SYSTEMD_STATE.new"
 chmod 0644 "$SYSTEMD_STATE.new"
 mv -f "$SYSTEMD_STATE.new" "$SYSTEMD_STATE"
-printf 'Servicios systemd instalados para %s en %s.\n' "$SERVICE_USER" "$ROOT"
+say "Servicios systemd instalados para $SERVICE_USER en $ROOT." "systemd services installed for $SERVICE_USER at $ROOT."

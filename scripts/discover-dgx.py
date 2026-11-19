@@ -3,10 +3,17 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
 import sys
+
+SPANISH = os.environ.get("MYDGX_LANGUAGE") == "es"
+
+
+def tr(spanish: str, english: str) -> str:
+    return spanish if SPANISH else english
 
 
 NAME_HINT = re.compile(r"(?:dgx|spark|nvidia)", re.IGNORECASE)
@@ -88,12 +95,21 @@ def main() -> int:
     devices = discover_dns_sd() or discover_avahi()
     if not devices:
         print(
-            "No se encontró ningún DGX/Spark/NVIDIA anunciando SSH por mDNS.",
+            tr(
+                "No se encontró ningún DGX/Spark/NVIDIA anunciando SSH por mDNS.",
+                "No DGX/Spark/NVIDIA host advertising SSH over mDNS was found.",
+            ),
             file=sys.stderr,
         )
         return 1
     if len(devices) > 1:
-        print("Se encontraron varios DGX; indica --host explícitamente:", file=sys.stderr)
+        print(
+            tr(
+                "Se encontraron varios DGX; indica --host explícitamente:",
+                "Multiple DGX hosts found; pass --host explicitly:",
+            ),
+            file=sys.stderr,
+        )
         for host, port, service in sorted(devices):
             print(f"- {service}: {host}:{port}", file=sys.stderr)
         return 3

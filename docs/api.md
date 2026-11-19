@@ -65,6 +65,11 @@ curl -s -H "X-MyDGX-Key: $MYDGX_API_KEY" http://127.0.0.1:8088/api/overview
 | GET | `/api/overview` | Telemetría actual, identidad del equipo, servicios, suite de benchmarks en curso, mapa de memoria, perfiles cargados (`running_profiles`) y apps web activas (`web_apps`: `name`, `alias`, `port`, `url`, `state`, `reachable`). |
 | GET | `/api/metrics/history` | Histórico del host. Parámetros: `minutes`, o `start` y `end` ISO. |
 | GET | `/api/metrics/models` | Telemetría por modelo. Parámetros: `minutes`, `profile_id`. |
+| GET | `/api/settings/env` | Parámetros del `.env` editables desde Configuración (valor actual, valor por defecto, límites y si requieren reinicio) y `hf_token_configured`. El token nunca se devuelve. |
+| PUT | `/api/settings/env` | Cambia esos parámetros en `.env` y en memoria. Cuerpo: `values` (clave → valor), `hf_token` (se verifica con Hugging Face antes de guardarlo) o `clear_hf_token`. Las claves de autenticación, red y operaciones privilegiadas no se aceptan. |
+| POST | `/api/settings/hf-token/verify` | Comprueba el `HF_TOKEN` configurado con Hugging Face. Devuelve `configured`, `valid` y el nombre de la cuenta. |
+| GET | `/api/notifications` | Avisos de error (descarga fallida, error cargando modelo o arrancando perfil, benchmark fallido, modelo defectuoso o incompleto): fecha, título, texto, log saneado y si están leídos. Devuelve también `unread`. Parámetro: `limit`. |
+| POST | `/api/notifications/read` | Marca avisos como leídos. Cuerpo: `ids` o `all: true`. |
 | GET | `/api/gateway/config` | Configuración y estado del gateway: host, puerto, alias publicados, perfil activo y `web_search`. |
 | PUT | `/api/gateway/config` | Cambia `enabled`, `host`, `port`, `request_timeout_seconds`, `max_request_mb` y `web_search` (por defecto `true`). Host, puerto y activación requieren reiniciar el gateway. La búsqueda web se aplica al guardar. |
 

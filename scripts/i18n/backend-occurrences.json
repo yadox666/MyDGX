@@ -1,0 +1,7844 @@
+[
+ {
+  "file": "main.py",
+  "line": 164,
+  "context": "return",
+  "text": "Repositorio restringido: la cuenta del HF_TOKEN no tiene acceso a {0}. Acepta sus condiciones o pide acceso en Hugging Face y vuelve a intentarlo"
+ },
+ {
+  "file": "main.py",
+  "line": 168,
+  "context": "return",
+  "text": "Repositorio restringido: {0} exige una cuenta de Hugging Face con sus condiciones aceptadas. Sin HF_TOKEN no se puede descargar; acepta las condiciones y configura HF_TOKEN en el .env de MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 173,
+  "context": "return",
+  "text": "Repositorio no encontrado: {0} no existe o la cuenta del HF_TOKEN no puede verlo"
+ },
+ {
+  "file": "main.py",
+  "line": 174,
+  "context": "return",
+  "text": "Repositorio no encontrado: {0} no existe o es privado y requiere HF_TOKEN"
+ },
+ {
+  "file": "main.py",
+  "line": 176,
+  "context": "return",
+  "text": "Revisión no encontrada en {0}; recarga el modelo y vuelve a intentarlo"
+ },
+ {
+  "file": "main.py",
+  "line": 178,
+  "context": "return",
+  "text": "Un archivo seleccionado ya no está en {0}; recarga el modelo y vuelve a elegir archivos"
+ },
+ {
+  "file": "main.py",
+  "line": 182,
+  "context": "return",
+  "text": "Hugging Face rechazó el HF_TOKEN: es inválido o ha caducado"
+ },
+ {
+  "file": "main.py",
+  "line": 184,
+  "context": "return",
+  "text": "Hugging Face denegó el acceso a {0}: el HF_TOKEN no tiene permiso de lectura"
+ },
+ {
+  "file": "main.py",
+  "line": 186,
+  "context": "return",
+  "text": "Hugging Face limitó las peticiones; espera unos minutos y vuelve a intentarlo"
+ },
+ {
+  "file": "main.py",
+  "line": 188,
+  "context": "return",
+  "text": "Hugging Face no está disponible ahora (HTTP {0}); vuelve a intentarlo más tarde"
+ },
+ {
+  "file": "main.py",
+  "line": 190,
+  "context": "return",
+  "text": "Sin espacio en disco: libera espacio y vuelve a intentarlo"
+ },
+ {
+  "file": "main.py",
+  "line": 192,
+  "context": "return",
+  "text": "Sin conexión con Hugging Face: revisa la red del equipo y vuelve a intentarlo"
+ },
+ {
+  "file": "main.py",
+  "line": 324,
+  "context": "key:name",
+  "text": "MyDGX Text Generation v1"
+ },
+ {
+  "file": "main.py",
+  "line": 336,
+  "context": "key:name",
+  "text": "Latencia interactiva"
+ },
+ {
+  "file": "main.py",
+  "line": 345,
+  "context": "key:name",
+  "text": "Throughput sostenido"
+ },
+ {
+  "file": "main.py",
+  "line": 355,
+  "context": "key:name",
+  "text": "Generación de código"
+ },
+ {
+  "file": "main.py",
+  "line": 370,
+  "context": "key:name",
+  "text": "MyDGX Whisper ASR v1"
+ },
+ {
+  "file": "main.py",
+  "line": 382,
+  "context": "key:name",
+  "text": "Armstrong English"
+ },
+ {
+  "file": "main.py",
+  "line": 392,
+  "context": "key:name",
+  "text": "MyDGX Image Generation v1"
+ },
+ {
+  "file": "main.py",
+  "line": 407,
+  "context": "key:name",
+  "text": "FLUX reproducible still life"
+ },
+ {
+  "file": "main.py",
+  "line": 424,
+  "context": "key:name",
+  "text": "MyDGX Video Generation v1"
+ },
+ {
+  "file": "main.py",
+  "line": 442,
+  "context": "key:name",
+  "text": "Wan reproducible natural motion"
+ },
+ {
+  "file": "main.py",
+  "line": 461,
+  "context": "key:name",
+  "text": "MyDGX Embeddings v1"
+ },
+ {
+  "file": "main.py",
+  "line": 468,
+  "context": "key:name",
+  "text": "Semantic pairs English v1"
+ },
+ {
+  "file": "main.py",
+  "line": 470,
+  "context": "List",
+  "text": "A red bicycle is parked beside the library."
+ },
+ {
+  "file": "main.py",
+  "line": 471,
+  "context": "List",
+  "text": "The crimson bike stands next to the public library."
+ },
+ {
+  "file": "main.py",
+  "line": 472,
+  "context": "List",
+  "text": "A database index can speed up selective queries."
+ },
+ {
+  "file": "main.py",
+  "line": 473,
+  "context": "List",
+  "text": "Selective database queries are often faster with an index."
+ },
+ {
+  "file": "main.py",
+  "line": 474,
+  "context": "List",
+  "text": "The orchestra rehearsed a symphony before the concert."
+ },
+ {
+  "file": "main.py",
+  "line": 475,
+  "context": "List",
+  "text": "Fresh bread was cooling on the kitchen counter."
+ },
+ {
+  "file": "main.py",
+  "line": 488,
+  "context": "key:name",
+  "text": "MyDGX Reranking v1"
+ },
+ {
+  "file": "main.py",
+  "line": 495,
+  "context": "key:name",
+  "text": "Database index ordering v1"
+ },
+ {
+  "file": "main.py",
+  "line": 496,
+  "context": "key:query",
+  "text": "How can an index improve a selective database query?"
+ },
+ {
+  "file": "main.py",
+  "line": 498,
+  "context": "List",
+  "text": "An index lets the database locate matching rows without scanning the full table."
+ },
+ {
+  "file": "main.py",
+  "line": 499,
+  "context": "List",
+  "text": "Indexes can accelerate selective lookups, though writes require index maintenance."
+ },
+ {
+  "file": "main.py",
+  "line": 500,
+  "context": "List",
+  "text": "A symphony orchestra contains string, woodwind, brass, and percussion sections."
+ },
+ {
+  "file": "main.py",
+  "line": 501,
+  "context": "List",
+  "text": "Bread dough rises when yeast produces carbon dioxide."
+ },
+ {
+  "file": "main.py",
+  "line": 507,
+  "context": "key:name",
+  "text": "Local inference ordering v1"
+ },
+ {
+  "file": "main.py",
+  "line": 508,
+  "context": "key:query",
+  "text": "What reduces memory use when running a language model locally?"
+ },
+ {
+  "file": "main.py",
+  "line": 510,
+  "context": "List",
+  "text": "Quantizing model weights to fewer bits usually reduces local inference memory use."
+ },
+ {
+  "file": "main.py",
+  "line": 511,
+  "context": "List",
+  "text": "A smaller context can also reduce the memory occupied by the KV cache."
+ },
+ {
+  "file": "main.py",
+  "line": 512,
+  "context": "List",
+  "text": "Database transactions provide atomicity and isolation."
+ },
+ {
+  "file": "main.py",
+  "line": 513,
+  "context": "List",
+  "text": "Window light produces soft shadows in a photograph."
+ },
+ {
+  "file": "main.py",
+  "line": 525,
+  "context": "key:name",
+  "text": "MyDGX Vision v1"
+ },
+ {
+  "file": "main.py",
+  "line": 540,
+  "context": "key:name",
+  "text": "Objects and colors"
+ },
+ {
+  "file": "main.py",
+  "line": 545,
+  "context": "key:expected_answer",
+  "text": "A red square and a blue circle."
+ },
+ {
+  "file": "main.py",
+  "line": 547,
+  "context": "List",
+  "text": "red square"
+ },
+ {
+  "file": "main.py",
+  "line": 547,
+  "context": "List",
+  "text": "square is red"
+ },
+ {
+  "file": "main.py",
+  "line": 547,
+  "context": "List",
+  "text": "red rectangle"
+ },
+ {
+  "file": "main.py",
+  "line": 548,
+  "context": "List",
+  "text": "blue circle"
+ },
+ {
+  "file": "main.py",
+  "line": 548,
+  "context": "List",
+  "text": "circle is blue"
+ },
+ {
+  "file": "main.py",
+  "line": 548,
+  "context": "List",
+  "text": "blue disk"
+ },
+ {
+  "file": "main.py",
+  "line": 548,
+  "context": "List",
+  "text": "blue disc"
+ },
+ {
+  "file": "main.py",
+  "line": 553,
+  "context": "key:name",
+  "text": "Spatial order"
+ },
+ {
+  "file": "main.py",
+  "line": 558,
+  "context": "key:expected_answer",
+  "text": "The red square is left of the blue circle."
+ },
+ {
+  "file": "main.py",
+  "line": 560,
+  "context": "List",
+  "text": "red square is on the left"
+ },
+ {
+  "file": "main.py",
+  "line": 560,
+  "context": "List",
+  "text": "red square on the left"
+ },
+ {
+  "file": "main.py",
+  "line": 560,
+  "context": "List",
+  "text": "square is left"
+ },
+ {
+  "file": "main.py",
+  "line": 561,
+  "context": "List",
+  "text": "blue circle is on the right"
+ },
+ {
+  "file": "main.py",
+  "line": 561,
+  "context": "List",
+  "text": "blue circle on the right"
+ },
+ {
+  "file": "main.py",
+  "line": 561,
+  "context": "List",
+  "text": "circle is right"
+ },
+ {
+  "file": "main.py",
+  "line": 571,
+  "context": "key:name",
+  "text": "MyDGX Local TTS v1"
+ },
+ {
+  "file": "main.py",
+  "line": 578,
+  "context": "key:name",
+  "text": "Public English pangram"
+ },
+ {
+  "file": "main.py",
+  "line": 580,
+  "context": "key:text",
+  "text": "The quick brown fox jumps over the lazy dog."
+ },
+ {
+  "file": "main.py",
+  "line": 581,
+  "context": "key:source",
+  "text": "traditional public-domain pangram"
+ },
+ {
+  "file": "main.py",
+  "line": 585,
+  "context": "key:name",
+  "text": "Public numeric phrase"
+ },
+ {
+  "file": "main.py",
+  "line": 587,
+  "context": "key:text",
+  "text": "Today is Monday. The package contains three red books and seven blue pens."
+ },
+ {
+  "file": "main.py",
+  "line": 588,
+  "context": "key:source",
+  "text": "MyDGX CC0 benchmark text"
+ },
+ {
+  "file": "main.py",
+  "line": 1046,
+  "context": "arg:RuntimeError",
+  "text": "El protocolo publicado {0} no puede modificarse"
+ },
+ {
+  "file": "main.py",
+  "line": 1079,
+  "context": "key:disk_read_bytes",
+  "text": "INTEGER NOT NULL DEFAULT 0"
+ },
+ {
+  "file": "main.py",
+  "line": 1080,
+  "context": "key:disk_write_bytes",
+  "text": "INTEGER NOT NULL DEFAULT 0"
+ },
+ {
+  "file": "main.py",
+  "line": 1095,
+  "context": "key:protocol_id",
+  "text": "TEXT NOT NULL DEFAULT '{0}'"
+ },
+ {
+  "file": "main.py",
+  "line": 1097,
+  "context": "key:modality",
+  "text": "TEXT NOT NULL DEFAULT 'text-generation'"
+ },
+ {
+  "file": "main.py",
+  "line": 1109,
+  "context": "key:model_repo",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1110,
+  "context": "key:model_filename",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1111,
+  "context": "key:model_files_json",
+  "text": "TEXT NOT NULL DEFAULT '[]'"
+ },
+ {
+  "file": "main.py",
+  "line": 1112,
+  "context": "key:mmproj_file",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1113,
+  "context": "key:mmproj_repo",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1114,
+  "context": "key:mmproj_filename",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1115,
+  "context": "key:model_alias",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1116,
+  "context": "key:threads",
+  "text": "INTEGER NOT NULL DEFAULT 1"
+ },
+ {
+  "file": "main.py",
+  "line": 1117,
+  "context": "key:parallel",
+  "text": "INTEGER NOT NULL DEFAULT 1"
+ },
+ {
+  "file": "main.py",
+  "line": 1118,
+  "context": "key:ubatch_size",
+  "text": "INTEGER NOT NULL DEFAULT 256"
+ },
+ {
+  "file": "main.py",
+  "line": 1119,
+  "context": "key:top_k",
+  "text": "INTEGER NOT NULL DEFAULT 0"
+ },
+ {
+  "file": "main.py",
+  "line": 1120,
+  "context": "key:min_p",
+  "text": "REAL NOT NULL DEFAULT 0"
+ },
+ {
+  "file": "main.py",
+  "line": 1121,
+  "context": "key:presence_penalty",
+  "text": "REAL NOT NULL DEFAULT 0"
+ },
+ {
+  "file": "main.py",
+  "line": 1122,
+  "context": "key:cache_type_k",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1123,
+  "context": "key:cache_type_v",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1124,
+  "context": "key:reasoning_off",
+  "text": "INTEGER NOT NULL DEFAULT 1"
+ },
+ {
+  "file": "main.py",
+  "line": 1125,
+  "context": "key:reasoning_effort",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1126,
+  "context": "key:kv_unified_per_slot",
+  "text": "INTEGER NOT NULL DEFAULT 1"
+ },
+ {
+  "file": "main.py",
+  "line": 1127,
+  "context": "key:jinja",
+  "text": "INTEGER NOT NULL DEFAULT 1"
+ },
+ {
+  "file": "main.py",
+  "line": 1128,
+  "context": "key:min_free_memory_mb",
+  "text": "INTEGER NOT NULL DEFAULT 0"
+ },
+ {
+  "file": "main.py",
+  "line": 1129,
+  "context": "key:source",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1130,
+  "context": "key:runtime_requirement",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1131,
+  "context": "key:task",
+  "text": "TEXT NOT NULL DEFAULT 'chat'"
+ },
+ {
+  "file": "main.py",
+  "line": 1132,
+  "context": "key:input_modalities_json",
+  "text": "TEXT NOT NULL DEFAULT '[\"text\"]'"
+ },
+ {
+  "file": "main.py",
+  "line": 1133,
+  "context": "key:output_modalities_json",
+  "text": "TEXT NOT NULL DEFAULT '[\"text\"]'"
+ },
+ {
+  "file": "main.py",
+  "line": 1134,
+  "context": "key:runtime_backend",
+  "text": "TEXT NOT NULL DEFAULT 'native'"
+ },
+ {
+  "file": "main.py",
+  "line": 1135,
+  "context": "key:endpoint_url",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1136,
+  "context": "key:api_protocol",
+  "text": "TEXT NOT NULL DEFAULT 'openai'"
+ },
+ {
+  "file": "main.py",
+  "line": 1137,
+  "context": "key:estimated_memory_mb",
+  "text": "INTEGER NOT NULL DEFAULT 0"
+ },
+ {
+  "file": "main.py",
+  "line": 1138,
+  "context": "key:max_input_mb",
+  "text": "INTEGER NOT NULL DEFAULT 32"
+ },
+ {
+  "file": "main.py",
+  "line": 1139,
+  "context": "key:timeout_seconds",
+  "text": "INTEGER NOT NULL DEFAULT 600"
+ },
+ {
+  "file": "main.py",
+  "line": 1140,
+  "context": "key:additional_models_json",
+  "text": "TEXT NOT NULL DEFAULT '[]'"
+ },
+ {
+  "file": "main.py",
+  "line": 1141,
+  "context": "key:memory_reserve_mb",
+  "text": "INTEGER NOT NULL DEFAULT 4096"
+ },
+ {
+  "file": "main.py",
+  "line": 1142,
+  "context": "key:auto_fit_context",
+  "text": "INTEGER NOT NULL DEFAULT 1"
+ },
+ {
+  "file": "main.py",
+  "line": 1143,
+  "context": "key:minimum_context_size",
+  "text": "INTEGER NOT NULL DEFAULT 8192"
+ },
+ {
+  "file": "main.py",
+  "line": 1144,
+  "context": "key:favorite",
+  "text": "INTEGER NOT NULL DEFAULT 0"
+ },
+ {
+  "file": "main.py",
+  "line": 1145,
+  "context": "key:app",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1146,
+  "context": "key:port_auto",
+  "text": "INTEGER NOT NULL DEFAULT 1"
+ },
+ {
+  "file": "main.py",
+  "line": 1147,
+  "context": "key:spec_type",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1148,
+  "context": "key:draft_filename",
+  "text": "TEXT NOT NULL DEFAULT ''"
+ },
+ {
+  "file": "main.py",
+  "line": 1149,
+  "context": "key:spec_draft_n_max",
+  "text": "INTEGER NOT NULL DEFAULT 0"
+ },
+ {
+  "file": "main.py",
+  "line": 1213,
+  "context": "assign",
+  "text": "CHECK(engine IN ('llama.cpp', 'ollama'))"
+ },
+ {
+  "file": "main.py",
+  "line": 1217,
+  "context": "assign",
+  "text": "CHECK(engine IN ('llama.cpp','ollama','vllm','sglang','tensorrt-llm','openai-compatible','comfyui','diffusers','whisper','riva','nvidia-nim'))"
+ },
+ {
+  "file": "main.py",
+  "line": 1292,
+  "context": "Tuple",
+  "text": "En cola"
+ },
+ {
+  "file": "main.py",
+  "line": 1296,
+  "context": "Tuple",
+  "text": "En cola"
+ },
+ {
+  "file": "main.py",
+  "line": 1681,
+  "context": "kw:detail:HTTPException",
+  "text": "Autenticación requerida"
+ },
+ {
+  "file": "main.py",
+  "line": 1685,
+  "context": "kw:detail:HTTPException",
+  "text": "Clave de acceso inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 1689,
+  "context": "kw:detail:HTTPException",
+  "text": "Configura MYDGX_DASHBOARD_PASSWORD o MYDGX_API_KEY para acceso de red"
+ },
+ {
+  "file": "main.py",
+  "line": 1725,
+  "context": "return",
+  "text": "Host no permitido: añádelo a TRUSTED_HOSTS si es legítimo"
+ },
+ {
+  "file": "main.py",
+  "line": 1735,
+  "context": "return",
+  "text": "Origen no permitido para esta operación"
+ },
+ {
+  "file": "main.py",
+  "line": 1737,
+  "context": "return",
+  "text": "Petición entre sitios bloqueada"
+ },
+ {
+  "file": "main.py",
+  "line": 1746,
+  "context": "kw:detail:HTTPException",
+  "text": "Las herramientas Open WebUI no están configuradas"
+ },
+ {
+  "file": "main.py",
+  "line": 1753,
+  "context": "kw:detail:HTTPException",
+  "text": "Credencial de herramienta inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 1789,
+  "context": "Set",
+  "text": "not supported"
+ },
+ {
+  "file": "main.py",
+  "line": 1789,
+  "context": "Set",
+  "text": "[not supported]"
+ },
+ {
+  "file": "main.py",
+  "line": 1873,
+  "context": "assign",
+  "text": "NVIDIA DGX OS"
+ },
+ {
+  "file": "main.py",
+  "line": 1875,
+  "context": "assign",
+  "text": "Ubuntu"
+ },
+ {
+  "file": "main.py",
+  "line": 1877,
+  "context": "assign",
+  "text": "Debian"
+ },
+ {
+  "file": "main.py",
+  "line": 1881,
+  "context": "arg:values.get",
+  "text": "Linux"
+ },
+ {
+  "file": "main.py",
+  "line": 1946,
+  "context": "Tuple",
+  "text": "dgx spark"
+ },
+ {
+  "file": "main.py",
+  "line": 1946,
+  "context": "Tuple",
+  "text": "ascent gx10"
+ },
+ {
+  "file": "main.py",
+  "line": 1946,
+  "context": "Tuple",
+  "text": "zgx nano"
+ },
+ {
+  "file": "main.py",
+  "line": 1946,
+  "context": "Tuple",
+  "text": "thinkstation pgx"
+ },
+ {
+  "file": "main.py",
+  "line": 1946,
+  "context": "Tuple",
+  "text": "pro max gb10"
+ },
+ {
+  "file": "main.py",
+  "line": 1950,
+  "context": "Tuple",
+  "text": "NVIDIA DGX Spark"
+ },
+ {
+  "file": "main.py",
+  "line": 1951,
+  "context": "Tuple",
+  "text": "ASUS Ascent GX10"
+ },
+ {
+  "file": "main.py",
+  "line": 1952,
+  "context": "Tuple",
+  "text": "HP ZGX Nano G1n"
+ },
+ {
+  "file": "main.py",
+  "line": 1953,
+  "context": "Tuple",
+  "text": "Lenovo"
+ },
+ {
+  "file": "main.py",
+  "line": 1953,
+  "context": "Tuple",
+  "text": "Lenovo ThinkStation PGX"
+ },
+ {
+  "file": "main.py",
+  "line": 1954,
+  "context": "Tuple",
+  "text": "Dell"
+ },
+ {
+  "file": "main.py",
+  "line": 1954,
+  "context": "Tuple",
+  "text": "Dell Pro Max GB10"
+ },
+ {
+  "file": "main.py",
+  "line": 1955,
+  "context": "Tuple",
+  "text": "NVIDIA GB10"
+ },
+ {
+  "file": "main.py",
+  "line": 1955,
+  "context": "Tuple",
+  "text": "GB10 AI Supercomputer"
+ },
+ {
+  "file": "main.py",
+  "line": 1962,
+  "context": "Tuple",
+  "text": "ASUS Ascent GX10"
+ },
+ {
+  "file": "main.py",
+  "line": 1964,
+  "context": "Tuple",
+  "text": "HP ZGX Nano G1n"
+ },
+ {
+  "file": "main.py",
+  "line": 1966,
+  "context": "Tuple",
+  "text": "Lenovo"
+ },
+ {
+  "file": "main.py",
+  "line": 1966,
+  "context": "Tuple",
+  "text": "Lenovo ThinkStation PGX"
+ },
+ {
+  "file": "main.py",
+  "line": 1968,
+  "context": "Tuple",
+  "text": "Dell"
+ },
+ {
+  "file": "main.py",
+  "line": 1968,
+  "context": "Tuple",
+  "text": "Dell Pro Max GB10"
+ },
+ {
+  "file": "main.py",
+  "line": 1970,
+  "context": "Tuple",
+  "text": "NVIDIA DGX Spark"
+ },
+ {
+  "file": "main.py",
+  "line": 1972,
+  "context": "Tuple",
+  "text": "NVIDIA GB10"
+ },
+ {
+  "file": "main.py",
+  "line": 1972,
+  "context": "arg:next",
+  "text": "GB10 AI Supercomputer"
+ },
+ {
+  "file": "main.py",
+  "line": 2207,
+  "context": "assign",
+  "text": "llama.cpp v1.0.0 · CUDA 13 · sm_121"
+ },
+ {
+  "file": "main.py",
+  "line": 2209,
+  "context": "Tuple",
+  "text": "llama.cpp b10679"
+ },
+ {
+  "file": "main.py",
+  "line": 2209,
+  "context": "Tuple",
+  "text": "llama.cpp b11429"
+ },
+ {
+  "file": "main.py",
+  "line": 2213,
+  "context": "key:name",
+  "text": "ARTIFEX · Cyber-Tiel Q5"
+ },
+ {
+  "file": "main.py",
+  "line": 2222,
+  "context": "key:name",
+  "text": "ARTIFEX · Cyber-Tiel Q6"
+ },
+ {
+  "file": "main.py",
+  "line": 2231,
+  "context": "key:name",
+  "text": "ARTIFEX · BugHunter v7"
+ },
+ {
+  "file": "main.py",
+  "line": 2240,
+  "context": "key:name",
+  "text": "ARTIFEX · BugHunter v8"
+ },
+ {
+  "file": "main.py",
+  "line": 2249,
+  "context": "key:name",
+  "text": "ARTIFEX · GPT-OSS 120B"
+ },
+ {
+  "file": "main.py",
+  "line": 2258,
+  "context": "key:name",
+  "text": "ARTIFEX · Qwen Flash"
+ },
+ {
+  "file": "main.py",
+  "line": 2295,
+  "context": "Tuple",
+  "text": "ARTIFEX gpu/remote/start_server.sh"
+ },
+ {
+  "file": "main.py",
+  "line": 2302,
+  "context": "Tuple",
+  "text": "llama.cpp v1.0.0"
+ },
+ {
+  "file": "main.py",
+  "line": 2433,
+  "context": "key:name",
+  "text": "Default"
+ },
+ {
+  "file": "main.py",
+  "line": 2434,
+  "context": "key:name",
+  "text": "Quick"
+ },
+ {
+  "file": "main.py",
+  "line": 2551,
+  "context": "BoolOp",
+  "text": "Modelo {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 2685,
+  "context": "Tuple",
+  "text": "mínimo del perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 2687,
+  "context": "Tuple",
+  "text": "GGUF + KV según la cabecera"
+ },
+ {
+  "file": "main.py",
+  "line": 2689,
+  "context": "Tuple",
+  "text": "GGUF + contexto conservador"
+ },
+ {
+  "file": "main.py",
+  "line": 2691,
+  "context": "Tuple",
+  "text": "estimación conservadora sin GGUF local"
+ },
+ {
+  "file": "main.py",
+  "line": 2814,
+  "context": "Tuple",
+  "text": "nvcc no detectado"
+ },
+ {
+  "file": "main.py",
+  "line": 2819,
+  "context": "arg:line.startswith",
+  "text": "Build "
+ },
+ {
+  "file": "main.py",
+  "line": 2937,
+  "context": "arg:RuntimeError",
+  "text": "El GGUF no está descargado; usa Descargar en el perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 2938,
+  "context": "arg:RuntimeError",
+  "text": "El perfil no tiene un archivo GGUF válido"
+ },
+ {
+  "file": "main.py",
+  "line": 2954,
+  "context": "arg:RuntimeError",
+  "text": "El proyector multimodal no está descargado"
+ },
+ {
+  "file": "main.py",
+  "line": 3053,
+  "context": "arg:RuntimeError",
+  "text": "No se encontró el runtime llama.cpp requerido"
+ },
+ {
+  "file": "main.py",
+  "line": 3165,
+  "context": "kw:detail:HTTPException",
+  "text": "No hay puertos locales libres entre 18080 y 19999"
+ },
+ {
+  "file": "main.py",
+  "line": 3212,
+  "context": "arg:RuntimeError",
+  "text": "No hay puertos locales libres para arrancar el perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 3216,
+  "context": "BoolOp",
+  "text": "Modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 3475,
+  "context": "key:11000",
+  "text": "túnel DGX Dashboard"
+ },
+ {
+  "file": "main.py",
+  "line": 3475,
+  "context": "key:13000",
+  "text": "túnel Open WebUI"
+ },
+ {
+  "file": "main.py",
+  "line": 3475,
+  "context": "key:14000",
+  "text": "túnel gateway"
+ },
+ {
+  "file": "main.py",
+  "line": 3476,
+  "context": "key:18088",
+  "text": "túnel MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 3476,
+  "context": "key:18188",
+  "text": "túnel ComfyUI"
+ },
+ {
+  "file": "main.py",
+  "line": 3476,
+  "context": "key:28088",
+  "text": "túnel MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 3509,
+  "context": "Dict",
+  "text": "gateway LiteLLM"
+ },
+ {
+  "file": "main.py",
+  "line": 3521,
+  "context": "return",
+  "text": "el rango {0}-{1} está reservado para el perfil {2}"
+ },
+ {
+  "file": "main.py",
+  "line": 3524,
+  "context": "return",
+  "text": "el puerto {0} ya lo usa {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 3527,
+  "context": "return",
+  "text": "el puerto {0} ya lo usa la app {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 3570,
+  "context": "arg:RuntimeError",
+  "text": "La app {0} no existe en {1} o su start.sh no es válido"
+ },
+ {
+  "file": "main.py",
+  "line": 3600,
+  "context": "arg:RuntimeError",
+  "text": "start.sh {0} superó {1} s"
+ },
+ {
+  "file": "main.py",
+  "line": 3618,
+  "context": "arg:set_profile_app_state",
+  "text": "Ya estaba en marcha"
+ },
+ {
+  "file": "main.py",
+  "line": 3620,
+  "context": "arg:set_profile_app_state",
+  "text": "Arrancando con start.sh start"
+ },
+ {
+  "file": "main.py",
+  "line": 3623,
+  "context": "arg:RuntimeError",
+  "text": "start.sh start terminó con código {0}: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 3630,
+  "context": "arg:set_profile_app_state",
+  "text": "Arranque cancelado al detener el perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 3650,
+  "context": "arg:set_profile_app_state",
+  "text": "En cola tras cargar la inferencia"
+ },
+ {
+  "file": "main.py",
+  "line": 3673,
+  "context": "arg:set_profile_app_state",
+  "text": "Sigue en uso por otro perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 3678,
+  "context": "arg:set_profile_app_state",
+  "text": "Deteniendo con start.sh stop"
+ },
+ {
+  "file": "main.py",
+  "line": 3682,
+  "context": "arg:RuntimeError",
+  "text": "start.sh stop terminó con código {0}: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 3750,
+  "context": "BinOp",
+  "text": "profile-{0}-{1}.log"
+ },
+ {
+  "file": "main.py",
+  "line": 3778,
+  "context": "arg:record_model_run",
+  "text": "El watchdog dejó de relanzarlo tras varios fallos seguidos; levanta el perfil de nuevo"
+ },
+ {
+  "file": "main.py",
+  "line": 3892,
+  "context": "Tuple",
+  "text": "llama-server no produjo un diagnóstico"
+ },
+ {
+  "file": "main.py",
+  "line": 3899,
+  "context": "IfExp",
+  "text": "llama-server terminó sin diagnóstico"
+ },
+ {
+  "file": "main.py",
+  "line": 3941,
+  "context": "arg:RuntimeError",
+  "text": "El modelo Ollama {0} no está instalado"
+ },
+ {
+  "file": "main.py",
+  "line": 3954,
+  "context": "arg:RuntimeError",
+  "text": "{0} no tiene endpoint configurado"
+ },
+ {
+  "file": "main.py",
+  "line": 3957,
+  "context": "arg:ExternalRuntimeUnavailable",
+  "text": "El endpoint de {0} no está disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 3971,
+  "context": "arg:RuntimeError",
+  "text": "No se encontró el runtime llama.cpp requerido"
+ },
+ {
+  "file": "main.py",
+  "line": 3973,
+  "context": "arg:RuntimeError",
+  "text": "El modelo requiere una plataforma GB10 / sm_121"
+ },
+ {
+  "file": "main.py",
+  "line": 3979,
+  "context": "BinOp",
+  "text": "profile-{0}-{1}.log"
+ },
+ {
+  "file": "main.py",
+  "line": 4012,
+  "context": "arg:notify_safely",
+  "text": "Error cargando modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 4032,
+  "context": "arg:notify_safely",
+  "text": "Error cargando modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 4033,
+  "context": "arg:notify_safely",
+  "text": "{0}: llama-server agotó el tiempo de arranque ({1} s)"
+ },
+ {
+  "file": "main.py",
+  "line": 4037,
+  "context": "arg:RuntimeError",
+  "text": "llama-server agotó el tiempo de arranque"
+ },
+ {
+  "file": "main.py",
+  "line": 4079,
+  "context": "assign",
+  "text": "ya hay dos perfiles cargados"
+ },
+ {
+  "file": "main.py",
+  "line": 4081,
+  "context": "assign",
+  "text": "alias incompatibles: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 4083,
+  "context": "assign",
+  "text": "puertos incompatibles: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 4086,
+  "context": "assign",
+  "text": "requiere {0} MiB y la capacidad segura es {1} MiB"
+ },
+ {
+  "file": "main.py",
+  "line": 4091,
+  "context": "assign",
+  "text": "necesita {0} MiB adicionales más {1} MiB de reserva; hay {2} MiB"
+ },
+ {
+  "file": "main.py",
+  "line": 4094,
+  "context": "arg:RuntimeError",
+  "text": "No se puede cargar la combinación: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 4121,
+  "context": "arg:RuntimeError",
+  "text": "El perfil ya está cargado con otra configuración; detén solo ese perfil antes de recargarlo"
+ },
+ {
+  "file": "main.py",
+  "line": 4162,
+  "context": "arg:record_model_run",
+  "text": "Proceso conservado al cambiar de perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 4189,
+  "context": "assign",
+  "text": "memoria disponible {0} MiB; necesita {1} MiB"
+ },
+ {
+  "file": "main.py",
+  "line": 4231,
+  "context": "arg:RuntimeError",
+  "text": "Arranque interrumpido: se pidió detener el perfil mientras cargaba"
+ },
+ {
+  "file": "main.py",
+  "line": 4242,
+  "context": "assign",
+  "text": "{0} modelos · {1} conservados"
+ },
+ {
+  "file": "main.py",
+  "line": 4382,
+  "context": "IfExp",
+  "text": "Descarga cancelada tras reiniciar MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 4384,
+  "context": "IfExp",
+  "text": "Descarga interrumpida al reiniciar MyDGX; puede reanudarse"
+ },
+ {
+  "file": "main.py",
+  "line": 4415,
+  "context": "arg:db.update_job",
+  "text": "Suite interrumpida; MyDGX restaurará los perfiles guardados"
+ },
+ {
+  "file": "main.py",
+  "line": 4481,
+  "context": "kw:title:FastAPI",
+  "text": "MyDGX API"
+ },
+ {
+  "file": "main.py",
+  "line": 4594,
+  "context": "assign",
+  "text": "no-store"
+ },
+ {
+  "file": "main.py",
+  "line": 4626,
+  "context": "kw:detail:HTTPException",
+  "text": "Demasiados intentos. Espera antes de volver a probar."
+ },
+ {
+  "file": "main.py",
+  "line": 4633,
+  "context": "kw:detail:HTTPException",
+  "text": "Contraseña incorrecta"
+ },
+ {
+  "file": "main.py",
+  "line": 4688,
+  "context": "kw:detail:HTTPException",
+  "text": "Ollama no disponible: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 4720,
+  "context": "assign",
+  "text": "# Ajustes gestionados desde Configuración de MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 4745,
+  "context": "arg:ValueError",
+  "text": "{0} debe ser verdadero o falso"
+ },
+ {
+  "file": "main.py",
+  "line": 4749,
+  "context": "arg:ValueError",
+  "text": "{0} debe ser un número entero"
+ },
+ {
+  "file": "main.py",
+  "line": 4751,
+  "context": "arg:ValueError",
+  "text": "{0} debe estar entre {1} y {2}"
+ },
+ {
+  "file": "main.py",
+  "line": 4754,
+  "context": "arg:ValueError",
+  "text": "{0} contiene caracteres no permitidos"
+ },
+ {
+  "file": "main.py",
+  "line": 4766,
+  "context": "arg:ValueError",
+  "text": "Clave o valor inválido para .env"
+ },
+ {
+  "file": "main.py",
+  "line": 4784,
+  "context": "arg:ENV_FILE.with_name",
+  "text": ".env.{0}.tmp"
+ },
+ {
+  "file": "main.py",
+  "line": 4801,
+  "context": "kw:detail:HTTPException",
+  "text": "Hugging Face rechazó el token: es inválido o ha caducado"
+ },
+ {
+  "file": "main.py",
+  "line": 4802,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo verificar el token con Hugging Face"
+ },
+ {
+  "file": "main.py",
+  "line": 4804,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo verificar el token con Hugging Face"
+ },
+ {
+  "file": "main.py",
+  "line": 4841,
+  "context": "kw:detail:HTTPException",
+  "text": "Elige guardar o quitar el token, no ambas cosas"
+ },
+ {
+  "file": "main.py",
+  "line": 4846,
+  "context": "kw:detail:HTTPException",
+  "text": "{0} no se puede cambiar desde Configuración"
+ },
+ {
+  "file": "main.py",
+  "line": 4856,
+  "context": "kw:detail:HTTPException",
+  "text": "El token de Hugging Face debe empezar por hf_ y no contener espacios"
+ },
+ {
+  "file": "main.py",
+  "line": 4868,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo escribir .env; revisa los permisos del archivo"
+ },
+ {
+  "file": "main.py",
+  "line": 4873,
+  "context": "IfExp",
+  "text": "hf_token changed"
+ },
+ {
+  "file": "main.py",
+  "line": 4981,
+  "context": "kw:detail:HTTPException",
+  "text": "Configura GATEWAY_API_KEY en .env antes de exponer el gateway en la red"
+ },
+ {
+  "file": "main.py",
+  "line": 4984,
+  "context": "kw:detail:HTTPException",
+  "text": "El puerto está reservado por MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 4993,
+  "context": "kw:detail:HTTPException",
+  "text": "El puerto está asignado a un modelo llama.cpp"
+ },
+ {
+  "file": "main.py",
+  "line": 5070,
+  "context": "kw:detail:HTTPException",
+  "text": "start y end deben indicarse juntos"
+ },
+ {
+  "file": "main.py",
+  "line": 5075,
+  "context": "kw:detail:HTTPException",
+  "text": "start debe ser anterior a end"
+ },
+ {
+  "file": "main.py",
+  "line": 5080,
+  "context": "kw:detail:HTTPException",
+  "text": "El intervalo supera la retención de {0} horas"
+ },
+ {
+  "file": "main.py",
+  "line": 5453,
+  "context": "arg:get",
+  "text": "Size"
+ },
+ {
+  "file": "main.py",
+  "line": 5561,
+  "context": "key:label",
+  "text": "Sistema"
+ },
+ {
+  "file": "main.py",
+  "line": 5562,
+  "context": "key:description",
+  "text": "Sistema operativo, CUDA, paquetes y registros"
+ },
+ {
+  "file": "main.py",
+  "line": 5563,
+  "context": "key:label",
+  "text": "Modelos"
+ },
+ {
+  "file": "main.py",
+  "line": 5564,
+  "context": "key:description",
+  "text": "Hugging Face, Ollama, vídeo y ComfyUI; los enlaces a la caché de Hugging Face cuentan una vez"
+ },
+ {
+  "file": "main.py",
+  "line": 5565,
+  "context": "key:label",
+  "text": "Apps"
+ },
+ {
+  "file": "main.py",
+  "line": 5566,
+  "context": "key:description",
+  "text": "ComfyUI, Open WebUI, SearXNG y Docker"
+ },
+ {
+  "file": "main.py",
+  "line": 5568,
+  "context": "key:description",
+  "text": "Dashboard, datos y motor llama.cpp"
+ },
+ {
+  "file": "main.py",
+  "line": 5569,
+  "context": "key:label",
+  "text": "Usuario y otros"
+ },
+ {
+  "file": "main.py",
+  "line": 5570,
+  "context": "key:description",
+  "text": "Resto del home: proyectos, cachés y descargas"
+ },
+ {
+  "file": "main.py",
+  "line": 5575,
+  "context": "Tuple",
+  "text": "Hugging Face"
+ },
+ {
+  "file": "main.py",
+  "line": 5576,
+  "context": "Tuple",
+  "text": "Ollama"
+ },
+ {
+  "file": "main.py",
+  "line": 5577,
+  "context": "Tuple",
+  "text": "Modelos de vídeo"
+ },
+ {
+  "file": "main.py",
+  "line": 5578,
+  "context": "Tuple",
+  "text": "Modelos de ComfyUI"
+ },
+ {
+  "file": "main.py",
+  "line": 5591,
+  "context": "key:name",
+  "text": "Otros"
+ },
+ {
+  "file": "main.py",
+  "line": 5592,
+  "context": "key:path",
+  "text": "{0} directorios pequeños y ficheros sueltos en {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 5797,
+  "context": "key:reason",
+  "text": "Solo hay drafter o proyector de visión: falta el modelo principal"
+ },
+ {
+  "file": "main.py",
+  "line": 5825,
+  "context": "Tuple",
+  "text": "Safetensors"
+ },
+ {
+  "file": "main.py",
+  "line": 5902,
+  "context": "BoolOp",
+  "text": "no indicada"
+ },
+ {
+  "file": "main.py",
+  "line": 5903,
+  "context": "BoolOp",
+  "text": "no indicada"
+ },
+ {
+  "file": "main.py",
+  "line": 5904,
+  "context": "BoolOp",
+  "text": "no indicada"
+ },
+ {
+  "file": "main.py",
+  "line": 5905,
+  "context": "BoolOp",
+  "text": "no indicado"
+ },
+ {
+  "file": "main.py",
+  "line": 5906,
+  "context": "BoolOp",
+  "text": "no indicados"
+ },
+ {
+  "file": "main.py",
+  "line": 5911,
+  "context": "return",
+  "text": "# {0}\n\nDescripción generada automáticamente por MyDGX a partir de los metadatos públicos de Hugging Face porque el repositorio no proporciona una ficha utilizable.\n\n- **Repositorio:** `{1}`\n- **Tarea declarada:** {2}\n- **Biblioteca:** {3}\n- **Modelo base:** {4}\n- **Licencia:** {5}\n- **Idiomas:** {6}\n- **Descargas / Me gusta:** {7} / {8}\n- **Etiquetas públicas:** {9}\n"
+ },
+ {
+  "file": "main.py",
+  "line": 5921,
+  "context": "IfExp",
+  "text": "ninguna"
+ },
+ {
+  "file": "main.py",
+  "line": 6073,
+  "context": "Tuple",
+  "text": "Whisper"
+ },
+ {
+  "file": "main.py",
+  "line": 6074,
+  "context": "Tuple",
+  "text": "TTS CUDA"
+ },
+ {
+  "file": "main.py",
+  "line": 6075,
+  "context": "Tuple",
+  "text": "Open WebUI"
+ },
+ {
+  "file": "main.py",
+  "line": 6076,
+  "context": "Tuple",
+  "text": "Ollama"
+ },
+ {
+  "file": "main.py",
+  "line": 6077,
+  "context": "Tuple",
+  "text": "Gateway API"
+ },
+ {
+  "file": "main.py",
+  "line": 6245,
+  "context": "IfExp",
+  "text": "llama-server · {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 6248,
+  "context": "assign",
+  "text": "{0} (fuera de MyDGX)"
+ },
+ {
+  "file": "main.py",
+  "line": 6270,
+  "context": "arg:meminfo.get",
+  "text": "Buffers"
+ },
+ {
+  "file": "main.py",
+  "line": 6270,
+  "context": "arg:meminfo.get",
+  "text": "Cached"
+ },
+ {
+  "file": "main.py",
+  "line": 6271,
+  "context": "arg:meminfo.get",
+  "text": "Shmem"
+ },
+ {
+  "file": "main.py",
+  "line": 6277,
+  "context": "arg:meminfo.get",
+  "text": "Shmem"
+ },
+ {
+  "file": "main.py",
+  "line": 6354,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Tiny"
+ },
+ {
+  "file": "main.py",
+  "line": 6355,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Tiny EN"
+ },
+ {
+  "file": "main.py",
+  "line": 6356,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Base"
+ },
+ {
+  "file": "main.py",
+  "line": 6357,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Base EN"
+ },
+ {
+  "file": "main.py",
+  "line": 6358,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Small"
+ },
+ {
+  "file": "main.py",
+  "line": 6359,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Small EN"
+ },
+ {
+  "file": "main.py",
+  "line": 6360,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Medium"
+ },
+ {
+  "file": "main.py",
+  "line": 6361,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Medium EN"
+ },
+ {
+  "file": "main.py",
+  "line": 6362,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Large"
+ },
+ {
+  "file": "main.py",
+  "line": 6363,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Large V1"
+ },
+ {
+  "file": "main.py",
+  "line": 6364,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Large V2"
+ },
+ {
+  "file": "main.py",
+  "line": 6365,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Large V3"
+ },
+ {
+  "file": "main.py",
+  "line": 6367,
+  "context": "Tuple",
+  "text": "OpenAI Whisper Large V3 Turbo"
+ },
+ {
+  "file": "main.py",
+  "line": 6399,
+  "context": "Tuple",
+  "text": "OpenAI Whisper {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 6400,
+  "context": "Tuple",
+  "text": "OpenAI Whisper {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 6472,
+  "context": "List",
+  "text": "Ollama"
+ },
+ {
+  "file": "main.py",
+  "line": 6493,
+  "context": "arg:loaded_by.append",
+  "text": "Perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 6564,
+  "context": "Tuple",
+  "text": "no-refusal"
+ },
+ {
+  "file": "main.py",
+  "line": 6672,
+  "context": "IfExp",
+  "text": "Modelo incompleto"
+ },
+ {
+  "file": "main.py",
+  "line": 6672,
+  "context": "IfExp",
+  "text": "Modelo defectuoso"
+ },
+ {
+  "file": "main.py",
+  "line": 6673,
+  "context": "arg:notify_safely",
+  "text": "{0}{1}: el benchmark falló y se ha marcado como {2}"
+ },
+ {
+  "file": "main.py",
+  "line": 6783,
+  "context": "List",
+  "text": "Diffusers"
+ },
+ {
+  "file": "main.py",
+  "line": 6785,
+  "context": "List",
+  "text": "Whisper"
+ },
+ {
+  "file": "main.py",
+  "line": 6785,
+  "context": "List",
+  "text": "Riva"
+ },
+ {
+  "file": "main.py",
+  "line": 6787,
+  "context": "List",
+  "text": "Riva"
+ },
+ {
+  "file": "main.py",
+  "line": 6966,
+  "context": "assign",
+  "text": "{0}-{1}-of-{2}.gguf"
+ },
+ {
+  "file": "main.py",
+  "line": 7078,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo Hugging Face no está descargado"
+ },
+ {
+  "file": "main.py",
+  "line": 7085,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo no tiene un snapshot local completo"
+ },
+ {
+  "file": "main.py",
+  "line": 7156,
+  "context": "key:source",
+  "text": "Perfil Default desde Modelos"
+ },
+ {
+  "file": "main.py",
+  "line": 7178,
+  "context": "kw:detail:HTTPException",
+  "text": "Encender o añadir a Default requiere un modelo GGUF completo o un modelo de Ollama"
+ },
+ {
+  "file": "main.py",
+  "line": 7195,
+  "context": "key:runtime_requirement",
+  "text": "llama.cpp CUDA · GB10 sm_121"
+ },
+ {
+  "file": "main.py",
+  "line": 7240,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo de visión no tiene un mmproj local completo"
+ },
+ {
+  "file": "main.py",
+  "line": 7258,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo Ollama no está instalado"
+ },
+ {
+  "file": "main.py",
+  "line": 7393,
+  "context": "kw:detail:HTTPException",
+  "text": "Nombre de archivo GGUF inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 7395,
+  "context": "kw:detail:HTTPException",
+  "text": "El contexto por defecto no puede superar al máximo"
+ },
+ {
+  "file": "main.py",
+  "line": 7442,
+  "context": "arg:ValueError",
+  "text": "GGUF truncado"
+ },
+ {
+  "file": "main.py",
+  "line": 7448,
+  "context": "arg:ValueError",
+  "text": "GGUF truncado"
+ },
+ {
+  "file": "main.py",
+  "line": 7459,
+  "context": "arg:ValueError",
+  "text": "GGUF truncado"
+ },
+ {
+  "file": "main.py",
+  "line": 7466,
+  "context": "arg:ValueError",
+  "text": "GGUF truncado"
+ },
+ {
+  "file": "main.py",
+  "line": 7497,
+  "context": "arg:ValueError",
+  "text": "tipo GGUF desconocido {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 7538,
+  "context": "Subscript",
+  "text": "Authorization"
+ },
+ {
+  "file": "main.py",
+  "line": 7538,
+  "context": "assign",
+  "text": "Bearer {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 7893,
+  "context": "assign",
+  "text": "Arranque rápido desde Modelos"
+ },
+ {
+  "file": "main.py",
+  "line": 7957,
+  "context": "assign",
+  "text": "Alias en uso: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 7959,
+  "context": "assign",
+  "text": "Puertos en uso: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 7962,
+  "context": "assign",
+  "text": "Necesita {0} GB en total y el equipo admite {1} GB"
+ },
+ {
+  "file": "main.py",
+  "line": 7964,
+  "context": "assign",
+  "text": "Necesita {0} GB más y hay {1} GB libres"
+ },
+ {
+  "file": "main.py",
+  "line": 7981,
+  "context": "kw:detail:HTTPException",
+  "text": "Hay un perfil arrancando; espera a que termine"
+ },
+ {
+  "file": "main.py",
+  "line": 7986,
+  "context": "kw:detail:HTTPException",
+  "text": "{0} ya está cargado en el perfil {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 8000,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo encender {0}: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 8012,
+  "context": "kw:detail:HTTPException",
+  "text": "{0} no está encendido en Quick"
+ },
+ {
+  "file": "main.py",
+  "line": 8022,
+  "context": "kw:detail:HTTPException",
+  "text": "Hay un perfil arrancando; espera a que termine"
+ },
+ {
+  "file": "main.py",
+  "line": 8064,
+  "context": "kw:detail:HTTPException",
+  "text": "ComfyUI no respondió a la petición de liberar memoria"
+ },
+ {
+  "file": "main.py",
+  "line": 8132,
+  "context": "Tuple",
+  "text": "multi-token prediction"
+ },
+ {
+  "file": "main.py",
+  "line": 8153,
+  "context": "IfExp",
+  "text": "Dense"
+ },
+ {
+  "file": "main.py",
+  "line": 8455,
+  "context": "assign",
+  "text": "No recomendado"
+ },
+ {
+  "file": "main.py",
+  "line": 8457,
+  "context": "assign",
+  "text": "Ideal"
+ },
+ {
+  "file": "main.py",
+  "line": 8459,
+  "context": "assign",
+  "text": "Compatible"
+ },
+ {
+  "file": "main.py",
+  "line": 8461,
+  "context": "assign",
+  "text": "Ajustado"
+ },
+ {
+  "file": "main.py",
+  "line": 8463,
+  "context": "assign",
+  "text": "No recomendado"
+ },
+ {
+  "file": "main.py",
+  "line": 8465,
+  "context": "assign",
+  "text": "Ajustado"
+ },
+ {
+  "file": "main.py",
+  "line": 8469,
+  "context": "IfExp",
+  "text": "Runtime externo local · {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 8472,
+  "context": "IfExp",
+  "text": "Runtime distribuido CUDA · {0}× GB10 · tensor parallel"
+ },
+ {
+  "file": "main.py",
+  "line": 8474,
+  "context": "IfExp",
+  "text": "llama.cpp CUDA · GB10 sm_121"
+ },
+ {
+  "file": "main.py",
+  "line": 8478,
+  "context": "assign",
+  "text": "No compatible · REAP requiere una rama especial de llama.cpp"
+ },
+ {
+  "file": "main.py",
+  "line": 8483,
+  "context": "IfExp",
+  "text": "Ideal"
+ },
+ {
+  "file": "main.py",
+  "line": 8487,
+  "context": "arg:reasons.append",
+  "text": "{0} cuantización(es) GGUF detectadas"
+ },
+ {
+  "file": "main.py",
+  "line": 8489,
+  "context": "arg:reasons.append",
+  "text": "{0} GB de pesos detectados"
+ },
+ {
+  "file": "main.py",
+  "line": 8491,
+  "context": "arg:reasons.append",
+  "text": "{0} evaluada con {1}K de contexto"
+ },
+ {
+  "file": "main.py",
+  "line": 8498,
+  "context": "arg:reasons.append",
+  "text": "≈{0} tok/s y {1} slot(s) conservadores"
+ },
+ {
+  "file": "main.py",
+  "line": 8501,
+  "context": "arg:reasons.append",
+  "text": "Adecuado para {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 8503,
+  "context": "arg:reasons.append",
+  "text": "Configuración verificada por ARTIFEX"
+ },
+ {
+  "file": "main.py",
+  "line": 8505,
+  "context": "arg:reasons.append",
+  "text": "Editor o cuantizador reconocido"
+ },
+ {
+  "file": "main.py",
+  "line": 8507,
+  "context": "arg:warnings.append",
+  "text": "Variante sin censura o abliterada"
+ },
+ {
+  "file": "main.py",
+  "line": 8509,
+  "context": "arg:warnings.append",
+  "text": "Licencia no indicada en la ficha"
+ },
+ {
+  "file": "main.py",
+  "line": 8511,
+  "context": "arg:warnings.append",
+  "text": "Requiere acceso autenticado en Hugging Face"
+ },
+ {
+  "file": "main.py",
+  "line": 8513,
+  "context": "arg:warnings.append",
+  "text": "El conjunto de shards GGUF parece incompleto"
+ },
+ {
+  "file": "main.py",
+  "line": 8515,
+  "context": "arg:warnings.insert",
+  "text": "Sin GGUF: llama.cpp no puede ejecutarlo y no hay vLLM ni SGLang instalados; busca su versión GGUF"
+ },
+ {
+  "file": "main.py",
+  "line": 8517,
+  "context": "arg:warnings.append",
+  "text": "No cabe en la capacidad segura del equipo"
+ },
+ {
+  "file": "main.py",
+  "line": 8519,
+  "context": "arg:warnings.append",
+  "text": "Cabe por capacidad, pero requiere liberar memoria o descargar modelos activos"
+ },
+ {
+  "file": "main.py",
+  "line": 8521,
+  "context": "arg:warnings.append",
+  "text": "Formato {0} no compatible con Linux GB10"
+ },
+ {
+  "file": "main.py",
+  "line": 8523,
+  "context": "arg:warnings.insert",
+  "text": "REAP no compatible: requiere una rama especial de llama.cpp que MyDGX no instala"
+ },
+ {
+  "file": "main.py",
+  "line": 8525,
+  "context": "arg:warnings.append",
+  "text": "Requiere un motor local con API OpenAI compatible"
+ },
+ {
+  "file": "main.py",
+  "line": 8527,
+  "context": "arg:warnings.append",
+  "text": "Falta el archivo mmproj requerido por llama.cpp"
+ },
+ {
+  "file": "main.py",
+  "line": 8529,
+  "context": "arg:reasons.append",
+  "text": "Projector visual detectado: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 8532,
+  "context": "arg:reasons.append",
+  "text": "Decodificación especulativa: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 8535,
+  "context": "arg:warnings.append",
+  "text": "Sin MTP/DFlash/DSpark detectado en metadatos"
+ },
+ {
+  "file": "main.py",
+  "line": 8537,
+  "context": "arg:warnings.append",
+  "text": "Tensor parallel requiere interconexión ConnectX-7 configurada"
+ },
+ {
+  "file": "main.py",
+  "line": 8544,
+  "context": "arg:reasons.append",
+  "text": "Drafter {0} incluido: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 8658,
+  "context": "arg:startswith",
+  "text": "built on "
+ },
+ {
+  "file": "main.py",
+  "line": 8747,
+  "context": "arg:startswith",
+  "text": "for trading:"
+ },
+ {
+  "file": "main.py",
+  "line": 8883,
+  "context": "assign",
+  "text": "Incluido en el catálogo hft.md de modelos sin censura"
+ },
+ {
+  "file": "main.py",
+  "line": 9035,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo consultar Hugging Face: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 9108,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo consultar Hugging Face: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 9148,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo guardar el favorito: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 9177,
+  "context": "kw:detail:HTTPException",
+  "text": "Repositorio Hugging Face inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 9179,
+  "context": "kw:detail:HTTPException",
+  "text": "Revisión inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 9247,
+  "context": "IfExp",
+  "text": "REAP no es compatible con el runtime de MyDGX: requiere una rama especial de llama.cpp."
+ },
+ {
+  "file": "main.py",
+  "line": 9306,
+  "context": "arg:ModelDownloadValidationError",
+  "text": "{0} ocupa {1} y supera la memoria total del sistema ({2}). Descarga bloqueada."
+ },
+ {
+  "file": "main.py",
+  "line": 9332,
+  "context": "arg:ModelDownloadValidationError",
+  "text": "Archivo no encontrado en Hugging Face: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 9341,
+  "context": "arg:ModelDownloadValidationError",
+  "text": "Descarga bloqueada: los modelos REAP requieren una rama especial de llama.cpp que MyDGX no instala. Elige una variante GSQ/RCO, GGUF estándar u otra alternativa compatible."
+ },
+ {
+  "file": "main.py",
+  "line": 9355,
+  "context": "arg:ModelDownloadValidationError",
+  "text": "Hugging Face no informa el tamaño de {0}; la descarga se bloquea porque no se puede comprobar que cabe."
+ },
+ {
+  "file": "main.py",
+  "line": 9367,
+  "context": "arg:ModelDownloadValidationError",
+  "text": "La selección solo contiene drafters o el proyector de visión: falta el modelo principal. Elige también una cuantización del modelo que quepa en la memoria del equipo."
+ },
+ {
+  "file": "main.py",
+  "line": 9399,
+  "context": "arg:ModelDownloadValidationError",
+  "text": "No se pudo verificar el tamaño de {0}: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 9460,
+  "context": "Lambda",
+  "text": "Descargando"
+ },
+ {
+  "file": "main.py",
+  "line": 9533,
+  "context": "key:text",
+  "text": "Descargando"
+ },
+ {
+  "file": "main.py",
+  "line": 9549,
+  "context": "arg:db.update_job",
+  "text": "Descarga cancelada · se borraron los archivos incompletos"
+ },
+ {
+  "file": "main.py",
+  "line": 9554,
+  "context": "IfExp",
+  "text": "Descargando"
+ },
+ {
+  "file": "main.py",
+  "line": 9562,
+  "context": "arg:db.update_job",
+  "text": "Descargando {0}-{1}/{2} en paralelo"
+ },
+ {
+  "file": "main.py",
+  "line": 9592,
+  "context": "arg:db.update_job",
+  "text": "Descarga cancelada · los archivos ya bajados quedan en la caché"
+ },
+ {
+  "file": "main.py",
+  "line": 9594,
+  "context": "arg:db.update_job",
+  "text": "Descarga completa · registrando el modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 9623,
+  "context": "arg:db.update_job",
+  "text": "{0} archivo(s) preparados"
+ },
+ {
+  "file": "main.py",
+  "line": 9625,
+  "context": "BoolOp",
+  "text": "{0}: descarga no completada"
+ },
+ {
+  "file": "main.py",
+  "line": 9628,
+  "context": "assign",
+  "text": "{0} · se borraron los archivos incompletos"
+ },
+ {
+  "file": "main.py",
+  "line": 9632,
+  "context": "arg:notify_safely",
+  "text": "Descarga fallida"
+ },
+ {
+  "file": "main.py",
+  "line": 9653,
+  "context": "kw:detail:HTTPException",
+  "text": "Nombre de archivo inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 9662,
+  "context": "arg:notify_safely",
+  "text": "Descarga fallida"
+ },
+ {
+  "file": "main.py",
+  "line": 9673,
+  "context": "IfExp",
+  "text": "El archivo ya está descargado: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 9675,
+  "context": "IfExp",
+  "text": "{0} archivos seleccionados ya están descargados"
+ },
+ {
+  "file": "main.py",
+  "line": 9694,
+  "context": "kw:detail:HTTPException",
+  "text": "Descarga bloqueada: REAP requiere una rama especial de llama.cpp que MyDGX no instala. Elige una variante GSQ/RCO o un GGUF estándar."
+ },
+ {
+  "file": "main.py",
+  "line": 9702,
+  "context": "kw:detail:HTTPException",
+  "text": "Archivo no encontrado en Hugging Face: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 9714,
+  "context": "arg:warnings.append",
+  "text": "No se pudo leer la cabecera de {0}: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 9749,
+  "context": "arg:warnings.append",
+  "text": "{0}: faltan shards ({1} de {2} seleccionados)"
+ },
+ {
+  "file": "main.py",
+  "line": 9751,
+  "context": "arg:warnings.append",
+  "text": "{0}: el llama.cpp instalado no reconoce la arquitectura «{1}»"
+ },
+ {
+  "file": "main.py",
+  "line": 9753,
+  "context": "arg:warnings.append",
+  "text": "{0}: necesita ~{1} GB con {2}K; supera la capacidad segura"
+ },
+ {
+  "file": "main.py",
+  "line": 9757,
+  "context": "arg:warnings.insert",
+  "text": "La selección solo contiene drafters o proyectores: falta el modelo principal"
+ },
+ {
+  "file": "main.py",
+  "line": 9759,
+  "context": "arg:warnings.append",
+  "text": "Hay varias cuantizaciones principales; Encender usará una sola"
+ },
+ {
+  "file": "main.py",
+  "line": 9761,
+  "context": "arg:warnings.append",
+  "text": "Con el mmproj activo no se usa la especulativa; el drafter solo sirve sin visión"
+ },
+ {
+  "file": "main.py",
+  "line": 9764,
+  "context": "arg:warnings.append",
+  "text": "El repositorio ofrece un drafter ({0}) que no está en la selección: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 9767,
+  "context": "arg:warnings.append",
+  "text": "El repositorio ofrece un drafter ({0}: {1}), pero con el mmproj no se usaría; para solo texto, quita el mmproj y añade el drafter"
+ },
+ {
+  "file": "main.py",
+  "line": 9787,
+  "context": "kw:detail:HTTPException",
+  "text": "Nombre de archivo inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 9793,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo consultar Hugging Face: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 9848,
+  "context": "arg:ModelImportError",
+  "text": "{0} supera 64 KB"
+ },
+ {
+  "file": "main.py",
+  "line": 9852,
+  "context": "arg:ModelImportError",
+  "text": "{0} no es JSON válido: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 9854,
+  "context": "arg:ModelImportError",
+  "text": "{0} debe ser un objeto JSON {{…}}"
+ },
+ {
+  "file": "main.py",
+  "line": 9863,
+  "context": "arg:ModelImportError",
+  "text": "«{0}» debe ser texto de hasta {1} caracteres"
+ },
+ {
+  "file": "main.py",
+  "line": 9867,
+  "context": "arg:ModelImportError",
+  "text": "«tags» debe ser una lista de hasta 20 textos cortos"
+ },
+ {
+  "file": "main.py",
+  "line": 9871,
+  "context": "arg:ModelImportError",
+  "text": "«task» debe ser {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 9875,
+  "context": "arg:ModelImportError",
+  "text": "«settings» debe ser un objeto JSON"
+ },
+ {
+  "file": "main.py",
+  "line": 9878,
+  "context": "arg:ModelImportError",
+  "text": "«settings» no admite: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 9884,
+  "context": "arg:first.get",
+  "text": "valor no válido"
+ },
+ {
+  "file": "main.py",
+  "line": 9899,
+  "context": "arg:ModelImportError",
+  "text": "El ZIP está cifrado con contraseña; créalo sin contraseña"
+ },
+ {
+  "file": "main.py",
+  "line": 9901,
+  "context": "arg:ModelImportError",
+  "text": "{0}: el ZIP contiene enlaces simbólicos; comprime los archivos reales"
+ },
+ {
+  "file": "main.py",
+  "line": 9907,
+  "context": "arg:ModelImportError",
+  "text": "Ruta no permitida dentro del ZIP: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 9910,
+  "context": "arg:ModelImportError",
+  "text": "El ZIP está vacío"
+ },
+ {
+  "file": "main.py",
+  "line": 9919,
+  "context": "arg:ModelImportError",
+  "text": "{0} aparece dos veces en el ZIP"
+ },
+ {
+  "file": "main.py",
+  "line": 9926,
+  "context": "arg:ModelImportError",
+  "text": "El ZIP no contiene ningún archivo .gguf"
+ },
+ {
+  "file": "main.py",
+  "line": 9929,
+  "context": "arg:ModelImportError",
+  "text": "{0}: compresión anómala; vuelve a crear el ZIP con «zip -0»"
+ },
+ {
+  "file": "main.py",
+  "line": 9943,
+  "context": "arg:ModelImportError",
+  "text": "El archivo no es un ZIP válido o la subida quedó incompleta"
+ },
+ {
+  "file": "main.py",
+  "line": 9954,
+  "context": "arg:ModelImportError",
+  "text": "Hacen falta {0} libres para extraer el modelo y quedan {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 9975,
+  "context": "arg:ModelImportError",
+  "text": "{0}: el contenido no coincide con el tamaño declarado"
+ },
+ {
+  "file": "main.py",
+  "line": 9981,
+  "context": "arg:ModelImportError",
+  "text": "Importación cancelada"
+ },
+ {
+  "file": "main.py",
+  "line": 9984,
+  "context": "arg:db.update_job",
+  "text": "Paso 3/5 · Extrayendo {0} de {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 10000,
+  "context": "arg:ModelImportError",
+  "text": "No son GGUF válidos (¿archivo dañado o incompleto?): {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 10004,
+  "context": "arg:db.update_job",
+  "text": "Paso 4/5 · Analizando el modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 10028,
+  "context": "IfExp",
+  "text": "; a «{0}» le faltan partes ({1} de {2})"
+ },
+ {
+  "file": "main.py",
+  "line": 10031,
+  "context": "arg:ModelImportError",
+  "text": "No hay un modelo principal completo{0}. Incluye todos los archivos -0000N-of-0000M.gguf"
+ },
+ {
+  "file": "main.py",
+  "line": 10036,
+  "context": "ListComp",
+  "text": "Ignorado (no se usa): {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 10053,
+  "context": "arg:warnings.append",
+  "text": "{0}: el llama.cpp instalado no reconoce la arquitectura «{1}»"
+ },
+ {
+  "file": "main.py",
+  "line": 10058,
+  "context": "arg:ModelImportError",
+  "text": "«settings.{0}» indica {1}, que no está en el ZIP"
+ },
+ {
+  "file": "main.py",
+  "line": 10060,
+  "context": "arg:warnings.append",
+  "text": "task es «vision» pero falta el proyector mmproj-*.gguf: se usará como modelo de texto"
+ },
+ {
+  "file": "main.py",
+  "line": 10062,
+  "context": "arg:warnings.append",
+  "text": "{0}: claves desconocidas ignoradas: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 10069,
+  "context": "List",
+  "text": "- mydgx-import"
+ },
+ {
+  "file": "main.py",
+  "line": 10072,
+  "context": "BoolOp",
+  "text": "Modelo importado en MyDGX desde un ZIP. Añade un README.md o una «description» en {0} para describirlo."
+ },
+ {
+  "file": "main.py",
+  "line": 10109,
+  "context": "arg:warnings.append",
+  "text": "settings.context_size={0}: Encender usará {1} (el mínimo que necesitan los agentes o el máximo del modelo)"
+ },
+ {
+  "file": "main.py",
+  "line": 10148,
+  "context": "key:message",
+  "text": "No se encontró el archivo que usaría Encender"
+ },
+ {
+  "file": "main.py",
+  "line": 10154,
+  "context": "key:message",
+  "text": "Había otro benchmark en marcha; la prueba se ejecutará después, en Benchmarks"
+ },
+ {
+  "file": "main.py",
+  "line": 10161,
+  "context": "arg:db.update_job",
+  "text": "Paso 5/5 · Arrancando el modelo y ejecutando el benchmark"
+ },
+ {
+  "file": "main.py",
+  "line": 10171,
+  "context": "BoolOp",
+  "text": "El benchmark terminó como {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 10195,
+  "context": "arg:db.update_job",
+  "text": "Paso 2/5 · Comprobando el contenido del ZIP"
+ },
+ {
+  "file": "main.py",
+  "line": 10201,
+  "context": "key:message",
+  "text": "Prueba desactivada al subir"
+ },
+ {
+  "file": "main.py",
+  "line": 10203,
+  "context": "key:message",
+  "text": "Los benchmarks están desactivados en este equipo"
+ },
+ {
+  "file": "main.py",
+  "line": 10212,
+  "context": "key:passed",
+  "text": "Importado y probado: el modelo arranca y responde"
+ },
+ {
+  "file": "main.py",
+  "line": 10213,
+  "context": "key:failed",
+  "text": "Importado, pero la prueba falló: revisa el resultado"
+ },
+ {
+  "file": "main.py",
+  "line": 10214,
+  "context": "key:queued",
+  "text": "Importado · prueba en cola en Benchmarks"
+ },
+ {
+  "file": "main.py",
+  "line": 10215,
+  "context": "arg:get",
+  "text": "Importado sin prueba"
+ },
+ {
+  "file": "main.py",
+  "line": 10222,
+  "context": "arg:db.update_job",
+  "text": "{0}: importación no completada"
+ },
+ {
+  "file": "main.py",
+  "line": 10243,
+  "context": "kw:detail:HTTPException",
+  "text": "Sube un archivo .zip"
+ },
+ {
+  "file": "main.py",
+  "line": 10249,
+  "context": "kw:detail:HTTPException",
+  "text": "Falta el tamaño de la subida (Content-Length)"
+ },
+ {
+  "file": "main.py",
+  "line": 10255,
+  "context": "kw:detail:HTTPException",
+  "text": "El ZIP ocupa {0}; ahora caben hasta {1} (se necesita el doble de espacio libre al extraer)"
+ },
+ {
+  "file": "main.py",
+  "line": 10262,
+  "context": "kw:detail:HTTPException",
+  "text": "Ya hay una importación en curso"
+ },
+ {
+  "file": "main.py",
+  "line": 10277,
+  "context": "kw:detail:HTTPException",
+  "text": "La subida es mayor que el tamaño declarado"
+ },
+ {
+  "file": "main.py",
+  "line": 10287,
+  "context": "arg:db.update_job",
+  "text": "Paso 1/5 · Subiendo {0} de {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 10292,
+  "context": "kw:detail:HTTPException",
+  "text": "La subida se cortó antes de terminar"
+ },
+ {
+  "file": "main.py",
+  "line": 10296,
+  "context": "IfExp",
+  "text": "La subida se interrumpió"
+ },
+ {
+  "file": "main.py",
+  "line": 10301,
+  "context": "arg:db.update_job",
+  "text": "Subida completa"
+ },
+ {
+  "file": "main.py",
+  "line": 10327,
+  "context": "arg:db.update_job",
+  "text": "Verificación cancelada"
+ },
+ {
+  "file": "main.py",
+  "line": 10332,
+  "context": "arg:db.update_job",
+  "text": "Verificación cancelada"
+ },
+ {
+  "file": "main.py",
+  "line": 10348,
+  "context": "arg:db.update_job",
+  "text": "Verificación completa · {0} inválido(s)"
+ },
+ {
+  "file": "main.py",
+  "line": 10354,
+  "context": "kw:detail:HTTPException",
+  "text": "Repositorio inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 10368,
+  "context": "arg:db.update_job",
+  "text": "Conectando con Ollama"
+ },
+ {
+  "file": "main.py",
+  "line": 10380,
+  "context": "arg:db.update_job",
+  "text": "Descarga cancelada"
+ },
+ {
+  "file": "main.py",
+  "line": 10391,
+  "context": "arg:event.get",
+  "text": "Descargando"
+ },
+ {
+  "file": "main.py",
+  "line": 10392,
+  "context": "arg:db.update_job",
+  "text": "Modelo listo"
+ },
+ {
+  "file": "main.py",
+  "line": 10396,
+  "context": "IfExp",
+  "text": "{0}: operación no completada"
+ },
+ {
+  "file": "main.py",
+  "line": 10399,
+  "context": "arg:notify_safely",
+  "text": "Descarga fallida"
+ },
+ {
+  "file": "main.py",
+  "line": 10456,
+  "context": "kw:detail:HTTPException",
+  "text": "La confirmación no coincide"
+ },
+ {
+  "file": "main.py",
+  "line": 10459,
+  "context": "kw:detail:HTTPException",
+  "text": "Detén antes el perfil {0}, que tiene cargado este modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 10464,
+  "context": "kw:detail:HTTPException",
+  "text": "No se puede borrar el modelo que está usando el chatbot"
+ },
+ {
+  "file": "main.py",
+  "line": 10481,
+  "context": "arg:db.update_job",
+  "text": "Descargando desde Hugging Face"
+ },
+ {
+  "file": "main.py",
+  "line": 10495,
+  "context": "arg:db.update_job",
+  "text": "Descarga completa · registrando el modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 10499,
+  "context": "arg:db.update_job",
+  "text": "Modelo almacenado en caché"
+ },
+ {
+  "file": "main.py",
+  "line": 10502,
+  "context": "BoolOp",
+  "text": "{0}: operación no completada"
+ },
+ {
+  "file": "main.py",
+  "line": 10505,
+  "context": "assign",
+  "text": "{0} · se borraron los archivos incompletos"
+ },
+ {
+  "file": "main.py",
+  "line": 10509,
+  "context": "arg:notify_safely",
+  "text": "Descarga fallida"
+ },
+ {
+  "file": "main.py",
+  "line": 10529,
+  "context": "arg:notify_safely",
+  "text": "Descarga fallida"
+ },
+ {
+  "file": "main.py",
+  "line": 10541,
+  "context": "kw:detail:HTTPException",
+  "text": "Confirmación o identificador inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 10544,
+  "context": "kw:detail:HTTPException",
+  "text": "Detén antes el perfil {0}, que tiene cargado este modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 10554,
+  "context": "kw:detail:HTTPException",
+  "text": "No se puede borrar el modelo que está usando el chatbot"
+ },
+ {
+  "file": "main.py",
+  "line": 10566,
+  "context": "kw:detail:HTTPException",
+  "text": "Detén antes el perfil que lo tiene cargado: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 10572,
+  "context": "kw:detail:HTTPException",
+  "text": "Hay una descarga o verificación en curso de este modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 10576,
+  "context": "kw:detail:HTTPException",
+  "text": "Modelo no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 10676,
+  "context": "kw:detail:HTTPException",
+  "text": "llama.cpp requiere un GGUF local o repositorio y archivo Hugging Face"
+ },
+ {
+  "file": "main.py",
+  "line": 10678,
+  "context": "kw:detail:HTTPException",
+  "text": "Repositorio Hugging Face inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 10686,
+  "context": "kw:detail:HTTPException",
+  "text": "Lista de archivos GGUF inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 10688,
+  "context": "kw:detail:HTTPException",
+  "text": "Alias de modelo inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 10695,
+  "context": "kw:detail:HTTPException",
+  "text": "Drafter inválido: debe ser un GGUF del mismo repositorio"
+ },
+ {
+  "file": "main.py",
+  "line": 10697,
+  "context": "kw:detail:HTTPException",
+  "text": "{0} necesita un archivo drafter"
+ },
+ {
+  "file": "main.py",
+  "line": 10706,
+  "context": "kw:detail:HTTPException",
+  "text": "Visión con llama.cpp requiere un proyector multimodal GGUF"
+ },
+ {
+  "file": "main.py",
+  "line": 10711,
+  "context": "kw:detail:HTTPException",
+  "text": "Repositorio mmproj inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 10717,
+  "context": "kw:detail:HTTPException",
+  "text": "Archivo mmproj inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 10719,
+  "context": "kw:detail:HTTPException",
+  "text": "El nombre de Ollama no puede contener rutas"
+ },
+ {
+  "file": "main.py",
+  "line": 10721,
+  "context": "kw:detail:HTTPException",
+  "text": "Este motor requiere runtime externo o Compose"
+ },
+ {
+  "file": "main.py",
+  "line": 10725,
+  "context": "kw:detail:HTTPException",
+  "text": "El runtime Compose aún no está habilitado; usa un endpoint externo local"
+ },
+ {
+  "file": "main.py",
+  "line": 10739,
+  "context": "kw:detail:HTTPException",
+  "text": "El endpoint del motor debe ser una URL local sin credenciales"
+ },
+ {
+  "file": "main.py",
+  "line": 10745,
+  "context": "kw:detail:HTTPException",
+  "text": "El protocolo tts-lab requiere motor openai-compatible y tarea TTS"
+ },
+ {
+  "file": "main.py",
+  "line": 10750,
+  "context": "kw:detail:HTTPException",
+  "text": "El endpoint tts-lab debe identificar un proyecto local"
+ },
+ {
+  "file": "main.py",
+  "line": 10755,
+  "context": "kw:detail:HTTPException",
+  "text": "Este protocolo requiere un runtime externo local"
+ },
+ {
+  "file": "main.py",
+  "line": 10769,
+  "context": "kw:detail:HTTPException",
+  "text": "Las modalidades no coinciden con la tarea seleccionada"
+ },
+ {
+  "file": "main.py",
+  "line": 10771,
+  "context": "kw:detail:HTTPException",
+  "text": "llama.cpp no admite esta tarea en MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 10773,
+  "context": "kw:detail:HTTPException",
+  "text": "Ollama no admite esta tarea en MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 10779,
+  "context": "kw:detail:HTTPException",
+  "text": "Los puertos manuales deben estar entre 1024 y 65535"
+ },
+ {
+  "file": "main.py",
+  "line": 10788,
+  "context": "kw:detail:HTTPException",
+  "text": "Cada modelo habilitado del perfil necesita un puerto distinto"
+ },
+ {
+  "file": "main.py",
+  "line": 10792,
+  "context": "kw:detail:HTTPException",
+  "text": "Un modelo no puede usar un puerto del gateway"
+ },
+ {
+  "file": "main.py",
+  "line": 10796,
+  "context": "kw:detail:HTTPException",
+  "text": "El puerto {0} lo usa la app web {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 10799,
+  "context": "kw:detail:HTTPException",
+  "text": "Cada modelo habilitado necesita un alias OpenAI distinto"
+ },
+ {
+  "file": "main.py",
+  "line": 10801,
+  "context": "kw:detail:HTTPException",
+  "text": "El contexto mínimo no puede superar al contexto configurado"
+ },
+ {
+  "file": "main.py",
+  "line": 10805,
+  "context": "kw:detail:HTTPException",
+  "text": "La app {0} no está en {1} o no tiene un start.sh propio y no escribible por otros"
+ },
+ {
+  "file": "main.py",
+  "line": 10854,
+  "context": "IfExp",
+  "text": "Modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 10892,
+  "context": "kw:detail:HTTPException",
+  "text": "El perfil {0} es de solo lectura; se gestiona desde Modelos"
+ },
+ {
+  "file": "main.py",
+  "line": 10902,
+  "context": "arg:RuntimeError",
+  "text": "El catálogo de perfiles predeterminados no es válido"
+ },
+ {
+  "file": "main.py",
+  "line": 10909,
+  "context": "arg:RuntimeError",
+  "text": "El catálogo contiene un perfil no válido"
+ },
+ {
+  "file": "main.py",
+  "line": 10912,
+  "context": "arg:RuntimeError",
+  "text": "El catálogo contiene un identificador de perfil no válido"
+ },
+ {
+  "file": "main.py",
+  "line": 11002,
+  "context": "kw:detail:HTTPException",
+  "text": "Ya existe un perfil con ese nombre"
+ },
+ {
+  "file": "main.py",
+  "line": 11013,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11055,
+  "context": "kw:detail:HTTPException",
+  "text": "Ya existe un perfil con ese nombre"
+ },
+ {
+  "file": "main.py",
+  "line": 11071,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11098,
+  "context": "arg:ProfileStartCancelled",
+  "text": "Preparación cancelada"
+ },
+ {
+  "file": "main.py",
+  "line": 11119,
+  "context": "arg:RuntimeError",
+  "text": "el archivo descargado está vacío"
+ },
+ {
+  "file": "main.py",
+  "line": 11128,
+  "context": "arg:RuntimeError",
+  "text": "Espacio insuficiente para descargar {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 11130,
+  "context": "arg:RuntimeError",
+  "text": "No se pudo preparar {0} tras 3 intentos ({1})"
+ },
+ {
+  "file": "main.py",
+  "line": 11191,
+  "context": "arg:RuntimeError",
+  "text": "{0}: falta el repositorio o la lista de archivos Hugging Face"
+ },
+ {
+  "file": "main.py",
+  "line": 11232,
+  "context": "arg:db.update_job",
+  "text": "{0}: descargando {1}-{2}/{3} en paralelo"
+ },
+ {
+  "file": "main.py",
+  "line": 11244,
+  "context": "arg:RuntimeError",
+  "text": "{0}: descarga GGUF incompleta"
+ },
+ {
+  "file": "main.py",
+  "line": 11267,
+  "context": "arg:RuntimeError",
+  "text": "{0}: falta el nombre del modelo Ollama"
+ },
+ {
+  "file": "main.py",
+  "line": 11299,
+  "context": "arg:RuntimeError",
+  "text": "Ollama no confirmó el modelo después de descargarlo"
+ },
+ {
+  "file": "main.py",
+  "line": 11309,
+  "context": "arg:RuntimeError",
+  "text": "{0}: Ollama no completó la descarga ({1})"
+ },
+ {
+  "file": "main.py",
+  "line": 11330,
+  "context": "arg:RuntimeError",
+  "text": "{0}: el motor externo no tiene endpoint configurado"
+ },
+ {
+  "file": "main.py",
+  "line": 11353,
+  "context": "arg:db.update_job",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11367,
+  "context": "arg:RuntimeError",
+  "text": "La combinación de perfiles no cabe o contiene conflictos de alias o puertos"
+ },
+ {
+  "file": "main.py",
+  "line": 11369,
+  "context": "arg:db.update_job",
+  "text": "Comprobando modelos del perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 11376,
+  "context": "arg:db.update_job",
+  "text": "Modelos preparados; comprobando archivos, memoria y puertos"
+ },
+ {
+  "file": "main.py",
+  "line": 11387,
+  "context": "arg:RuntimeError",
+  "text": "Descarga incompleta: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 11412,
+  "context": "arg:RuntimeError",
+  "text": "Tras descargar, la combinación supera la memoria segura o tiene conflictos"
+ },
+ {
+  "file": "main.py",
+  "line": 11421,
+  "context": "arg:db.update_job",
+  "text": "Arrancando {0} modelo(s) y comprobando su estado"
+ },
+ {
+  "file": "main.py",
+  "line": 11433,
+  "context": "IfExp",
+  "text": "Modelos cargados; {0} proceso(s) compatible(s) conservado(s)"
+ },
+ {
+  "file": "main.py",
+  "line": 11435,
+  "context": "IfExp",
+  "text": "Modelos cargados; finalizando el perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 11451,
+  "context": "arg:db.update_job",
+  "text": "Perfil arrancado · {0} descargado(s) · {1} conservado(s)"
+ },
+ {
+  "file": "main.py",
+  "line": 11466,
+  "context": "arg:db.update_job",
+  "text": "Preparación cancelada; no se cambió el perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 11477,
+  "context": "arg:notify_safely",
+  "text": "Error arrancando perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 11493,
+  "context": "arg:db.update_job",
+  "text": "El perfil no contiene archivos Hugging Face"
+ },
+ {
+  "file": "main.py",
+  "line": 11504,
+  "context": "key:text",
+  "text": "Descargando"
+ },
+ {
+  "file": "main.py",
+  "line": 11558,
+  "context": "arg:db.update_job",
+  "text": "{0} archivo(s) GGUF preparados"
+ },
+ {
+  "file": "main.py",
+  "line": 11561,
+  "context": "BoolOp",
+  "text": "{0}: descarga no completada"
+ },
+ {
+  "file": "main.py",
+  "line": 11564,
+  "context": "assign",
+  "text": "{0} · se borraron los archivos incompletos"
+ },
+ {
+  "file": "main.py",
+  "line": 11568,
+  "context": "arg:notify_safely",
+  "text": "Descarga fallida"
+ },
+ {
+  "file": "main.py",
+  "line": 11579,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11582,
+  "context": "kw:detail:HTTPException",
+  "text": "La descarga por perfil solo aplica a llama.cpp"
+ },
+ {
+  "file": "main.py",
+  "line": 11596,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11599,
+  "context": "kw:detail:HTTPException",
+  "text": "Modelo no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11601,
+  "context": "kw:detail:HTTPException",
+  "text": "La descarga solo aplica a llama.cpp"
+ },
+ {
+  "file": "main.py",
+  "line": 11614,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11629,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11651,
+  "context": "Tuple",
+  "text": "En cola"
+ },
+ {
+  "file": "main.py",
+  "line": 11656,
+  "context": "Tuple",
+  "text": "En cola para preparar el perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 11662,
+  "context": "kw:detail:HTTPException",
+  "text": "Ya hay otro perfil preparándose o arrancando"
+ },
+ {
+  "file": "main.py",
+  "line": 11681,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11696,
+  "context": "return",
+  "text": "origen: bandeja macOS"
+ },
+ {
+  "file": "main.py",
+  "line": 11698,
+  "context": "return",
+  "text": "origen: navegador"
+ },
+ {
+  "file": "main.py",
+  "line": 11712,
+  "context": "kw:detail:HTTPException",
+  "text": "El perfil no está cargado"
+ },
+ {
+  "file": "main.py",
+  "line": 11721,
+  "context": "kw:detail:HTTPException",
+  "text": "La app {0} no está disponible en {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 11724,
+  "context": "arg:set_profile_app_state",
+  "text": "start.sh {0} manual"
+ },
+ {
+  "file": "main.py",
+  "line": 11735,
+  "context": "arg:set_profile_app_state",
+  "text": "start.sh {0} terminó con código {1}: {2}"
+ },
+ {
+  "file": "main.py",
+  "line": 11749,
+  "context": "kw:detail:HTTPException",
+  "text": "La app {0} no está disponible en {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 11756,
+  "context": "kw:detail:HTTPException",
+  "text": "El alias admite letras, números, espacios, punto, guion y guion bajo (máximo 40)"
+ },
+ {
+  "file": "main.py",
+  "line": 11758,
+  "context": "kw:detail:HTTPException",
+  "text": "El alias {0} ya lo usa otra app"
+ },
+ {
+  "file": "main.py",
+  "line": 11761,
+  "context": "kw:detail:HTTPException",
+  "text": "No se puede usar ese puerto: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 11780,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11783,
+  "context": "kw:detail:HTTPException",
+  "text": "La confirmación no coincide"
+ },
+ {
+  "file": "main.py",
+  "line": 11824,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11827,
+  "context": "kw:detail:HTTPException",
+  "text": "Ya existe un perfil con ese nombre"
+ },
+ {
+  "file": "main.py",
+  "line": 11831,
+  "context": "kw:detail:HTTPException",
+  "text": "El perfil no se puede copiar: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 11849,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 11853,
+  "context": "kw:detail:HTTPException",
+  "text": "{0} ya está en el perfil {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 11855,
+  "context": "kw:detail:HTTPException",
+  "text": "El perfil ya tiene el máximo de modelos"
+ },
+ {
+  "file": "main.py",
+  "line": 11899,
+  "context": "assign",
+  "text": "valor seguro de MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 11984,
+  "context": "key:warning",
+  "text": "La recomendación se revisa antes de guardarse y nunca se ejecuta desde el README."
+ },
+ {
+  "file": "main.py",
+  "line": 12030,
+  "context": "kw:detail:HTTPException",
+  "text": "Identificador de Hugging Face inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 12034,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo analizar el modelo: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 12056,
+  "context": "key:name",
+  "text": "ComfyUI · FLUX.1 Schnell FP8"
+ },
+ {
+  "file": "main.py",
+  "line": 12070,
+  "context": "key:name",
+  "text": "ComfyUI · Wan 2.1 T2V 1.3B"
+ },
+ {
+  "file": "main.py",
+  "line": 12242,
+  "context": "kw:detail:HTTPException",
+  "text": "El workflow administrado de ComfyUI no está disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 12244,
+  "context": "BoolOp",
+  "text": "A detailed image"
+ },
+ {
+  "file": "main.py",
+  "line": 12260,
+  "context": "BoolOp",
+  "text": "A cinematic scene with natural motion"
+ },
+ {
+  "file": "main.py",
+  "line": 12283,
+  "context": "arg:ValueError",
+  "text": "Ruta de salida ComfyUI inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 12287,
+  "context": "arg:ValueError",
+  "text": "No se pudo eliminar la salida temporal de ComfyUI"
+ },
+ {
+  "file": "main.py",
+  "line": 12298,
+  "context": "arg:ValueError",
+  "text": "Nombre de salida ComfyUI inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 12305,
+  "context": "arg:ValueError",
+  "text": "Subcarpeta de salida ComfyUI inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 12322,
+  "context": "arg:ValueError",
+  "text": "La salida de ComfyUI supera el límite permitido"
+ },
+ {
+  "file": "main.py",
+  "line": 12361,
+  "context": "arg:ValueError",
+  "text": "prompt_id inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 12375,
+  "context": "arg:httpx.TimeoutException",
+  "text": "ComfyUI agotó el tiempo"
+ },
+ {
+  "file": "main.py",
+  "line": 12388,
+  "context": "arg:ValueError",
+  "text": "ComfyUI no devolvió un archivo"
+ },
+ {
+  "file": "main.py",
+  "line": 12400,
+  "context": "kw:detail:HTTPException",
+  "text": "ComfyUI no completó el workflow"
+ },
+ {
+  "file": "main.py",
+  "line": 12452,
+  "context": "kw:detail:HTTPException",
+  "text": "No hay perfiles cargados"
+ },
+ {
+  "file": "main.py",
+  "line": 12463,
+  "context": "kw:detail:HTTPException",
+  "text": "Modelo no encontrado en los perfiles cargados"
+ },
+ {
+  "file": "main.py",
+  "line": 12469,
+  "context": "kw:detail:HTTPException",
+  "text": "Tipo de archivo multimedia no permitido"
+ },
+ {
+  "file": "main.py",
+  "line": 12473,
+  "context": "kw:detail:HTTPException",
+  "text": "Archivo multimedia inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 12475,
+  "context": "kw:detail:HTTPException",
+  "text": "Archivo multimedia demasiado grande"
+ },
+ {
+  "file": "main.py",
+  "line": 12554,
+  "context": "kw:detail:HTTPException",
+  "text": "La tarea no coincide con la capacidad del modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 12557,
+  "context": "kw:detail:HTTPException",
+  "text": "Este motor necesita un adaptador de protocolo específico"
+ },
+ {
+  "file": "main.py",
+  "line": 12560,
+  "context": "kw:detail:HTTPException",
+  "text": "El adaptador ComfyUI solo admite imagen y vídeo"
+ },
+ {
+  "file": "main.py",
+  "line": 12568,
+  "context": "kw:detail:HTTPException",
+  "text": "El adaptador tts-lab solo admite síntesis de voz"
+ },
+ {
+  "file": "main.py",
+  "line": 12582,
+  "context": "kw:detail:HTTPException",
+  "text": "La tarea de visión requiere una imagen"
+ },
+ {
+  "file": "main.py",
+  "line": 12589,
+  "context": "kw:detail:HTTPException",
+  "text": "Visión requiere una imagen"
+ },
+ {
+  "file": "main.py",
+  "line": 12591,
+  "context": "BoolOp",
+  "text": "Describe la imagen."
+ },
+ {
+  "file": "main.py",
+  "line": 12613,
+  "context": "kw:detail:HTTPException",
+  "text": "La transcripción requiere audio"
+ },
+ {
+  "file": "main.py",
+  "line": 12640,
+  "context": "kw:detail:HTTPException",
+  "text": "Reranking requiere documentos"
+ },
+ {
+  "file": "main.py",
+  "line": 12642,
+  "context": "kw:detail:HTTPException",
+  "text": "Un documento supera el límite permitido"
+ },
+ {
+  "file": "main.py",
+  "line": 12665,
+  "context": "kw:detail:HTTPException",
+  "text": "El servicio multimodal no está disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 12671,
+  "context": "kw:detail:HTTPException",
+  "text": "El motor devolvió JSON inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 12673,
+  "context": "kw:detail:HTTPException",
+  "text": "La respuesta multimedia supera el límite"
+ },
+ {
+  "file": "main.py",
+  "line": 12684,
+  "context": "kw:detail:HTTPException",
+  "text": "La generación de vídeo debe ejecutarse como trabajo"
+ },
+ {
+  "file": "main.py",
+  "line": 12691,
+  "context": "arg:db.update_job",
+  "text": "Generando vídeo"
+ },
+ {
+  "file": "main.py",
+  "line": 12695,
+  "context": "arg:db.update_job",
+  "text": "El motor devolvió vídeo binario; configura salida por URL"
+ },
+ {
+  "file": "main.py",
+  "line": 12699,
+  "context": "arg:db.update_job",
+  "text": "La respuesta del motor supera el límite persistente"
+ },
+ {
+  "file": "main.py",
+  "line": 12705,
+  "context": "arg:db.update_job",
+  "text": "Generación de vídeo completada"
+ },
+ {
+  "file": "main.py",
+  "line": 12708,
+  "context": "arg:db.update_job",
+  "text": "{0}: generación no completada"
+ },
+ {
+  "file": "main.py",
+  "line": 12718,
+  "context": "kw:detail:HTTPException",
+  "text": "Este endpoint solo acepta generación de vídeo"
+ },
+ {
+  "file": "main.py",
+  "line": 12721,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo no genera vídeo"
+ },
+ {
+  "file": "main.py",
+  "line": 12730,
+  "context": "kw:detail:HTTPException",
+  "text": "Artefacto no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 12741,
+  "context": "kw:detail:HTTPException",
+  "text": "Artefacto no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 12758,
+  "context": "key:description",
+  "text": "Alias de un modelo cargado"
+ },
+ {
+  "file": "main.py",
+  "line": 12777,
+  "context": "key:title",
+  "text": "MyDGX AI Laboratory"
+ },
+ {
+  "file": "main.py",
+  "line": 12779,
+  "context": "key:description",
+  "text": "Herramientas seguras para consultar capacidades y ejecutar modelos locales."
+ },
+ {
+  "file": "main.py",
+  "line": 12785,
+  "context": "key:summary",
+  "text": "Lista modelos y tareas disponibles en MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 12786,
+  "context": "key:description",
+  "text": "Capacidades disponibles"
+ },
+ {
+  "file": "main.py",
+  "line": 12792,
+  "context": "key:summary",
+  "text": "Ejecuta una tarea local del Laboratorio IA"
+ },
+ {
+  "file": "main.py",
+  "line": 12797,
+  "context": "key:description",
+  "text": "Resultado de la tarea"
+ },
+ {
+  "file": "main.py",
+  "line": 12803,
+  "context": "key:summary",
+  "text": "Inicia una generación de vídeo asíncrona"
+ },
+ {
+  "file": "main.py",
+  "line": 12820,
+  "context": "key:description",
+  "text": "Identificador del trabajo"
+ },
+ {
+  "file": "main.py",
+  "line": 12826,
+  "context": "key:summary",
+  "text": "Consulta progreso y estado de un trabajo"
+ },
+ {
+  "file": "main.py",
+  "line": 12831,
+  "context": "key:description",
+  "text": "Estado del trabajo"
+ },
+ {
+  "file": "main.py",
+  "line": 12837,
+  "context": "key:summary",
+  "text": "Obtiene el resultado final de un trabajo"
+ },
+ {
+  "file": "main.py",
+  "line": 12842,
+  "context": "key:description",
+  "text": "Resultado persistido"
+ },
+ {
+  "file": "main.py",
+  "line": 12859,
+  "context": "kw:detail:HTTPException",
+  "text": "Usa la función nativa de imagen o el trabajo de vídeo para esas tareas"
+ },
+ {
+  "file": "main.py",
+  "line": 13075,
+  "context": "return",
+  "text": "Inferencia activa en {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 13081,
+  "context": "return",
+  "text": "Otro benchmark en ejecución"
+ },
+ {
+  "file": "main.py",
+  "line": 13086,
+  "context": "return",
+  "text": "Esperando a que termine {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 13089,
+  "context": "return",
+  "text": "Periodo de calma tras uso interactivo ({0} s)"
+ },
+ {
+  "file": "main.py",
+  "line": 13225,
+  "context": "kw:detail:HTTPException",
+  "text": "Hay un benchmark aislado en ejecución; la inferencia interactiva está pausada"
+ },
+ {
+  "file": "main.py",
+  "line": 13360,
+  "context": "key:method",
+  "text": "CRC PNG + dimensiones IHDR + SHA256 de píxeles desfiltrados"
+ },
+ {
+  "file": "main.py",
+  "line": 13459,
+  "context": "key:metadata_method",
+  "text": "ffprobe local cuando está disponible; firma de contenedor en caso contrario"
+ },
+ {
+  "file": "main.py",
+  "line": 13462,
+  "context": "key:quality_claim",
+  "text": "No se infiere calidad visual; solo integridad, parámetros observables y reproducibilidad objetiva"
+ },
+ {
+  "file": "main.py",
+  "line": 13505,
+  "context": "key:method",
+  "text": "recall normalizado de conceptos esperados versionados"
+ },
+ {
+  "file": "main.py",
+  "line": 13600,
+  "context": "IfExp",
+  "text": "round-trip con Whisper local; audio y transcripción no persistidos"
+ },
+ {
+  "file": "main.py",
+  "line": 13602,
+  "context": "IfExp",
+  "text": "no medida: Whisper local no disponible o falló"
+ },
+ {
+  "file": "main.py",
+  "line": 13605,
+  "context": "IfExp",
+  "text": "inteligibilidad medida mediante ASR local"
+ },
+ {
+  "file": "main.py",
+  "line": 13607,
+  "context": "IfExp",
+  "text": "sin afirmación de inteligibilidad; score penalizado"
+ },
+ {
+  "file": "main.py",
+  "line": 13837,
+  "context": "key:energy_method",
+  "text": "potencia GPU media del run × tiempo medido"
+ },
+ {
+  "file": "main.py",
+  "line": 13856,
+  "context": "key:name",
+  "text": "Benchmark GGUF"
+ },
+ {
+  "file": "main.py",
+  "line": 13930,
+  "context": "key:source",
+  "text": "GGUF descargado sin perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 13948,
+  "context": "return",
+  "text": "No cabe en memoria: necesita ~{0} GB y el equipo tiene {1} GB"
+ },
+ {
+  "file": "main.py",
+  "line": 13964,
+  "context": "kw:detail:HTTPException",
+  "text": "El GGUF ya no está en la caché local"
+ },
+ {
+  "file": "main.py",
+  "line": 13973,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo TTS no está descargado"
+ },
+ {
+  "file": "main.py",
+  "line": 13977,
+  "context": "kw:detail:HTTPException",
+  "text": "ComfyUI gestionado no está habilitado"
+ },
+ {
+  "file": "main.py",
+  "line": 13982,
+  "context": "kw:detail:HTTPException",
+  "text": "El checkpoint FLUX gestionado no existe localmente"
+ },
+ {
+  "file": "main.py",
+  "line": 13987,
+  "context": "kw:detail:HTTPException",
+  "text": "ComfyUI gestionado no está habilitado"
+ },
+ {
+  "file": "main.py",
+  "line": 13993,
+  "context": "kw:detail:HTTPException",
+  "text": "Los artefactos gestionados de Wan no están completos (diffusion model, text encoder y VAE)"
+ },
+ {
+  "file": "main.py",
+  "line": 14000,
+  "context": "kw:detail:HTTPException",
+  "text": "El benchmark Wan solo admite ComfyUI en loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 14013,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo Whisper no está instalado en el servicio local"
+ },
+ {
+  "file": "main.py",
+  "line": 14025,
+  "context": "kw:detail:HTTPException",
+  "text": "El perfil debe estar cargado para medirlo"
+ },
+ {
+  "file": "main.py",
+  "line": 14029,
+  "context": "kw:detail:HTTPException",
+  "text": "Modelo cargado no encontrado en el perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 14042,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo no está instalado o configurado localmente"
+ },
+ {
+  "file": "main.py",
+  "line": 14049,
+  "context": "kw:detail:HTTPException",
+  "text": "No se puede resolver el endpoint local del modelo"
+ },
+ {
+  "file": "main.py",
+  "line": 14054,
+  "context": "kw:detail:HTTPException",
+  "text": "Los benchmarks solo admiten endpoints loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 14059,
+  "context": "kw:detail:HTTPException",
+  "text": "Objetivo de benchmark inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 14063,
+  "context": "kw:detail:HTTPException",
+  "text": "Los benchmarks Ollama solo admiten endpoints loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 14075,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo Ollama no está instalado"
+ },
+ {
+  "file": "main.py",
+  "line": 14294,
+  "context": "key:name",
+  "text": "Qwen3-TTS 1.7B Base"
+ },
+ {
+  "file": "main.py",
+  "line": 14295,
+  "context": "key:name",
+  "text": "Qwen3-TTS 0.6B Base"
+ },
+ {
+  "file": "main.py",
+  "line": 14296,
+  "context": "key:name",
+  "text": "Chatterbox Multilingual"
+ },
+ {
+  "file": "main.py",
+  "line": 14298,
+  "context": "key:name",
+  "text": "F5-TTS v1 Base"
+ },
+ {
+  "file": "main.py",
+  "line": 14300,
+  "context": "key:name",
+  "text": "Fish Audio S2 Pro"
+ },
+ {
+  "file": "main.py",
+  "line": 14301,
+  "context": "key:name",
+  "text": "Voxtral 4B TTS"
+ },
+ {
+  "file": "main.py",
+  "line": 14343,
+  "context": "key:runtime_requirement",
+  "text": "MyDGX TTS CUDA · {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 14378,
+  "context": "assign",
+  "text": "Falta descargar {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 14380,
+  "context": "assign",
+  "text": "Runtime TTS CUDA de MyDGX no activo (mydgx-tts.service)"
+ },
+ {
+  "file": "main.py",
+  "line": 14382,
+  "context": "assign",
+  "text": "Motor CUDA {0} pendiente de instalar en mydgx-tts"
+ },
+ {
+  "file": "main.py",
+  "line": 14392,
+  "context": "arg:RuntimeError",
+  "text": "El runtime TTS gestionado no es loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 14397,
+  "context": "arg:ManagedTtsUnavailable",
+  "text": "Runtime TTS CUDA de MyDGX no activo"
+ },
+ {
+  "file": "main.py",
+  "line": 14401,
+  "context": "arg:RuntimeError",
+  "text": "No se pudo cargar {0}: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 14517,
+  "context": "kw:detail:HTTPException",
+  "text": "Ollama no es loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 14564,
+  "context": "Tuple",
+  "text": "Sin endpoint local configurado"
+ },
+ {
+  "file": "main.py",
+  "line": 14571,
+  "context": "BinOp",
+  "text": "Runtime externo no activo en {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 15265,
+  "context": "arg:RuntimeError",
+  "text": "El endpoint del modelo no es local"
+ },
+ {
+  "file": "main.py",
+  "line": 15384,
+  "context": "assign",
+  "text": "hardware + os + inference stack"
+ },
+ {
+  "file": "main.py",
+  "line": 15529,
+  "context": "arg:BenchmarkIsolationError",
+  "text": "Actividad concurrente detectada: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 15538,
+  "context": "arg:BenchmarkIsolationError",
+  "text": "Ollama no responde"
+ },
+ {
+  "file": "main.py",
+  "line": 15542,
+  "context": "arg:BenchmarkIsolationError",
+  "text": "Ollama mantiene otro modelo en memoria"
+ },
+ {
+  "file": "main.py",
+  "line": 15638,
+  "context": "arg:RuntimeError",
+  "text": "El manifiesto ASR versionado no está disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 15647,
+  "context": "arg:RuntimeError",
+  "text": "Fixture ASR desconocido: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 15656,
+  "context": "arg:RuntimeError",
+  "text": "El manifiesto ASR tiene una identidad de fixture inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 15667,
+  "context": "arg:RuntimeError",
+  "text": "El origen del fixture ASR no está permitido"
+ },
+ {
+  "file": "main.py",
+  "line": 15676,
+  "context": "arg:RuntimeError",
+  "text": "El fixture ASR supera el límite permitido"
+ },
+ {
+  "file": "main.py",
+  "line": 15680,
+  "context": "arg:RuntimeError",
+  "text": "El fixture ASR no coincide con el checksum versionado"
+ },
+ {
+  "file": "main.py",
+  "line": 15691,
+  "context": "arg:ValueError",
+  "text": "La salida no es PNG"
+ },
+ {
+  "file": "main.py",
+  "line": 15701,
+  "context": "arg:ValueError",
+  "text": "Chunk PNG inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 15705,
+  "context": "arg:ValueError",
+  "text": "CRC PNG inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 15708,
+  "context": "arg:ValueError",
+  "text": "IHDR PNG inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 15728,
+  "context": "arg:ValueError",
+  "text": "PNG no compatible o incompleto"
+ },
+ {
+  "file": "main.py",
+  "line": 15735,
+  "context": "arg:ValueError",
+  "text": "Datos PNG truncados o sobredimensionados"
+ },
+ {
+  "file": "main.py",
+  "line": 15763,
+  "context": "arg:ValueError",
+  "text": "Filtro PNG inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 15797,
+  "context": "arg:ValueError",
+  "text": "ComfyUI no devolvió bytes de imagen"
+ },
+ {
+  "file": "main.py",
+  "line": 15801,
+  "context": "arg:ValueError",
+  "text": "ComfyUI devolvió una imagen inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 15820,
+  "context": "IfExp",
+  "text": "El PNG no coincide con la resolución versionada"
+ },
+ {
+  "file": "main.py",
+  "line": 15933,
+  "context": "arg:ValueError",
+  "text": "Salida perceptual incompleta"
+ },
+ {
+  "file": "main.py",
+  "line": 15946,
+  "context": "key:perceptual_method",
+  "text": "aHash 16x16 gris por frame decodificado con ffmpeg local"
+ },
+ {
+  "file": "main.py",
+  "line": 15959,
+  "context": "arg:ValueError",
+  "text": "El benchmark Wan exige un endpoint ComfyUI loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 15975,
+  "context": "arg:ValueError",
+  "text": "ComfyUI no devolvió bytes de vídeo"
+ },
+ {
+  "file": "main.py",
+  "line": 15979,
+  "context": "arg:ValueError",
+  "text": "ComfyUI devolvió un vídeo inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 16010,
+  "context": "IfExp",
+  "text": "El contenedor de vídeo no supera la validación disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 16064,
+  "context": "IfExp",
+  "text": "El runtime no produjo una transcripción válida"
+ },
+ {
+  "file": "main.py",
+  "line": 16087,
+  "context": "arg:RuntimeError",
+  "text": "El fixture visual no coincide con el protocolo"
+ },
+ {
+  "file": "main.py",
+  "line": 16090,
+  "context": "arg:ValueError",
+  "text": "El benchmark de visión exige un endpoint loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 16176,
+  "context": "IfExp",
+  "text": "El runtime visual no produjo una respuesta"
+ },
+ {
+  "file": "main.py",
+  "line": 16182,
+  "context": "arg:ValueError",
+  "text": "La salida TTS no es WAV"
+ },
+ {
+  "file": "main.py",
+  "line": 16192,
+  "context": "arg:ValueError",
+  "text": "Chunk WAV truncado"
+ },
+ {
+  "file": "main.py",
+  "line": 16199,
+  "context": "arg:ValueError",
+  "text": "WAV sin formato o audio"
+ },
+ {
+  "file": "main.py",
+  "line": 16212,
+  "context": "arg:ValueError",
+  "text": "Propiedades PCM WAV inválidas"
+ },
+ {
+  "file": "main.py",
+  "line": 16302,
+  "context": "arg:ValueError",
+  "text": "El benchmark TTS exige un endpoint loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 16317,
+  "context": "arg:ValueError",
+  "text": "El runtime TTS falló: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 16330,
+  "context": "arg:ValueError",
+  "text": "El runtime TTS no devolvió audio binario"
+ },
+ {
+  "file": "main.py",
+  "line": 16334,
+  "context": "arg:ValueError",
+  "text": "El runtime TTS devolvió audio inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 16365,
+  "context": "IfExp",
+  "text": "El audio TTS no es íntegro o es silencio"
+ },
+ {
+  "file": "main.py",
+  "line": 16371,
+  "context": "arg:ValueError",
+  "text": "Los embeddings tienen dimensiones incompatibles"
+ },
+ {
+  "file": "main.py",
+  "line": 16373,
+  "context": "arg:ValueError",
+  "text": "El runtime devolvió embeddings no finitos"
+ },
+ {
+  "file": "main.py",
+  "line": 16377,
+  "context": "arg:ValueError",
+  "text": "El runtime devolvió un embedding nulo"
+ },
+ {
+  "file": "main.py",
+  "line": 16387,
+  "context": "arg:ValueError",
+  "text": "El benchmark de embeddings exige un endpoint loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 16406,
+  "context": "arg:ValueError",
+  "text": "El runtime devolvió una cantidad inesperada de embeddings"
+ },
+ {
+  "file": "main.py",
+  "line": 16413,
+  "context": "arg:ValueError",
+  "text": "La respuesta de embeddings no es válida"
+ },
+ {
+  "file": "main.py",
+  "line": 16458,
+  "context": "IfExp",
+  "text": "La separación semántica no alcanzó el margen versionado"
+ },
+ {
+  "file": "main.py",
+  "line": 16464,
+  "context": "arg:ValueError",
+  "text": "El reranker no devolvió exactamente los documentos solicitados"
+ },
+ {
+  "file": "main.py",
+  "line": 16489,
+  "context": "arg:ValueError",
+  "text": "El benchmark de reranking exige un endpoint loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 16512,
+  "context": "arg:ValueError",
+  "text": "El runtime devolvió una respuesta de reranking inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 16516,
+  "context": "arg:ValueError",
+  "text": "El runtime devolvió un resultado de reranking inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 16520,
+  "context": "arg:ValueError",
+  "text": "El runtime devolvió un score no finito"
+ },
+ {
+  "file": "main.py",
+  "line": 16550,
+  "context": "IfExp",
+  "text": "El reranker omitió documentos"
+ },
+ {
+  "file": "main.py",
+  "line": 16720,
+  "context": "IfExp",
+  "text": "El runtime no produjo tokens"
+ },
+ {
+  "file": "main.py",
+  "line": 16826,
+  "context": "arg:db.update_job",
+  "text": "Resolviendo artefacto y entorno"
+ },
+ {
+  "file": "main.py",
+  "line": 16839,
+  "context": "arg:RuntimeError",
+  "text": "El protocolo ASR solo admite modelos Whisper ASR"
+ },
+ {
+  "file": "main.py",
+  "line": 16841,
+  "context": "arg:RuntimeError",
+  "text": "El protocolo de visión solo admite modelos visuales"
+ },
+ {
+  "file": "main.py",
+  "line": 16843,
+  "context": "arg:RuntimeError",
+  "text": "El protocolo TTS solo admite sintetizadores locales"
+ },
+ {
+  "file": "main.py",
+  "line": 16845,
+  "context": "arg:RuntimeError",
+  "text": "El protocolo de imagen solo admite FLUX gestionado"
+ },
+ {
+  "file": "main.py",
+  "line": 16847,
+  "context": "arg:RuntimeError",
+  "text": "El protocolo de vídeo solo admite Wan gestionado"
+ },
+ {
+  "file": "main.py",
+  "line": 16849,
+  "context": "arg:RuntimeError",
+  "text": "El protocolo de embeddings solo admite modelos de embeddings"
+ },
+ {
+  "file": "main.py",
+  "line": 16851,
+  "context": "arg:RuntimeError",
+  "text": "El protocolo de reranking solo admite rerankers"
+ },
+ {
+  "file": "main.py",
+  "line": 16853,
+  "context": "arg:RuntimeError",
+  "text": "El protocolo de texto solo admite modelos de texto"
+ },
+ {
+  "file": "main.py",
+  "line": 16873,
+  "context": "arg:db.update_job",
+  "text": "Ya existe un benchmark válido para este artefacto, runtime y entorno"
+ },
+ {
+  "file": "main.py",
+  "line": 16885,
+  "context": "arg:db.update_job",
+  "text": "Arrancando {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 16968,
+  "context": "BoolOp",
+  "text": "{0}: muestra no completada"
+ },
+ {
+  "file": "main.py",
+  "line": 16974,
+  "context": "assign",
+  "text": "Contaminación: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 16993,
+  "context": "IfExp",
+  "text": "Una o más muestras no fueron válidas"
+ },
+ {
+  "file": "main.py",
+  "line": 17009,
+  "context": "arg:notify_safely",
+  "text": "Error ejecutando benchmark"
+ },
+ {
+  "file": "main.py",
+  "line": 17043,
+  "context": "IfExp",
+  "text": "Benchmark válido"
+ },
+ {
+  "file": "main.py",
+  "line": 17043,
+  "context": "IfExp",
+  "text": "Benchmark completado con muestras no válidas"
+ },
+ {
+  "file": "main.py",
+  "line": 17062,
+  "context": "arg:db.update_job",
+  "text": "Benchmark cancelado"
+ },
+ {
+  "file": "main.py",
+  "line": 17076,
+  "context": "arg:db.update_job",
+  "text": "Benchmark interrumpido al detener MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 17097,
+  "context": "arg:notify_safely",
+  "text": "Error ejecutando benchmark"
+ },
+ {
+  "file": "main.py",
+  "line": 17105,
+  "context": "IfExp",
+  "text": "Aplazado; se reintentará: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 17248,
+  "context": "IfExp",
+  "text": "{0} GiB libres"
+ },
+ {
+  "file": "main.py",
+  "line": 17248,
+  "context": "IfExp",
+  "text": "medición no disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 17250,
+  "context": "AugAssign",
+  "text": " · caché de disco no vaciada"
+ },
+ {
+  "file": "main.py",
+  "line": 17251,
+  "context": "IfExp",
+  "text": " · siguen cargados: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 17258,
+  "context": "key:impact",
+  "text": "Generación de imagen y vídeo y los benchmarks de ComfyUI dejan de estar disponibles."
+ },
+ {
+  "file": "main.py",
+  "line": 17261,
+  "context": "key:name",
+  "text": "Whisper"
+ },
+ {
+  "file": "main.py",
+  "line": 17263,
+  "context": "key:impact",
+  "text": "Transcripción de audio y la verificación ASR de los benchmarks TTS dejan de funcionar."
+ },
+ {
+  "file": "main.py",
+  "line": 17266,
+  "context": "key:name",
+  "text": "TTS CUDA"
+ },
+ {
+  "file": "main.py",
+  "line": 17268,
+  "context": "key:impact",
+  "text": "Síntesis de voz y benchmarks TTS dejan de estar disponibles."
+ },
+ {
+  "file": "main.py",
+  "line": 17271,
+  "context": "key:name",
+  "text": "Open WebUI"
+ },
+ {
+  "file": "main.py",
+  "line": 17273,
+  "context": "key:impact",
+  "text": "La interfaz web de chat deja de responder."
+ },
+ {
+  "file": "main.py",
+  "line": 17278,
+  "context": "key:impact",
+  "text": "La búsqueda web del chat y de Open WebUI deja de funcionar."
+ },
+ {
+  "file": "main.py",
+  "line": 17281,
+  "context": "key:name",
+  "text": "Gateway API"
+ },
+ {
+  "file": "main.py",
+  "line": 17283,
+  "context": "key:impact",
+  "text": "Los clientes de la API OpenAI compatible pierden acceso a los modelos del DGX."
+ },
+ {
+  "file": "main.py",
+  "line": 17344,
+  "context": "kw:detail:HTTPException",
+  "text": "{0} no está instalado como servicio"
+ },
+ {
+  "file": "main.py",
+  "line": 17362,
+  "context": "IfExp",
+  "text": "{0}: falló {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 17368,
+  "context": "BoolOp",
+  "text": "No se pudo {0} {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 17472,
+  "context": "arg:RuntimeError",
+  "text": "El perfil del modelo ya no existe"
+ },
+ {
+  "file": "main.py",
+  "line": 17479,
+  "context": "arg:RuntimeError",
+  "text": "El modelo ya no existe en su perfil"
+ },
+ {
+  "file": "main.py",
+  "line": 17481,
+  "context": "arg:RuntimeError",
+  "text": "El archivo local del modelo ya no está disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 17495,
+  "context": "assign",
+  "text": "benchmark-suite:{0}:{1}"
+ },
+ {
+  "file": "main.py",
+  "line": 17512,
+  "context": "assign",
+  "text": "benchmark-suite:{0}:{1}"
+ },
+ {
+  "file": "main.py",
+  "line": 17551,
+  "context": "arg:errors.append",
+  "text": "perfil {0} eliminado"
+ },
+ {
+  "file": "main.py",
+  "line": 17568,
+  "context": "arg:errors.append",
+  "text": "Ollama no restauró {0} modelo(s)"
+ },
+ {
+  "file": "main.py",
+  "line": 17613,
+  "context": "assign",
+  "text": "Suite de benchmarks completada y estado restaurado"
+ },
+ {
+  "file": "main.py",
+  "line": 17620,
+  "context": "arg:db.update_job",
+  "text": "Guardando estado y liberando modelos"
+ },
+ {
+  "file": "main.py",
+  "line": 17623,
+  "context": "arg:db.update_job",
+  "text": "Memoria vaciada · {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 17709,
+  "context": "arg:db.update_job",
+  "text": "Memoria vaciada · {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 17725,
+  "context": "arg:db.update_job",
+  "text": "Restaurando el estado anterior"
+ },
+ {
+  "file": "main.py",
+  "line": 17728,
+  "context": "assign",
+  "text": "Suite detenida; estado anterior restaurado"
+ },
+ {
+  "file": "main.py",
+  "line": 17731,
+  "context": "assign",
+  "text": "Suite interrumpida al detener MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 17745,
+  "context": "List",
+  "text": "{0}: restauración no completada"
+ },
+ {
+  "file": "main.py",
+  "line": 17748,
+  "context": "assign",
+  "text": "Suite terminada, pero el estado no se restauró por completo"
+ },
+ {
+  "file": "main.py",
+  "line": 17794,
+  "context": "arg:ValueError",
+  "text": "Ollama no es loopback"
+ },
+ {
+  "file": "main.py",
+  "line": 18088,
+  "context": "kw:detail:HTTPException",
+  "text": "Los benchmarks están desactivados"
+ },
+ {
+  "file": "main.py",
+  "line": 18090,
+  "context": "kw:detail:HTTPException",
+  "text": "Protocolo de benchmark no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 18099,
+  "context": "kw:detail:HTTPException",
+  "text": "Ya hay un benchmark en cola o ejecución"
+ },
+ {
+  "file": "main.py",
+  "line": 18111,
+  "context": "kw:detail:HTTPException",
+  "text": "Los benchmarks están desactivados"
+ },
+ {
+  "file": "main.py",
+  "line": 18113,
+  "context": "kw:detail:HTTPException",
+  "text": "Ya hay una suite de benchmarks activa"
+ },
+ {
+  "file": "main.py",
+  "line": 18124,
+  "context": "kw:detail:HTTPException",
+  "text": "Hay otra operación activa: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 18137,
+  "context": "kw:detail:HTTPException",
+  "text": "Selecciona al menos un modelo para ejecutar la suite"
+ },
+ {
+  "file": "main.py",
+  "line": 18144,
+  "context": "kw:detail:HTTPException",
+  "text": "La selección contiene modelos que ya no están disponibles"
+ },
+ {
+  "file": "main.py",
+  "line": 18159,
+  "context": "kw:detail:HTTPException",
+  "text": "{0} no se puede ejecutar: {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 18160,
+  "context": "BoolOp",
+  "text": "runtime no disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 18171,
+  "context": "kw:detail:HTTPException",
+  "text": "Todos los modelos locales elegibles ya completaron la suite"
+ },
+ {
+  "file": "main.py",
+  "line": 18243,
+  "context": "kw:detail:HTTPException",
+  "text": "Suite activa no encontrada"
+ },
+ {
+  "file": "main.py",
+  "line": 18248,
+  "context": "kw:detail:HTTPException",
+  "text": "La suite ya está restaurando el estado anterior"
+ },
+ {
+  "file": "main.py",
+  "line": 18271,
+  "context": "kw:detail:HTTPException",
+  "text": "Entrada pendiente no encontrada"
+ },
+ {
+  "file": "main.py",
+  "line": 18304,
+  "context": "kw:detail:HTTPException",
+  "text": "Benchmark no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 18346,
+  "context": "kw:detail:HTTPException",
+  "text": "El bundle supera 10 MiB"
+ },
+ {
+  "file": "main.py",
+  "line": 18348,
+  "context": "kw:detail:HTTPException",
+  "text": "Formato de benchmark no compatible"
+ },
+ {
+  "file": "main.py",
+  "line": 18352,
+  "context": "kw:detail:HTTPException",
+  "text": "Checksum del benchmark inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 18355,
+  "context": "kw:detail:HTTPException",
+  "text": "El bundle no contiene un run válido"
+ },
+ {
+  "file": "main.py",
+  "line": 18363,
+  "context": "kw:detail:HTTPException",
+  "text": "Identificadores del bundle inválidos"
+ },
+ {
+  "file": "main.py",
+  "line": 18382,
+  "context": "kw:detail:HTTPException",
+  "text": "Contenido del bundle inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 18385,
+  "context": "kw:detail:HTTPException",
+  "text": "La definición del protocolo no coincide"
+ },
+ {
+  "file": "main.py",
+  "line": 18391,
+  "context": "kw:detail:HTTPException",
+  "text": "Conflicto con el protocolo local"
+ },
+ {
+  "file": "main.py",
+  "line": 18400,
+  "context": "kw:detail:HTTPException",
+  "text": "Fingerprints del bundle inválidos"
+ },
+ {
+  "file": "main.py",
+  "line": 18542,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo importar el benchmark: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 18569,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 18573,
+  "context": "kw:detail:HTTPException",
+  "text": "Modelo del perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 18575,
+  "context": "kw:detail:HTTPException",
+  "text": "Este modelo no admite chat"
+ },
+ {
+  "file": "main.py",
+  "line": 18602,
+  "context": "kw:detail:HTTPException",
+  "text": "El servicio de chat no está disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 18669,
+  "context": "arg:assistant_tool",
+  "text": "Lista todas las consultas y acciones confirmadas que puede realizar el asistente MyDGX."
+ },
+ {
+  "file": "main.py",
+  "line": 18673,
+  "context": "arg:assistant_tool",
+  "text": "Busca documentación local de MyDGX. Úsala para explicar funciones, configuración, API, perfiles, gateway, despliegue o solución de problemas."
+ },
+ {
+  "file": "main.py",
+  "line": 18674,
+  "context": "key:description",
+  "text": "Pregunta o términos a buscar"
+ },
+ {
+  "file": "main.py",
+  "line": 18677,
+  "context": "arg:assistant_tool",
+  "text": "Obtiene el resumen actual del equipo, telemetría y salud de servicios."
+ },
+ {
+  "file": "main.py",
+  "line": 18680,
+  "context": "arg:assistant_tool",
+  "text": "Resume telemetría histórica del host en un intervalo reciente."
+ },
+ {
+  "file": "main.py",
+  "line": 18685,
+  "context": "arg:assistant_tool",
+  "text": "Obtiene telemetría de modelos cargados."
+ },
+ {
+  "file": "main.py",
+  "line": 18691,
+  "context": "arg:assistant_tool",
+  "text": "Comprueba si MyDGX y el sistema están preparados y devuelve avisos y recomendaciones."
+ },
+ {
+  "file": "main.py",
+  "line": 18692,
+  "context": "arg:assistant_tool",
+  "text": "Lista versiones de sistema, CUDA, drivers y runtimes de inferencia."
+ },
+ {
+  "file": "main.py",
+  "line": 18693,
+  "context": "arg:assistant_tool",
+  "text": "Consulta integridad del kernel, paquetes, NVIDIA y servicios de MyDGX."
+ },
+ {
+  "file": "main.py",
+  "line": 18694,
+  "context": "arg:assistant_tool",
+  "text": "Consulta particiones, espacio usado por modelos, NVMe y SMART."
+ },
+ {
+  "file": "main.py",
+  "line": 18695,
+  "context": "arg:assistant_tool",
+  "text": "Lista modelos locales de Ollama y Hugging Face y modelos cargados; indica si están en Default, encendidos en Quick y qué perfil los carga (loaded_by)."
+ },
+ {
+  "file": "main.py",
+  "line": 18698,
+  "context": "arg:assistant_tool",
+  "text": "Consulta benchmarks reales persistidos: score, TTFT, tokens por segundo, estabilidad, entorno y validez. No confunde estas mediciones con estimaciones."
+ },
+ {
+  "file": "main.py",
+  "line": 18704,
+  "context": "arg:assistant_tool",
+  "text": "Lista perfiles, modelos configurados, memoria estimada y estado de ejecución."
+ },
+ {
+  "file": "main.py",
+  "line": 18707,
+  "context": "arg:assistant_tool",
+  "text": "Busca y ordena modelos de Hugging Face para este equipo usando memoria, compatibilidad, rendimiento y Score comunidad HF."
+ },
+ {
+  "file": "main.py",
+  "line": 18722,
+  "context": "arg:assistant_tool",
+  "text": "Busca modelos generales en Hugging Face y devuelve popularidad, tendencia, tareas y modalidades."
+ },
+ {
+  "file": "main.py",
+  "line": 18733,
+  "context": "arg:assistant_tool",
+  "text": "Inspecciona metadatos, formatos, archivos y capacidades de un repositorio exacto de Hugging Face."
+ },
+ {
+  "file": "main.py",
+  "line": 18742,
+  "context": "arg:assistant_tool",
+  "text": "Calcula el plan conjunto de memoria y puertos antes de arrancar un perfil."
+ },
+ {
+  "file": "main.py",
+  "line": 18746,
+  "context": "arg:assistant_tool",
+  "text": "Consulta configuración pública, aliases y salud del gateway OpenAI-compatible."
+ },
+ {
+  "file": "main.py",
+  "line": 18747,
+  "context": "arg:assistant_tool",
+  "text": "Lista modelos y tareas disponibles en el Laboratorio IA."
+ },
+ {
+  "file": "main.py",
+  "line": 18748,
+  "context": "arg:assistant_tool",
+  "text": "Lista motores de inferencia descubiertos y su disponibilidad."
+ },
+ {
+  "file": "main.py",
+  "line": 18749,
+  "context": "arg:assistant_tool",
+  "text": "Lista servicios systemd y contenedores detectados."
+ },
+ {
+  "file": "main.py",
+  "line": 18750,
+  "context": "arg:assistant_tool",
+  "text": "Lista trabajos recientes, progreso y estado."
+ },
+ {
+  "file": "main.py",
+  "line": 18753,
+  "context": "arg:assistant_tool",
+  "text": "Obtiene logs técnicos y auditoría recientes, ya redactados. Permite filtrar por nivel, categoría o texto para diagnosticar errores."
+ },
+ {
+  "file": "main.py",
+  "line": 18757,
+  "context": "key:description",
+  "text": "Categoría exacta, por ejemplo runtime, profile, engine, http, benchmark"
+ },
+ {
+  "file": "main.py",
+  "line": 18758,
+  "context": "key:description",
+  "text": "Texto a buscar en mensaje, acción o entidad"
+ },
+ {
+  "file": "main.py",
+  "line": 18763,
+  "context": "arg:assistant_tool",
+  "text": "Consulta la referencia de la API HTTP de MyDGX (dashboard /api y gateway /v1): método, ruta, cuerpo, confirmaciones requeridas y autenticación. Úsala para explicar cómo integrar o automatizar MyDGX."
+ },
+ {
+  "file": "main.py",
+  "line": 18765,
+  "context": "key:description",
+  "text": "Área o términos: perfiles, memoria, benchmarks, chat completions, borrar modelo..."
+ },
+ {
+  "file": "main.py",
+  "line": 18769,
+  "context": "arg:assistant_tool",
+  "text": "Consulta la configuración pública: URLs, funciones activadas y si hay token HF o claves configuradas (solo sí/no, nunca valores)."
+ },
+ {
+  "file": "main.py",
+  "line": 18770,
+  "context": "arg:assistant_tool",
+  "text": "Consulta el modo memoria: servicios opcionales, cuánta memoria usa cada uno, qué está parado y qué perfiles ocupan memoria."
+ },
+ {
+  "file": "main.py",
+  "line": 18771,
+  "context": "arg:assistant_tool",
+  "text": "Lista las apps de perfil disponibles (directorios con start.sh), su estado y qué perfiles las usan."
+ },
+ {
+  "file": "main.py",
+  "line": 18772,
+  "context": "arg:assistant_tool",
+  "text": "Lista actualizaciones APT disponibles, con categoría y si son de seguridad."
+ },
+ {
+  "file": "main.py",
+  "line": 18775,
+  "context": "arg:assistant_tool",
+  "text": "Propone arrancar un perfil. Requiere confirmación explícita del usuario antes de ejecutarse."
+ },
+ {
+  "file": "main.py",
+  "line": 18776,
+  "context": "key:description",
+  "text": "ID exacto obtenido con get_profiles"
+ },
+ {
+  "file": "main.py",
+  "line": 18781,
+  "context": "arg:assistant_tool",
+  "text": "Propone detener un perfil cargado o todos. Requiere confirmación explícita."
+ },
+ {
+  "file": "main.py",
+  "line": 18782,
+  "context": "key:description",
+  "text": "ID exacto o __all__"
+ },
+ {
+  "file": "main.py",
+  "line": 18787,
+  "context": "arg:assistant_tool",
+  "text": "Propone marcar un perfil como predeterminado sin arrancarlo. Requiere confirmación."
+ },
+ {
+  "file": "main.py",
+  "line": 18793,
+  "context": "arg:assistant_tool",
+  "text": "Propone descargar un snapshot completo de Hugging Face. Requiere confirmación por consumo de red y disco."
+ },
+ {
+  "file": "main.py",
+  "line": 18802,
+  "context": "arg:assistant_tool",
+  "text": "Propone descargar un modelo de Ollama. Requiere confirmación por consumo de red y disco."
+ },
+ {
+  "file": "main.py",
+  "line": 18808,
+  "context": "arg:assistant_tool",
+  "text": "Propone guardar o quitar un modelo de favoritos. Requiere confirmación."
+ },
+ {
+  "file": "main.py",
+  "line": 18817,
+  "context": "arg:assistant_tool",
+  "text": "Propone cancelar un trabajo compatible. Requiere confirmación explícita."
+ },
+ {
+  "file": "main.py",
+  "line": 18818,
+  "context": "key:description",
+  "text": "ID exacto obtenido con get_jobs"
+ },
+ {
+  "file": "main.py",
+  "line": 18823,
+  "context": "arg:assistant_tool",
+  "text": "Propone iniciar, detener o reiniciar un servicio permitido. Requiere confirmación y que el control esté habilitado."
+ },
+ {
+  "file": "main.py",
+  "line": 18825,
+  "context": "key:description",
+  "text": "Servicio exacto obtenido con get_services"
+ },
+ {
+  "file": "main.py",
+  "line": 18832,
+  "context": "arg:assistant_tool",
+  "text": "Propone activar o desactivar de forma persistente ComfyUI, Whisper o SearXNG. Requiere confirmación; no se puede desactivar un motor que usa un perfil cargado."
+ },
+ {
+  "file": "main.py",
+  "line": 18841,
+  "context": "arg:assistant_tool",
+  "text": "Propone arrancar, detener o reiniciar una app de perfil con su start.sh. Requiere confirmación."
+ },
+ {
+  "file": "main.py",
+  "line": 18843,
+  "context": "key:description",
+  "text": "Nombre exacto obtenido con get_profile_apps"
+ },
+ {
+  "file": "main.py",
+  "line": 18850,
+  "context": "arg:assistant_tool",
+  "text": "Propone liberar memoria con el modo memoria: parar servicios opcionales, descargar modelos de Ollama y, si se pide, detener perfiles. Requiere confirmación."
+ },
+ {
+  "file": "main.py",
+  "line": 18855,
+  "context": "key:description",
+  "text": "Servicios opcionales a parar, obtenidos con get_memory_mode"
+ },
+ {
+  "file": "main.py",
+  "line": 18865,
+  "context": "arg:assistant_tool",
+  "text": "Propone volver a arrancar los servicios y perfiles que paró el modo memoria. Requiere confirmación."
+ },
+ {
+  "file": "main.py",
+  "line": 18882,
+  "context": "Tuple",
+  "text": "código"
+ },
+ {
+  "file": "main.py",
+  "line": 18882,
+  "context": "Tuple",
+  "text": "visión"
+ },
+ {
+  "file": "main.py",
+  "line": 18892,
+  "context": "Tuple",
+  "text": "tokens por segundo"
+ },
+ {
+  "file": "main.py",
+  "line": 18904,
+  "context": "Tuple",
+  "text": "versión"
+ },
+ {
+  "file": "main.py",
+  "line": 18913,
+  "context": "Tuple",
+  "text": "open webui"
+ },
+ {
+  "file": "main.py",
+  "line": 18921,
+  "context": "Tuple",
+  "text": "túnel"
+ },
+ {
+  "file": "main.py",
+  "line": 18929,
+  "context": "Tuple",
+  "text": "vídeo"
+ },
+ {
+  "file": "main.py",
+  "line": 18950,
+  "context": "Attribute",
+  "text": "\nEres el asistente operativo de MyDGX, un panel local y open source para equipos NVIDIA GB10.\nResponde con precisión y de forma concisa en el idioma del usuario.\n\nMyDGX administra telemetría, modelos, perfiles multimodelo, motores,\nalmacenamiento, benchmarks, trabajos, gateway OpenAI-compatible y comprobaciones del sistema.\nFecha actual UTC: {0}.\n\nSecciones de la interfaz:\n- Resumen: telemetría en vivo, mapa de memoria unificada, consumo por modelo y actividad.\n- Chat: chat con modelos locales y este asistente.\n- Modelos: recomendaciones para el equipo, instalados (Ollama y Hugging Face), descarga, verificación de integridad, favoritos, carga y descarga de Ollama en memoria, botones Encender/Apagar (perfil Quick) y casilla Default.\n- Benchmarks: mediciones reproducibles, suites, cola automática de modelos nuevos, exportación e importación.\n- Perfiles: recetas de inferencia con uno o varios modelos, motor, puerto, contexto y app opcional; hasta dos perfiles de usuario cargados a la vez, más Default y Quick.\n- Almacenamiento: particiones, uso por tipo de dato, NVMe y SMART.\n- Motores: estado de runtimes, activar o desactivar ComfyUI, Whisper y SearXNG, y modo memoria.\n- Laboratorio IA: imagen, audio, vídeo, visión, embeddings y reranking.\n- Configuración: tema, clave de acceso del navegador y gateway.\n- Sistema: readiness, versiones, integridad, servicios, actualizaciones APT y reparación.\n- Logs: diagnóstico filtrable y auditoría.\n\nConceptos:\n- La memoria del GB10 es unificada (CPU y GPU comparten 128 GB); un modelo que no cabe no se carga.\n- Descargar un modelo no lo carga en memoria; arrancar un perfil sí.\n- Perfil predeterminado: se recarga al iniciar MyDGX; se fija con activate_profile.\n- Perfil Default (mydgx-default): de solo lectura; reúne los modelos marcados como Default en Modelos y arranca siempre al iniciar MyDGX. No cuenta para el límite de dos perfiles.\n- Perfil Quick (mydgx-quick): de solo lectura; se crea al pulsar Encender en un modelo de Modelos (si cabe en memoria), se vacía con Apagar; se conserva si solo se reinicia el servicio MyDGX (deploy sin --repair) y se vacía al reiniciar el equipo o con deploy --repair. No cuenta para el límite de dos perfiles.\n- Default y Quick no se editan, activan ni borran desde Perfiles; se gestionan desde Modelos. Un modelo cargado por un perfil no se puede borrar hasta detenerlo.\n- App del perfil: directorio con start.sh (start/stop/restart/status) que arranca y para con el perfil; recibe MYDGX_GATEWAY_URL y no recibe secretos.\n- App web: una app de perfil puede tener alias y puerto (se configuran en el editor del perfil). start.sh recibe MYDGX_APP_HOST=127.0.0.1, MYDGX_APP_PORT, MYDGX_APP_ALIAS y MYDGX_APP_URL y debe escuchar en ese puerto. Con la app en marcha aparece un acceso directo en Resumen (junto a DGX Dashboard) y en la app de la barra de menús, que abre el túnel SSH para ese puerto. get_profile_apps devuelve la configuración en \"web\".\n- Gateway: endpoint único OpenAI y Anthropic (por defecto http://127.0.0.1:4000/v1) que enruta por alias a los perfiles cargados. La búsqueda web para OpenCode y Claude Code (POST /v1/search, SearXNG local) está activada por defecto y se cambia en Configuración → Gateway.\n- Modo memoria: pausa temporal de servicios opcionales y Ollama para hacer sitio, con restauración posterior.\n- Un motor activo (Whisper, ComfyUI) puede no tener modelos cargados: cargan bajo demanda.\n- Las operaciones largas son trabajos con progreso; consulta get_jobs.\n\nReglas:\n- Para cualquier dato actual del equipo usa una herramienta; nunca inventes métricas, estados o IDs.\n- Si preguntan qué puedes hacer, usa get_assistant_capabilities.\n- Para preguntas sobre MyDGX busca la documentación cuando la respuesta no esté en resultados previos.\n- Para recomendar modelos usa recommend_models y explica compatibilidad, memoria, rendimiento estimado y Score comunidad HF; no presentes estimaciones como benchmarks.\n- Para hablar de rendimiento medido usa get_benchmarks y distingue protocolo, entorno y validez.\n- Antes de una acción identifica el recurso con una herramienta de lectura.\n- Las herramientas de acción solo crean una propuesta. Explica qué ocurrirá y pide que el usuario la confirme en la interfaz.\n- Para dudas de memoria o \"no cabe\" usa get_memory_mode y get_profiles; puedes proponer release_memory y después restore_memory.\n- Para preguntas sobre la API, integración o automatización usa get_api_reference. Puedes mostrar ejemplos curl de endpoints documentados para que el usuario los ejecute, siempre con marcadores como YOUR_API_KEY o $MYDGX_API_KEY, e indica el texto de confirmación cuando el endpoint lo exija.\n- Para diagnosticar errores usa get_recent_events con level=error o con el texto relevante, y get_jobs.\n- Nunca solicites, muestres ni infieras claves, tokens, contraseñas, cookies o contenido de .env.\n- No inventes endpoints, comandos ni SQL; no presentes llamadas HTTP como herramientas que tú ejecutas.\n- Si una capacidad no está disponible, dilo claramente y ofrece el siguiente paso seguro.\n"
+ },
+ {
+  "file": "main.py",
+  "line": 19044,
+  "context": "Set",
+  "text": "para"
+ },
+ {
+  "file": "main.py",
+  "line": 19044,
+  "context": "Set",
+  "text": "cómo"
+ },
+ {
+  "file": "main.py",
+  "line": 19098,
+  "context": "Set",
+  "text": "para"
+ },
+ {
+  "file": "main.py",
+  "line": 19098,
+  "context": "Set",
+  "text": "cómo"
+ },
+ {
+  "file": "main.py",
+  "line": 19120,
+  "context": "key:dashboard",
+  "text": "Cookie de sesión tras POST /api/auth/login o cabecera X-MyDGX-Key: YOUR_API_KEY"
+ },
+ {
+  "file": "main.py",
+  "line": 19123,
+  "context": "key:gateway",
+  "text": "Authorization: Bearer YOUR_GATEWAY_API_KEY (no necesaria desde loopback)"
+ },
+ {
+  "file": "main.py",
+  "line": 19125,
+  "context": "key:browser",
+  "text": "Las peticiones de otras webs (Origin o Host ajenos) se rechazan con 403"
+ },
+ {
+  "file": "main.py",
+  "line": 19128,
+  "context": "List",
+  "text": "Las operaciones largas devuelven job_id; su estado está en GET /api/jobs/{job_id}."
+ },
+ {
+  "file": "main.py",
+  "line": 19129,
+  "context": "List",
+  "text": "Los borrados piden ?confirm= con el nombre exacto; otras acciones piden un campo confirm en el cuerpo."
+ },
+ {
+  "file": "main.py",
+  "line": 19130,
+  "context": "List",
+  "text": "Los errores tienen la forma {\"detail\": \"...\"}."
+ },
+ {
+  "file": "main.py",
+  "line": 19171,
+  "context": "IfExp",
+  "text": "Arrancar"
+ },
+ {
+  "file": "main.py",
+  "line": 19171,
+  "context": "IfExp",
+  "text": "Activar"
+ },
+ {
+  "file": "main.py",
+  "line": 19176,
+  "context": "IfExp",
+  "text": "Detener todos los perfiles"
+ },
+ {
+  "file": "main.py",
+  "line": 19176,
+  "context": "IfExp",
+  "text": "Detener perfil {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 19178,
+  "context": "return",
+  "text": "Cancelar trabajo {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 19180,
+  "context": "return",
+  "text": "Descargar snapshot Hugging Face {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 19182,
+  "context": "return",
+  "text": "Descargar modelo Ollama {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 19184,
+  "context": "IfExp",
+  "text": "Guardar"
+ },
+ {
+  "file": "main.py",
+  "line": 19184,
+  "context": "IfExp",
+  "text": "Quitar"
+ },
+ {
+  "file": "main.py",
+  "line": 19187,
+  "context": "IfExp",
+  "text": "Activar"
+ },
+ {
+  "file": "main.py",
+  "line": 19187,
+  "context": "IfExp",
+  "text": "Desactivar"
+ },
+ {
+  "file": "main.py",
+  "line": 19190,
+  "context": "key:start",
+  "text": "Arrancar"
+ },
+ {
+  "file": "main.py",
+  "line": 19190,
+  "context": "key:stop",
+  "text": "Detener"
+ },
+ {
+  "file": "main.py",
+  "line": 19190,
+  "context": "key:restart",
+  "text": "Reiniciar"
+ },
+ {
+  "file": "main.py",
+  "line": 19191,
+  "context": "arg:verbs.get",
+  "text": "Ejecutar"
+ },
+ {
+  "file": "main.py",
+  "line": 19196,
+  "context": "IfExp",
+  "text": "descargar modelos de Ollama"
+ },
+ {
+  "file": "main.py",
+  "line": 19197,
+  "context": "IfExp",
+  "text": "detener perfiles"
+ },
+ {
+  "file": "main.py",
+  "line": 19199,
+  "context": "BinOp",
+  "text": "Liberar memoria: "
+ },
+ {
+  "file": "main.py",
+  "line": 19199,
+  "context": "BoolOp",
+  "text": "vaciar caché de páginas"
+ },
+ {
+  "file": "main.py",
+  "line": 19201,
+  "context": "return",
+  "text": "Restaurar lo que paró el modo memoria"
+ },
+ {
+  "file": "main.py",
+  "line": 19209,
+  "context": "kw:detail:HTTPException",
+  "text": "Perfil no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 19214,
+  "context": "kw:detail:HTTPException",
+  "text": "El perfil no está cargado"
+ },
+ {
+  "file": "main.py",
+  "line": 19220,
+  "context": "kw:detail:HTTPException",
+  "text": "Trabajo no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 19222,
+  "context": "kw:detail:HTTPException",
+  "text": "El trabajo no se puede cancelar"
+ },
+ {
+  "file": "main.py",
+  "line": 19227,
+  "context": "kw:detail:HTTPException",
+  "text": "Repositorio Hugging Face inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 19231,
+  "context": "kw:detail:HTTPException",
+  "text": "El estado de favorito debe ser booleano"
+ },
+ {
+  "file": "main.py",
+  "line": 19235,
+  "context": "kw:detail:HTTPException",
+  "text": "Revisión inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 19240,
+  "context": "kw:detail:HTTPException",
+  "text": "Nombre de modelo Ollama inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 19246,
+  "context": "kw:detail:HTTPException",
+  "text": "Control de servicios desactivado"
+ },
+ {
+  "file": "main.py",
+  "line": 19248,
+  "context": "kw:detail:HTTPException",
+  "text": "Servicio o acción no permitidos"
+ },
+ {
+  "file": "main.py",
+  "line": 19254,
+  "context": "kw:detail:HTTPException",
+  "text": "Motor o acción no permitidos"
+ },
+ {
+  "file": "main.py",
+  "line": 19257,
+  "context": "kw:detail:HTTPException",
+  "text": "Lo usan perfiles cargados: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 19263,
+  "context": "kw:detail:HTTPException",
+  "text": "Acción de app no permitida"
+ },
+ {
+  "file": "main.py",
+  "line": 19265,
+  "context": "kw:detail:HTTPException",
+  "text": "App de perfil no disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 19270,
+  "context": "kw:detail:HTTPException",
+  "text": "Servicios válidos: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 19274,
+  "context": "kw:detail:HTTPException",
+  "text": "release_ollama y stop_profiles deben ser booleanos"
+ },
+ {
+  "file": "main.py",
+  "line": 19279,
+  "context": "kw:detail:HTTPException",
+  "text": "El modo memoria no tiene nada parado que restaurar"
+ },
+ {
+  "file": "main.py",
+  "line": 19281,
+  "context": "kw:detail:HTTPException",
+  "text": "Acción no permitida"
+ },
+ {
+  "file": "main.py",
+  "line": 19343,
+  "context": "List",
+  "text": "comandos arbitrarios"
+ },
+ {
+  "file": "main.py",
+  "line": 19343,
+  "context": "List",
+  "text": "SQL arbitrario"
+ },
+ {
+  "file": "main.py",
+  "line": 19343,
+  "context": "List",
+  "text": "lectura de secretos"
+ },
+ {
+  "file": "main.py",
+  "line": 19415,
+  "context": "kw:detail:HTTPException",
+  "text": "La búsqueda debe tener al menos 2 caracteres"
+ },
+ {
+  "file": "main.py",
+  "line": 19471,
+  "context": "key:image-generation",
+  "text": "image generation"
+ },
+ {
+  "file": "main.py",
+  "line": 19472,
+  "context": "key:asr",
+  "text": "speech recognition"
+ },
+ {
+  "file": "main.py",
+  "line": 19473,
+  "context": "key:tts",
+  "text": "text to speech"
+ },
+ {
+  "file": "main.py",
+  "line": 19474,
+  "context": "key:video-generation",
+  "text": "video generation"
+ },
+ {
+  "file": "main.py",
+  "line": 19568,
+  "context": "kw:detail:HTTPException",
+  "text": "La búsqueda debe tener al menos 2 caracteres"
+ },
+ {
+  "file": "main.py",
+  "line": 19570,
+  "context": "kw:detail:HTTPException",
+  "text": "Tarea inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 19572,
+  "context": "kw:detail:HTTPException",
+  "text": "Modalidad inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 19579,
+  "context": "kw:detail:HTTPException",
+  "text": "Repositorio Hugging Face inválido"
+ },
+ {
+  "file": "main.py",
+  "line": 19581,
+  "context": "kw:detail:HTTPException",
+  "text": "Revisión inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 19617,
+  "context": "arg:clauses.append",
+  "text": "(message LIKE ? OR action LIKE ? OR entity_id LIKE ?)"
+ },
+ {
+  "file": "main.py",
+  "line": 19620,
+  "context": "IfExp",
+  "text": "WHERE action LIKE ? OR target LIKE ? OR detail LIKE ? "
+ },
+ {
+  "file": "main.py",
+  "line": 19647,
+  "context": "kw:detail:HTTPException",
+  "text": "Herramienta no permitida: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 19754,
+  "context": "IfExp",
+  "text": "Instala el modelo preferido con: ollama pull {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 19756,
+  "context": "IfExp",
+  "text": "Instala o carga un modelo local de chat compatible"
+ },
+ {
+  "file": "main.py",
+  "line": 19832,
+  "context": "kw:detail:HTTPException",
+  "text": "Modelo de asistente no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 19834,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo configurado no admite chat"
+ },
+ {
+  "file": "main.py",
+  "line": 19858,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo no ofrece un protocolo compatible con herramientas"
+ },
+ {
+  "file": "main.py",
+  "line": 19874,
+  "context": "kw:detail:HTTPException",
+  "text": "El modelo de asistente no está disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 19889,
+  "context": "return",
+  "text": "He preparado estas acciones. Revísalas y confírmalas en la interfaz:\n{0}"
+ },
+ {
+  "file": "main.py",
+  "line": 19901,
+  "context": "return",
+  "text": "No encontré modelos que cumplan esos filtros. Prueba una búsqueda más amplia."
+ },
+ {
+  "file": "main.py",
+  "line": 19908,
+  "context": "BoolOp",
+  "text": "equipo actual"
+ },
+ {
+  "file": "main.py",
+  "line": 19910,
+  "context": "assign",
+  "text": "Evaluación para {0}: {1} GB de presupuesto seguro por capacidad y {2} GB disponibles ahora."
+ },
+ {
+  "file": "main.py",
+  "line": 19914,
+  "context": "assign",
+  "text": "Estas son las mejores opciones que caben por capacidad:"
+ },
+ {
+  "file": "main.py",
+  "line": 19916,
+  "context": "IfExp",
+  "text": "opción"
+ },
+ {
+  "file": "main.py",
+  "line": 19919,
+  "context": "assign",
+  "text": "Encontré {0} {1} que {2} por capacidad; completo la lista con las alternativas más cercanas:"
+ },
+ {
+  "file": "main.py",
+  "line": 19924,
+  "context": "assign",
+  "text": "No encontré opciones que quepan en el presupuesto seguro del equipo. Estas son las alternativas más cercanas:"
+ },
+ {
+  "file": "main.py",
+  "line": 19933,
+  "context": "assign",
+  "text": "{0} GB estimados con {1}K de contexto y {2} {3}"
+ },
+ {
+  "file": "main.py",
+  "line": 19937,
+  "context": "IfExp",
+  "text": "estimación teórica GB10 ≈{0} tok/s"
+ },
+ {
+  "file": "main.py",
+  "line": 19940,
+  "context": "IfExp",
+  "text": "rendimiento no estimado en este host"
+ },
+ {
+  "file": "main.py",
+  "line": 19942,
+  "context": "BoolOp",
+  "text": "formato del runtime"
+ },
+ {
+  "file": "main.py",
+  "line": 19944,
+  "context": "IfExp",
+  "text": "cabe y puede cargarse ahora"
+ },
+ {
+  "file": "main.py",
+  "line": 19946,
+  "context": "IfExp",
+  "text": "cabe por capacidad, pero primero hay que liberar memoria"
+ },
+ {
+  "file": "main.py",
+  "line": 19948,
+  "context": "IfExp",
+  "text": "no cabe en el presupuesto seguro del equipo"
+ },
+ {
+  "file": "main.py",
+  "line": 19951,
+  "context": "arg:lines.append",
+  "text": "{0}. {1} — MyDGX {2}/100, señales comunidad HF {3}/100, {4}, {5}, {6}; {7}."
+ },
+ {
+  "file": "main.py",
+  "line": 19968,
+  "context": "return",
+  "text": "No encontré modelos en Hugging Face con esos filtros."
+ },
+ {
+  "file": "main.py",
+  "line": 19970,
+  "context": "List",
+  "text": "Resultados de Hugging Face:"
+ },
+ {
+  "file": "main.py",
+  "line": 19972,
+  "context": "ListComp",
+  "text": "{0}. {1} — comunidad HF {2}/100, {3} descargas y {4} likes."
+ },
+ {
+  "file": "main.py",
+  "line": 19984,
+  "context": "return",
+  "text": "Según {0} — {1}:\n{2}"
+ },
+ {
+  "file": "main.py",
+  "line": 19989,
+  "context": "return",
+  "text": "Consulté correctamente: {0}. El modelo no pudo sintetizar la respuesta; intenta concretar la pregunta."
+ },
+ {
+  "file": "main.py",
+  "line": 19990,
+  "context": "return",
+  "text": "No pude obtener datos válidos para responder. Revisa el estado del modelo y vuelve a intentarlo."
+ },
+ {
+  "file": "main.py",
+  "line": 19997,
+  "context": "Tuple",
+  "text": "modelos para"
+ },
+ {
+  "file": "main.py",
+  "line": 19997,
+  "context": "Tuple",
+  "text": "modelos de"
+ },
+ {
+  "file": "main.py",
+  "line": 20002,
+  "context": "Tuple",
+  "text": "generar vídeo"
+ },
+ {
+  "file": "main.py",
+  "line": 20003,
+  "context": "Tuple",
+  "text": "generar video"
+ },
+ {
+  "file": "main.py",
+  "line": 20006,
+  "context": "Tuple",
+  "text": "speech to text"
+ },
+ {
+  "file": "main.py",
+  "line": 20007,
+  "context": "Tuple",
+  "text": "texto a voz"
+ },
+ {
+  "file": "main.py",
+  "line": 20008,
+  "context": "Tuple",
+  "text": "text to speech"
+ },
+ {
+  "file": "main.py",
+  "line": 20011,
+  "context": "Tuple",
+  "text": "visión"
+ },
+ {
+  "file": "main.py",
+  "line": 20015,
+  "context": "Tuple",
+  "text": "código"
+ },
+ {
+  "file": "main.py",
+  "line": 20028,
+  "context": "key:image-generation",
+  "text": "image generation"
+ },
+ {
+  "file": "main.py",
+  "line": 20029,
+  "context": "key:asr",
+  "text": "speech recognition"
+ },
+ {
+  "file": "main.py",
+  "line": 20030,
+  "context": "key:tts",
+  "text": "text to speech"
+ },
+ {
+  "file": "main.py",
+  "line": 20031,
+  "context": "key:video-generation",
+  "text": "video generation"
+ },
+ {
+  "file": "main.py",
+  "line": 20051,
+  "context": "Tuple",
+  "text": "pequeñ"
+ },
+ {
+  "file": "main.py",
+  "line": 20057,
+  "context": "Tuple",
+  "text": "sin censura"
+ },
+ {
+  "file": "main.py",
+  "line": 20072,
+  "context": "kw:detail:HTTPException",
+  "text": "El asistente está desactivado"
+ },
+ {
+  "file": "main.py",
+  "line": 20093,
+  "context": "IfExp",
+  "text": "No pude consultar el catálogo de modelos ahora mismo. Inténtalo de nuevo en unos minutos."
+ },
+ {
+  "file": "main.py",
+  "line": 20119,
+  "context": "kw:detail:HTTPException",
+  "text": "No hay un modelo de chat disponible para el asistente"
+ },
+ {
+  "file": "main.py",
+  "line": 20136,
+  "context": "kw:detail:HTTPException",
+  "text": "No se pudo iniciar ningún modelo de asistente ({0}). Comprueba /api/assistant/status, la instalación del modelo y la memoria disponible."
+ },
+ {
+  "file": "main.py",
+  "line": 20227,
+  "context": "kw:detail:HTTPException",
+  "text": "La propuesta no existe o ha caducado"
+ },
+ {
+  "file": "main.py",
+  "line": 20280,
+  "context": "kw:confirm:MemoryModeReleaseRequest",
+  "text": "liberar memoria"
+ },
+ {
+  "file": "main.py",
+  "line": 20283,
+  "context": "kw:confirm:MemoryModeConfirmRequest",
+  "text": "restaurar servicios"
+ },
+ {
+  "file": "main.py",
+  "line": 20285,
+  "context": "kw:detail:HTTPException",
+  "text": "Acción no permitida"
+ },
+ {
+  "file": "main.py",
+  "line": 20330,
+  "context": "kw:detail:HTTPException",
+  "text": "Trabajo no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 20356,
+  "context": "kw:detail:HTTPException",
+  "text": "Trabajo no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 20358,
+  "context": "kw:detail:HTTPException",
+  "text": "Este tipo de trabajo no admite cancelación segura"
+ },
+ {
+  "file": "main.py",
+  "line": 20360,
+  "context": "kw:detail:HTTPException",
+  "text": "El trabajo ya está {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 20383,
+  "context": "kw:detail:HTTPException",
+  "text": "El trabajo no tiene resultado"
+ },
+ {
+  "file": "main.py",
+  "line": 20387,
+  "context": "kw:detail:HTTPException",
+  "text": "Resultado dañado"
+ },
+ {
+  "file": "main.py",
+  "line": 20408,
+  "context": "arg:clauses.append",
+  "text": "(message LIKE ? OR action LIKE ? OR entity_id LIKE ? OR detail_json LIKE ?)"
+ },
+ {
+  "file": "main.py",
+  "line": 20431,
+  "context": "key:error",
+  "text": "Detalle no válido"
+ },
+ {
+  "file": "main.py",
+  "line": 20532,
+  "context": "key:name",
+  "text": "Ollama"
+ },
+ {
+  "file": "main.py",
+  "line": 20581,
+  "context": "key:name",
+  "text": "LM Studio"
+ },
+ {
+  "file": "main.py",
+  "line": 20606,
+  "context": "key:name",
+  "text": "Whisper compatible"
+ },
+ {
+  "file": "main.py",
+  "line": 20634,
+  "context": "key:name",
+  "text": "NVIDIA Riva"
+ },
+ {
+  "file": "main.py",
+  "line": 20736,
+  "context": "arg:item.get",
+  "text": "Image"
+ },
+ {
+  "file": "main.py",
+  "line": 20736,
+  "context": "arg:item.get",
+  "text": "Names"
+ },
+ {
+  "file": "main.py",
+  "line": 20739,
+  "context": "arg:item.get",
+  "text": "Names"
+ },
+ {
+  "file": "main.py",
+  "line": 20740,
+  "context": "arg:item.get",
+  "text": "Image"
+ },
+ {
+  "file": "main.py",
+  "line": 20741,
+  "context": "arg:item.get",
+  "text": "Ports"
+ },
+ {
+  "file": "main.py",
+  "line": 20742,
+  "context": "arg:item.get",
+  "text": "Status"
+ },
+ {
+  "file": "main.py",
+  "line": 20746,
+  "context": "key:name",
+  "text": "NVIDIA NIM"
+ },
+ {
+  "file": "main.py",
+  "line": 20798,
+  "context": "kw:detail:HTTPException",
+  "text": "Este motor es imprescindible, externo o se gestiona desde Perfiles"
+ },
+ {
+  "file": "main.py",
+  "line": 20801,
+  "context": "kw:detail:HTTPException",
+  "text": "Confirmación de motor inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 20806,
+  "context": "kw:detail:HTTPException",
+  "text": "Detén primero los perfiles que usan este motor: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 20820,
+  "context": "IfExp",
+  "text": "falló"
+ },
+ {
+  "file": "main.py",
+  "line": 20828,
+  "context": "BoolOp",
+  "text": "No se pudo {0} {1}"
+ },
+ {
+  "file": "main.py",
+  "line": 20859,
+  "context": "kw:detail:HTTPException",
+  "text": "Servicio opcional desconocido"
+ },
+ {
+  "file": "main.py",
+  "line": 20861,
+  "context": "kw:detail:HTTPException",
+  "text": "Confirmación de servicio inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 20878,
+  "context": "kw:detail:HTTPException",
+  "text": "Confirmación inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 20881,
+  "context": "kw:detail:HTTPException",
+  "text": "Servicios desconocidos: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 20883,
+  "context": "kw:detail:HTTPException",
+  "text": "Hay una suite de benchmarks en curso: espera a que termine o cancélala"
+ },
+ {
+  "file": "main.py",
+  "line": 20885,
+  "context": "kw:detail:HTTPException",
+  "text": "Hay un perfil arrancando o restaurándose: espera a que termine"
+ },
+ {
+  "file": "main.py",
+  "line": 20927,
+  "context": "kw:detail:HTTPException",
+  "text": "Confirmación inválida"
+ },
+ {
+  "file": "main.py",
+  "line": 20929,
+  "context": "kw:detail:HTTPException",
+  "text": "Hay una suite de benchmarks en curso: espera a que termine o cancélala"
+ },
+ {
+  "file": "main.py",
+  "line": 20931,
+  "context": "kw:detail:HTTPException",
+  "text": "Hay un perfil arrancando o restaurándose: espera a que termine"
+ },
+ {
+  "file": "main.py",
+  "line": 20947,
+  "context": "arg:errors.append",
+  "text": "Perfiles no relanzados: detén antes {0} para no quedarte sin memoria"
+ },
+ {
+  "file": "main.py",
+  "line": 20972,
+  "context": "key:name",
+  "text": "Python"
+ },
+ {
+  "file": "main.py",
+  "line": 20976,
+  "context": "key:category",
+  "text": "Sistema"
+ },
+ {
+  "file": "main.py",
+  "line": 20979,
+  "context": "Tuple",
+  "text": "CUDA Toolkit"
+ },
+ {
+  "file": "main.py",
+  "line": 20980,
+  "context": "Tuple",
+  "text": "Inferencia"
+ },
+ {
+  "file": "main.py",
+  "line": 20981,
+  "context": "Tuple",
+  "text": "llama.cpp ARTIFEX b10679"
+ },
+ {
+  "file": "main.py",
+  "line": 20981,
+  "context": "Tuple",
+  "text": "Inferencia"
+ },
+ {
+  "file": "main.py",
+  "line": 20982,
+  "context": "Tuple",
+  "text": "llama.cpp ARTIFEX b11429"
+ },
+ {
+  "file": "main.py",
+  "line": 20982,
+  "context": "Tuple",
+  "text": "Inferencia"
+ },
+ {
+  "file": "main.py",
+  "line": 20983,
+  "context": "Tuple",
+  "text": "Ollama"
+ },
+ {
+  "file": "main.py",
+  "line": 20983,
+  "context": "Tuple",
+  "text": "Inferencia"
+ },
+ {
+  "file": "main.py",
+  "line": 20984,
+  "context": "Tuple",
+  "text": "Docker"
+ },
+ {
+  "file": "main.py",
+  "line": 20984,
+  "context": "Tuple",
+  "text": "Contenedores"
+ },
+ {
+  "file": "main.py",
+  "line": 20985,
+  "context": "Tuple",
+  "text": "Docker Compose"
+ },
+ {
+  "file": "main.py",
+  "line": 20985,
+  "context": "Tuple",
+  "text": "Contenedores"
+ },
+ {
+  "file": "main.py",
+  "line": 20986,
+  "context": "Tuple",
+  "text": "Compilación"
+ },
+ {
+  "file": "main.py",
+  "line": 20987,
+  "context": "Tuple",
+  "text": "Compilación"
+ },
+ {
+  "file": "main.py",
+  "line": 20991,
+  "context": "key:detail",
+  "text": "No detectado"
+ },
+ {
+  "file": "main.py",
+  "line": 20999,
+  "context": "key:detail",
+  "text": "No se pudo consultar"
+ },
+ {
+  "file": "main.py",
+  "line": 21008,
+  "context": "key:name",
+  "text": "NVIDIA Driver / GPU"
+ },
+ {
+  "file": "main.py",
+  "line": 21012,
+  "context": "key:name",
+  "text": "CUDA Runtime compatible"
+ },
+ {
+  "file": "main.py",
+  "line": 21015,
+  "context": "key:detail",
+  "text": "Versión máxima indicada por el driver"
+ },
+ {
+  "file": "main.py",
+  "line": 21024,
+  "context": "key:name",
+  "text": "DGX OS"
+ },
+ {
+  "file": "main.py",
+  "line": 21024,
+  "context": "key:category",
+  "text": "Sistema"
+ },
+ {
+  "file": "main.py",
+  "line": 21030,
+  "context": "Tuple",
+  "text": "Transformers"
+ },
+ {
+  "file": "main.py",
+  "line": 21031,
+  "context": "Tuple",
+  "text": "Accelerate"
+ },
+ {
+  "file": "main.py",
+  "line": 21037,
+  "context": "Tuple",
+  "text": "Open WebUI"
+ },
+ {
+  "file": "main.py",
+  "line": 21039,
+  "context": "Tuple",
+  "text": "Triton"
+ },
+ {
+  "file": "main.py",
+  "line": 21041,
+  "context": "Tuple",
+  "text": "Hugging Face Hub"
+ },
+ {
+  "file": "main.py",
+  "line": 21050,
+  "context": "key:detail",
+  "text": "Entorno Python de MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 21051,
+  "context": "key:category",
+  "text": "Python / IA"
+ },
+ {
+  "file": "main.py",
+  "line": 21058,
+  "context": "key:detail",
+  "text": "No instalado en el entorno Python de MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 21059,
+  "context": "key:category",
+  "text": "Python / IA"
+ },
+ {
+  "file": "main.py",
+  "line": 21106,
+  "context": "arg:add",
+  "text": "Base"
+ },
+ {
+  "file": "main.py",
+  "line": 21107,
+  "context": "arg:add",
+  "text": "Python {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 21108,
+  "context": "arg:add",
+  "text": "Instala Python 3.10 o posterior y recrea .venv."
+ },
+ {
+  "file": "main.py",
+  "line": 21113,
+  "context": "arg:add",
+  "text": "Persistencia SQLite"
+ },
+ {
+  "file": "main.py",
+  "line": 21113,
+  "context": "arg:add",
+  "text": "Base"
+ },
+ {
+  "file": "main.py",
+  "line": 21115,
+  "context": "arg:add",
+  "text": "Crea el directorio de datos y concede escritura al usuario de MyDGX."
+ },
+ {
+  "file": "main.py",
+  "line": 21119,
+  "context": "arg:add",
+  "text": "Frontend compilado"
+ },
+ {
+  "file": "main.py",
+  "line": 21119,
+  "context": "arg:add",
+  "text": "Base"
+ },
+ {
+  "file": "main.py",
+  "line": 21120,
+  "context": "IfExp",
+  "text": "Build no encontrado"
+ },
+ {
+  "file": "main.py",
+  "line": 21121,
+  "context": "arg:add",
+  "text": "Ejecuta ./start.sh build."
+ },
+ {
+  "file": "main.py",
+  "line": 21125,
+  "context": "arg:add",
+  "text": "Espacio libre"
+ },
+ {
+  "file": "main.py",
+  "line": 21125,
+  "context": "arg:add",
+  "text": "Base"
+ },
+ {
+  "file": "main.py",
+  "line": 21126,
+  "context": "arg:add",
+  "text": "{0} GB disponibles"
+ },
+ {
+  "file": "main.py",
+  "line": 21127,
+  "context": "arg:add",
+  "text": "Libera al menos 20 GB antes de descargar modelos o imágenes de contenedor."
+ },
+ {
+  "file": "main.py",
+  "line": 21131,
+  "context": "arg:add",
+  "text": "Configuración .env"
+ },
+ {
+  "file": "main.py",
+  "line": 21131,
+  "context": "arg:add",
+  "text": "Base"
+ },
+ {
+  "file": "main.py",
+  "line": 21132,
+  "context": "IfExp",
+  "text": ".env detectado"
+ },
+ {
+  "file": "main.py",
+  "line": 21132,
+  "context": "IfExp",
+  "text": "No se encontró .env"
+ },
+ {
+  "file": "main.py",
+  "line": 21133,
+  "context": "arg:add",
+  "text": "Copia .env.example a .env y revisa la configuración local."
+ },
+ {
+  "file": "main.py",
+  "line": 21143,
+  "context": "arg:add",
+  "text": "Librerías base de MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 21143,
+  "context": "arg:add",
+  "text": "Base"
+ },
+ {
+  "file": "main.py",
+  "line": 21144,
+  "context": "IfExp",
+  "text": "Todas disponibles"
+ },
+ {
+  "file": "main.py",
+  "line": 21145,
+  "context": "arg:add",
+  "text": "Ejecuta ./start.sh install para completar el entorno virtual."
+ },
+ {
+  "file": "main.py",
+  "line": 21151,
+  "context": "arg:add",
+  "text": "Arquitectura DGX Spark"
+ },
+ {
+  "file": "main.py",
+  "line": 21151,
+  "context": "arg:add",
+  "text": "DGX OS"
+ },
+ {
+  "file": "main.py",
+  "line": 21153,
+  "context": "arg:add",
+  "text": "MyDGX detectó un Spark, pero la arquitectura no es ARM64."
+ },
+ {
+  "file": "main.py",
+  "line": 21156,
+  "context": "arg:add",
+  "text": "Sistema operativo Linux"
+ },
+ {
+  "file": "main.py",
+  "line": 21156,
+  "context": "arg:add",
+  "text": "DGX OS"
+ },
+ {
+  "file": "main.py",
+  "line": 21158,
+  "context": "arg:os_info.get",
+  "text": "Linux"
+ },
+ {
+  "file": "main.py",
+  "line": 21158,
+  "context": "arg:os_info.get",
+  "text": "Linux"
+ },
+ {
+  "file": "main.py",
+  "line": 21159,
+  "context": "arg:add",
+  "text": "Instala una versión compatible de DGX OS."
+ },
+ {
+  "file": "main.py",
+  "line": 21162,
+  "context": "arg:add",
+  "text": "NVIDIA DGX OS"
+ },
+ {
+  "file": "main.py",
+  "line": 21162,
+  "context": "arg:add",
+  "text": "DGX OS"
+ },
+ {
+  "file": "main.py",
+  "line": 21164,
+  "context": "BoolOp",
+  "text": "No detectado; base {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 21164,
+  "context": "arg:os_info.get",
+  "text": "Linux"
+ },
+ {
+  "file": "main.py",
+  "line": 21165,
+  "context": "arg:add",
+  "text": "Comprueba /etc/dgx-release; algunos equipos OEM GB10 usan Ubuntu sin identificarse como DGX OS."
+ },
+ {
+  "file": "main.py",
+  "line": 21169,
+  "context": "arg:add",
+  "text": "Driver NVIDIA"
+ },
+ {
+  "file": "main.py",
+  "line": 21171,
+  "context": "IfExp",
+  "text": "nvidia-smi disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 21171,
+  "context": "IfExp",
+  "text": "No detectado"
+ },
+ {
+  "file": "main.py",
+  "line": 21172,
+  "context": "arg:add",
+  "text": "Repara el driver NVIDIA incluido con DGX OS."
+ },
+ {
+  "file": "main.py",
+  "line": 21176,
+  "context": "arg:add",
+  "text": "GPU NVIDIA GB10"
+ },
+ {
+  "file": "main.py",
+  "line": 21178,
+  "context": "BoolOp",
+  "text": "No identificada"
+ },
+ {
+  "file": "main.py",
+  "line": 21179,
+  "context": "arg:add",
+  "text": "Comprueba el driver, los permisos del dispositivo y la detección de nvidia-smi."
+ },
+ {
+  "file": "main.py",
+  "line": 21186,
+  "context": "arg:add",
+  "text": "CUDA Toolkit 13+"
+ },
+ {
+  "file": "main.py",
+  "line": 21189,
+  "context": "arg:add",
+  "text": "Instala CUDA Toolkit 13 o posterior para compilar runtimes GB10."
+ },
+ {
+  "file": "main.py",
+  "line": 21193,
+  "context": "arg:add",
+  "text": "NVIDIA Container Toolkit"
+ },
+ {
+  "file": "main.py",
+  "line": 21193,
+  "context": "arg:add",
+  "text": "Contenedores"
+ },
+ {
+  "file": "main.py",
+  "line": 21195,
+  "context": "IfExp",
+  "text": "nvidia-ctk disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 21195,
+  "context": "IfExp",
+  "text": "No detectado"
+ },
+ {
+  "file": "main.py",
+  "line": 21196,
+  "context": "arg:add",
+  "text": "Instala nvidia-container-toolkit si usarás motores en contenedores."
+ },
+ {
+  "file": "main.py",
+  "line": 21201,
+  "context": "arg:add",
+  "text": "DGX Dashboard"
+ },
+ {
+  "file": "main.py",
+  "line": 21201,
+  "context": "arg:add",
+  "text": "DGX OS"
+ },
+ {
+  "file": "main.py",
+  "line": 21203,
+  "context": "arg:add",
+  "text": "Inicia o repara el DGX Dashboard oficial."
+ },
+ {
+  "file": "main.py",
+  "line": 21208,
+  "context": "arg:add",
+  "text": "Hardware DGX Spark"
+ },
+ {
+  "file": "main.py",
+  "line": 21208,
+  "context": "arg:add",
+  "text": "Entorno"
+ },
+ {
+  "file": "main.py",
+  "line": 21209,
+  "context": "arg:add",
+  "text": "Modo compatible: {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 21215,
+  "context": "arg:add",
+  "text": "Protección de MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 21215,
+  "context": "arg:add",
+  "text": "Seguridad"
+ },
+ {
+  "file": "main.py",
+  "line": 21217,
+  "context": "IfExp",
+  "text": "Solo localhost"
+ },
+ {
+  "file": "main.py",
+  "line": 21217,
+  "context": "IfExp",
+  "text": "Autenticación configurada"
+ },
+ {
+  "file": "main.py",
+  "line": 21217,
+  "context": "IfExp",
+  "text": "Escucha de red sin autenticación"
+ },
+ {
+  "file": "main.py",
+  "line": 21218,
+  "context": "arg:add",
+  "text": "Configura MYDGX_DASHBOARD_PASSWORD o MYDGX_API_KEY antes de escuchar fuera de localhost."
+ },
+ {
+  "file": "main.py",
+  "line": 21223,
+  "context": "arg:add",
+  "text": "Protección del gateway"
+ },
+ {
+  "file": "main.py",
+  "line": 21223,
+  "context": "arg:add",
+  "text": "Seguridad"
+ },
+ {
+  "file": "main.py",
+  "line": 21225,
+  "context": "IfExp",
+  "text": "Gateway local"
+ },
+ {
+  "file": "main.py",
+  "line": 21225,
+  "context": "IfExp",
+  "text": "Clave configurada"
+ },
+ {
+  "file": "main.py",
+  "line": 21225,
+  "context": "IfExp",
+  "text": "Escucha de red sin clave"
+ },
+ {
+  "file": "main.py",
+  "line": 21226,
+  "context": "arg:add",
+  "text": "Configura GATEWAY_API_KEY antes de exponer el gateway."
+ },
+ {
+  "file": "main.py",
+  "line": 21234,
+  "context": "arg:add",
+  "text": "Gateway OpenAI"
+ },
+ {
+  "file": "main.py",
+  "line": 21234,
+  "context": "arg:add",
+  "text": "Servicios"
+ },
+ {
+  "file": "main.py",
+  "line": 21235,
+  "context": "IfExp",
+  "text": "Desactivado"
+ },
+ {
+  "file": "main.py",
+  "line": 21235,
+  "context": "IfExp",
+  "text": "Puerto {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 21236,
+  "context": "arg:add",
+  "text": "Reinicia MyDGX para levantar el gateway configurado."
+ },
+ {
+  "file": "main.py",
+  "line": 21241,
+  "context": "arg:add",
+  "text": "Adaptador LiteLLM"
+ },
+ {
+  "file": "main.py",
+  "line": 21241,
+  "context": "arg:add",
+  "text": "Servicios"
+ },
+ {
+  "file": "main.py",
+  "line": 21243,
+  "context": "IfExp",
+  "text": "Versión {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 21243,
+  "context": "IfExp",
+  "text": "No instalado"
+ },
+ {
+  "file": "main.py",
+  "line": 21244,
+  "context": "arg:add",
+  "text": "Ejecuta ./start.sh setup para instalar el adaptador de protocolos."
+ },
+ {
+  "file": "main.py",
+  "line": 21264,
+  "context": "arg:add",
+  "text": "Perfil predeterminado"
+ },
+ {
+  "file": "main.py",
+  "line": 21264,
+  "context": "arg:add",
+  "text": "Perfiles"
+ },
+ {
+  "file": "main.py",
+  "line": 21266,
+  "context": "IfExp",
+  "text": "Autostart desactivado"
+ },
+ {
+  "file": "main.py",
+  "line": 21266,
+  "context": "IfExp",
+  "text": "Ningún perfil activado todavía"
+ },
+ {
+  "file": "main.py",
+  "line": 21267,
+  "context": "arg:add",
+  "text": "Activa un perfil cuando quieras cargar modelos automáticamente al arrancar."
+ },
+ {
+  "file": "main.py",
+  "line": 21279,
+  "context": "arg:profile_issues.append",
+  "text": "{0}: puertos duplicados"
+ },
+ {
+  "file": "main.py",
+  "line": 21281,
+  "context": "arg:profile_issues.append",
+  "text": "{0}: supera la memoria segura"
+ },
+ {
+  "file": "main.py",
+  "line": 21283,
+  "context": "arg:profile_issues.append",
+  "text": "{0}: alias duplicados"
+ },
+ {
+  "file": "main.py",
+  "line": 21285,
+  "context": "arg:profile_issues.append",
+  "text": "{0}: usa el puerto del gateway"
+ },
+ {
+  "file": "main.py",
+  "line": 21288,
+  "context": "arg:add",
+  "text": "Capacidad, puertos y alias"
+ },
+ {
+  "file": "main.py",
+  "line": 21288,
+  "context": "arg:add",
+  "text": "Perfiles"
+ },
+ {
+  "file": "main.py",
+  "line": 21290,
+  "context": "IfExp",
+  "text": "El perfil activo es válido"
+ },
+ {
+  "file": "main.py",
+  "line": 21291,
+  "context": "arg:add",
+  "text": "Ajusta modelos, contexto, memoria reservada, puertos o alias en Perfiles."
+ },
+ {
+  "file": "main.py",
+  "line": 21296,
+  "context": "arg:add",
+  "text": "Runtime llama.cpp"
+ },
+ {
+  "file": "main.py",
+  "line": 21296,
+  "context": "arg:add",
+  "text": "Perfiles"
+ },
+ {
+  "file": "main.py",
+  "line": 21298,
+  "context": "BoolOp",
+  "text": "No detectado"
+ },
+ {
+  "file": "main.py",
+  "line": 21299,
+  "context": "arg:add",
+  "text": "Configura LLAMA_CPP_SERVER_PATH o instala llama-server compatible."
+ },
+ {
+  "file": "main.py",
+  "line": 21313,
+  "context": "arg:add",
+  "text": "Archivos GGUF y mmproj del perfil activo"
+ },
+ {
+  "file": "main.py",
+  "line": 21313,
+  "context": "arg:add",
+  "text": "Perfiles"
+ },
+ {
+  "file": "main.py",
+  "line": 21315,
+  "context": "IfExp",
+  "text": "Todos disponibles"
+ },
+ {
+  "file": "main.py",
+  "line": 21316,
+  "context": "arg:add",
+  "text": "Descarga los archivos indicados desde el menú Perfiles."
+ },
+ {
+  "file": "main.py",
+  "line": 21323,
+  "context": "arg:add",
+  "text": "Servicio Ollama"
+ },
+ {
+  "file": "main.py",
+  "line": 21323,
+  "context": "arg:add",
+  "text": "Perfiles"
+ },
+ {
+  "file": "main.py",
+  "line": 21325,
+  "context": "arg:add",
+  "text": "Instala o inicia Ollama y revisa OLLAMA_URL."
+ },
+ {
+  "file": "main.py",
+  "line": 21349,
+  "context": "arg:add",
+  "text": "Endpoints de perfiles"
+ },
+ {
+  "file": "main.py",
+  "line": 21350,
+  "context": "BoolOp",
+  "text": "Sin endpoint"
+ },
+ {
+  "file": "main.py",
+  "line": 21351,
+  "context": "arg:add",
+  "text": "Inicia el motor local o corrige su endpoint en Perfiles."
+ },
+ {
+  "file": "main.py",
+  "line": 21355,
+  "context": "arg:add",
+  "text": "Token de Hugging Face"
+ },
+ {
+  "file": "main.py",
+  "line": 21355,
+  "context": "arg:add",
+  "text": "Integraciones"
+ },
+ {
+  "file": "main.py",
+  "line": 21357,
+  "context": "IfExp",
+  "text": "Configurado en .env"
+ },
+ {
+  "file": "main.py",
+  "line": 21357,
+  "context": "IfExp",
+  "text": "No configurado; solo modelos públicos"
+ },
+ {
+  "file": "main.py",
+  "line": 21358,
+  "context": "arg:add",
+  "text": "Configura HF_TOKEN en .env para modelos privados o gated."
+ },
+ {
+  "file": "main.py",
+  "line": 21363,
+  "context": "arg:add",
+  "text": "Open WebUI"
+ },
+ {
+  "file": "main.py",
+  "line": 21363,
+  "context": "arg:add",
+  "text": "Integraciones"
+ },
+ {
+  "file": "main.py",
+  "line": 21365,
+  "context": "arg:add",
+  "text": "Instala o inicia Open WebUI si quieres la interfaz de chat avanzada."
+ },
+ {
+  "file": "main.py",
+  "line": 21376,
+  "context": "arg:add",
+  "text": "Servicio de arranque MyDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 21376,
+  "context": "arg:add",
+  "text": "Mantenimiento"
+ },
+ {
+  "file": "main.py",
+  "line": 21379,
+  "context": "IfExp",
+  "text": "Instalado, habilitado y gestionado por systemd"
+ },
+ {
+  "file": "main.py",
+  "line": 21381,
+  "context": "IfExp",
+  "text": "Supervisor local activo; este entorno no ejecuta systemd"
+ },
+ {
+  "file": "main.py",
+  "line": 21383,
+  "context": "IfExp",
+  "text": "Servicio systemd no instalado o deshabilitado"
+ },
+ {
+  "file": "main.py",
+  "line": 21385,
+  "context": "arg:add",
+  "text": "Ejecuta ./start.sh deploy para instalar y habilitar el servicio."
+ },
+ {
+  "file": "main.py",
+  "line": 21389,
+  "context": "BinOp",
+  "text": "Kernel {0}"
+ },
+ {
+  "file": "main.py",
+  "line": 21390,
+  "context": "IfExp",
+  "text": " · reinicio requerido"
+ },
+ {
+  "file": "main.py",
+  "line": 21390,
+  "context": "IfExp",
+  "text": " · paquetes y runtimes coherentes"
+ },
+ {
+  "file": "main.py",
+  "line": 21393,
+  "context": "arg:add",
+  "text": "Integridad después de actualizaciones"
+ },
+ {
+  "file": "main.py",
+  "line": 21393,
+  "context": "arg:add",
+  "text": "Mantenimiento"
+ },
+ {
+  "file": "main.py",
+  "line": 21396,
+  "context": "arg:add",
+  "text": "Ejecuta de nuevo la reparación o reinicia para activar el kernel actualizado."
+ },
+ {
+  "file": "main.py",
+  "line": 21400,
+  "context": "arg:add",
+  "text": "Gestor APT"
+ },
+ {
+  "file": "main.py",
+  "line": 21400,
+  "context": "arg:add",
+  "text": "Mantenimiento"
+ },
+ {
+  "file": "main.py",
+  "line": 21401,
+  "context": "IfExp",
+  "text": "Disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 21401,
+  "context": "IfExp",
+  "text": "No detectado"
+ },
+ {
+  "file": "main.py",
+  "line": 21402,
+  "context": "arg:add",
+  "text": "Las actualizaciones del sistema requieren DGX OS/Ubuntu con APT."
+ },
+ {
+  "file": "main.py",
+  "line": 21448,
+  "context": "arg:item.get",
+  "text": "Names"
+ },
+ {
+  "file": "main.py",
+  "line": 21450,
+  "context": "arg:item.get",
+  "text": "State"
+ },
+ {
+  "file": "main.py",
+  "line": 21451,
+  "context": "arg:item.get",
+  "text": "Image"
+ },
+ {
+  "file": "main.py",
+  "line": 21467,
+  "context": "kw:detail:HTTPException",
+  "text": "Control de servicios desactivado en .env"
+ },
+ {
+  "file": "main.py",
+  "line": 21469,
+  "context": "kw:detail:HTTPException",
+  "text": "Servicio o confirmación inválidos"
+ },
+ {
+  "file": "main.py",
+  "line": 21478,
+  "context": "BoolOp",
+  "text": "Falló systemctl"
+ },
+ {
+  "file": "main.py",
+  "line": 21586,
+  "context": "arg:line.startswith",
+  "text": "Listing"
+ },
+ {
+  "file": "main.py",
+  "line": 21629,
+  "context": "key:message",
+  "text": "APT no está disponible en este sistema"
+ },
+ {
+  "file": "main.py",
+  "line": 21652,
+  "context": "Subscript",
+  "text": "ACTUALIZAR MYDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 21656,
+  "context": "Subscript",
+  "text": "REPARAR MYDGX"
+ },
+ {
+  "file": "main.py",
+  "line": 21662,
+  "context": "arg:db.update_job",
+  "text": "Comprobando paquetes, kernel y runtimes"
+ },
+ {
+  "file": "main.py",
+  "line": 21664,
+  "context": "arg:RuntimeError",
+  "text": "No está disponible el verificador del sistema"
+ },
+ {
+  "file": "main.py",
+  "line": 21671,
+  "context": "BoolOp",
+  "text": "La reparación no terminó correctamente"
+ },
+ {
+  "file": "main.py",
+  "line": 21677,
+  "context": "assign",
+  "text": "Reparación completada"
+ },
+ {
+  "file": "main.py",
+  "line": 21679,
+  "context": "AugAssign",
+  "text": "; reinicio requerido para activar el nuevo kernel"
+ },
+ {
+  "file": "main.py",
+  "line": 21683,
+  "context": "arg:db.update_job",
+  "text": "{0}: reparación no completada"
+ },
+ {
+  "file": "main.py",
+  "line": 21690,
+  "context": "Tuple",
+  "text": "Comprobando integridad de APT"
+ },
+ {
+  "file": "main.py",
+  "line": 21691,
+  "context": "Tuple",
+  "text": "Actualizando índices de paquetes"
+ },
+ {
+  "file": "main.py",
+  "line": 21694,
+  "context": "Tuple",
+  "text": "Instalando actualizaciones y nuevos paquetes necesarios"
+ },
+ {
+  "file": "main.py",
+  "line": 21698,
+  "context": "Tuple",
+  "text": "Reparando runtimes tras la actualización"
+ },
+ {
+  "file": "main.py",
+  "line": 21702,
+  "context": "arg:RuntimeError",
+  "text": "No está disponible el verificador post-actualización"
+ },
+ {
+  "file": "main.py",
+  "line": 21714,
+  "context": "IfExp",
+  "text": "Actualización reparada y verificada; reinicio requerido para activar el nuevo kernel"
+ },
+ {
+  "file": "main.py",
+  "line": 21716,
+  "context": "IfExp",
+  "text": "Actualización reparada y verificada correctamente"
+ },
+ {
+  "file": "main.py",
+  "line": 21721,
+  "context": "arg:db.update_job",
+  "text": "{0}: operación no completada"
+ },
+ {
+  "file": "main.py",
+  "line": 21728,
+  "context": "kw:detail:HTTPException",
+  "text": "Actualizaciones desactivadas en .env"
+ },
+ {
+  "file": "main.py",
+  "line": 21730,
+  "context": "kw:detail:HTTPException",
+  "text": "APT no está disponible"
+ },
+ {
+  "file": "main.py",
+  "line": 21735,
+  "context": "kw:detail:HTTPException",
+  "text": "Ya hay una actualización del sistema en curso"
+ },
+ {
+  "file": "main.py",
+  "line": 21737,
+  "context": "kw:detail:HTTPException",
+  "text": "Se necesitan al menos 5 GB libres para actualizar"
+ },
+ {
+  "file": "main.py",
+  "line": 21746,
+  "context": "kw:detail:HTTPException",
+  "text": "Reparaciones privilegiadas desactivadas en .env"
+ },
+ {
+  "file": "main.py",
+  "line": 21755,
+  "context": "kw:detail:HTTPException",
+  "text": "Ya hay una operación de mantenimiento en curso"
+ },
+ {
+  "file": "main.py",
+  "line": 21770,
+  "context": "kw:detail:HTTPException",
+  "text": "Ruta API no encontrada"
+ },
+ {
+  "file": "gateway.py",
+  "line": 98,
+  "context": "arg:compatible_error",
+  "text": "MyDGX está ejecutando un benchmark aislado; reintenta en unos segundos"
+ },
+ {
+  "file": "gateway.py",
+  "line": 113,
+  "context": "kw:detail:HTTPException",
+  "text": "Gateway desactivado"
+ },
+ {
+  "file": "gateway.py",
+  "line": 116,
+  "context": "kw:detail:HTTPException",
+  "text": "El acceso de red requiere GATEWAY_API_KEY"
+ },
+ {
+  "file": "gateway.py",
+  "line": 126,
+  "context": "kw:detail:HTTPException",
+  "text": "Gateway API key inválida"
+ },
+ {
+  "file": "gateway.py",
+  "line": 166,
+  "context": "key:name",
+  "text": "Asistente local MyDGX"
+ },
+ {
+  "file": "gateway.py",
+  "line": 185,
+  "context": "kw:detail:HTTPException",
+  "text": "No hay perfiles cargados"
+ },
+ {
+  "file": "gateway.py",
+  "line": 451,
+  "context": "arg:openai_error",
+  "text": "El modelo '{0}' no está cargado en el perfil activo"
+ },
+ {
+  "file": "gateway.py",
+  "line": 457,
+  "context": "arg:openai_error",
+  "text": "El modelo '{0}' no admite este endpoint"
+ },
+ {
+  "file": "gateway.py",
+  "line": 463,
+  "context": "arg:openai_error",
+  "text": "El modelo '{0}' necesita un adaptador de protocolo específico"
+ },
+ {
+  "file": "gateway.py",
+  "line": 520,
+  "context": "arg:openai_error",
+  "text": "El campo prompt es obligatorio"
+ },
+ {
+  "file": "gateway.py",
+  "line": 526,
+  "context": "arg:openai_error",
+  "text": "El adaptador ComfyUI no admite este endpoint"
+ },
+ {
+  "file": "gateway.py",
+  "line": 531,
+  "context": "arg:openai_error",
+  "text": "ComfyUI genera una imagen por solicitud"
+ },
+ {
+  "file": "gateway.py",
+  "line": 542,
+  "context": "arg:openai_error",
+  "text": "ComfyUI no devolvió una imagen"
+ },
+ {
+  "file": "gateway.py",
+  "line": 546,
+  "context": "key:url",
+  "text": "data:{0};base64,{1}"
+ },
+ {
+  "file": "gateway.py",
+  "line": 560,
+  "context": "arg:openai_error",
+  "text": "Solicitud demasiado grande"
+ },
+ {
+  "file": "gateway.py",
+  "line": 562,
+  "context": "arg:openai_error",
+  "text": "Content-Length inválido"
+ },
+ {
+  "file": "gateway.py",
+  "line": 565,
+  "context": "arg:openai_error",
+  "text": "Solicitud demasiado grande"
+ },
+ {
+  "file": "gateway.py",
+  "line": 569,
+  "context": "arg:openai_error",
+  "text": "El cuerpo debe ser JSON válido"
+ },
+ {
+  "file": "gateway.py",
+  "line": 571,
+  "context": "arg:openai_error",
+  "text": "El campo model es obligatorio"
+ },
+ {
+  "file": "gateway.py",
+  "line": 586,
+  "context": "arg:openai_error",
+  "text": "El campo input es obligatorio"
+ },
+ {
+  "file": "gateway.py",
+  "line": 613,
+  "context": "arg:openai_error",
+  "text": "El modelo dejó de estar disponible"
+ },
+ {
+  "file": "gateway.py",
+  "line": 651,
+  "context": "arg:openai_error",
+  "text": "Solicitud demasiado grande"
+ },
+ {
+  "file": "gateway.py",
+  "line": 655,
+  "context": "arg:openai_error",
+  "text": "Formulario multipart inválido"
+ },
+ {
+  "file": "gateway.py",
+  "line": 658,
+  "context": "arg:openai_error",
+  "text": "El campo model es obligatorio"
+ },
+ {
+  "file": "gateway.py",
+  "line": 672,
+  "context": "arg:openai_error",
+  "text": "Tipo de audio no permitido"
+ },
+ {
+  "file": "gateway.py",
+  "line": 675,
+  "context": "arg:openai_error",
+  "text": "Archivo demasiado grande"
+ },
+ {
+  "file": "gateway.py",
+  "line": 691,
+  "context": "arg:openai_error",
+  "text": "El modelo dejó de estar disponible"
+ },
+ {
+  "file": "gateway.py",
+  "line": 713,
+  "context": "arg:compatible_error",
+  "text": "Solicitud demasiado grande"
+ },
+ {
+  "file": "gateway.py",
+  "line": 717,
+  "context": "arg:compatible_error",
+  "text": "El cuerpo debe ser JSON válido"
+ },
+ {
+  "file": "gateway.py",
+  "line": 719,
+  "context": "arg:compatible_error",
+  "text": "El campo model es obligatorio"
+ },
+ {
+  "file": "gateway.py",
+  "line": 727,
+  "context": "arg:compatible_error",
+  "text": "El modelo no está cargado en el perfil activo"
+ },
+ {
+  "file": "gateway.py",
+  "line": 731,
+  "context": "arg:compatible_error",
+  "text": "El modelo no admite conversación"
+ },
+ {
+  "file": "gateway.py",
+  "line": 735,
+  "context": "arg:compatible_error",
+  "text": "El modelo necesita un adaptador no disponible"
+ },
+ {
+  "file": "gateway.py",
+  "line": 740,
+  "context": "arg:compatible_error",
+  "text": "El adaptador LiteLLM no está disponible"
+ },
+ {
+  "file": "gateway.py",
+  "line": 761,
+  "context": "arg:compatible_error",
+  "text": "El adaptador dejó de estar disponible"
+ },
+ {
+  "file": "gateway.py",
+  "line": 801,
+  "context": "arg:openai_error",
+  "text": "El perfil activo debe tener exactamente un motor de vídeo saludable"
+ },
+ {
+  "file": "gateway.py",
+  "line": 811,
+  "context": "arg:openai_error",
+  "text": "El cuerpo debe ser JSON válido"
+ },
+ {
+  "file": "gateway.py",
+  "line": 813,
+  "context": "arg:openai_error",
+  "text": "El campo prompt es obligatorio"
+ },
+ {
+  "file": "gateway.py",
+  "line": 818,
+  "context": "arg:openai_error",
+  "text": "Identificador de vídeo inválido"
+ },
+ {
+  "file": "gateway.py",
+  "line": 822,
+  "context": "arg:openai_error",
+  "text": "Vídeo no encontrado"
+ },
+ {
+  "file": "gateway.py",
+  "line": 828,
+  "context": "arg:db.update_job",
+  "text": "Generación cancelada"
+ },
+ {
+  "file": "gateway.py",
+  "line": 839,
+  "context": "arg:openai_error",
+  "text": "El vídeo aún no está disponible"
+ },
+ {
+  "file": "gateway.py",
+  "line": 845,
+  "context": "arg:openai_error",
+  "text": "Artefacto de vídeo no encontrado"
+ },
+ {
+  "file": "gateway.py",
+  "line": 852,
+  "context": "arg:openai_error",
+  "text": "El cuerpo debe ser JSON válido"
+ },
+ {
+  "file": "gateway.py",
+  "line": 854,
+  "context": "arg:openai_error",
+  "text": "El cuerpo debe ser un objeto JSON"
+ },
+ {
+  "file": "gateway.py",
+  "line": 870,
+  "context": "arg:openai_error",
+  "text": "El motor de vídeo no está disponible"
+ },
+ {
+  "file": "gateway.py",
+  "line": 895,
+  "context": "arg:RuntimeError",
+  "text": "GATEWAY_LITELLM_PORT debe ser un puerto interno exclusivo"
+ },
+ {
+  "file": "gateway.py",
+  "line": 897,
+  "context": "arg:RuntimeError",
+  "text": "GATEWAY_API_KEY es obligatoria cuando el gateway escucha en la red"
+ },
+ {
+  "file": "gateway.py",
+  "line": 907,
+  "context": "kw:title:FastAPI",
+  "text": "MyDGX OpenAI Gateway"
+ },
+ {
+  "file": "gateway.py",
+  "line": 919,
+  "context": "arg:RuntimeError",
+  "text": "GATEWAY_CORS_ORIGINS no admite el comodín '*'"
+ },
+ {
+  "file": "gateway.py",
+  "line": 927,
+  "context": "List",
+  "text": "Authorization"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1073,
+  "context": "arg:openai_error",
+  "text": "Búsqueda web desactivada en el gateway"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1077,
+  "context": "arg:openai_error",
+  "text": "El cuerpo debe ser JSON"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1079,
+  "context": "arg:openai_error",
+  "text": "El cuerpo debe ser un objeto"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1082,
+  "context": "arg:openai_error",
+  "text": "Falta query"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1085,
+  "context": "arg:openai_error",
+  "text": "Falta query"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1087,
+  "context": "arg:openai_error",
+  "text": "La consulta supera 300 caracteres"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1098,
+  "context": "arg:openai_error",
+  "text": "SearXNG no está disponible"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1100,
+  "context": "arg:openai_error",
+  "text": "SearXNG no está disponible"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1104,
+  "context": "arg:openai_error",
+  "text": "SearXNG no está disponible"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1156,
+  "context": "arg:openai_error",
+  "text": "Modelo no cargado"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1237,
+  "context": "arg:openai_error",
+  "text": "Identificador de vídeo inválido"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1244,
+  "context": "arg:openai_error",
+  "text": "Identificador de vídeo inválido"
+ },
+ {
+  "file": "gateway.py",
+  "line": 1251,
+  "context": "arg:openai_error",
+  "text": "Identificador de vídeo inválido"
+ }
+]

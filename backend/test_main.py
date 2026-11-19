@@ -1052,6 +1052,70 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 409)
         self.assertIn("REAP", caught.exception.detail)
 
+    def test_hf_failure_reason_explains_gated_repos_with_and_without_token(self) -> None:
+        response = httpx.Response(401, request=httpx.Request("GET", "https://huggingface.co/org/model"))
+        gated = main_module.GatedRepoError("gated", response=response)
+        with patch.object(settings, "hf_token", ""):
+            without_token = main_module.huggingface_failure_reason(gated, "org/model")
+        with patch.object(settings, "hf_token", "test-only-token"):
+            with_token = main_module.huggingface_failure_reason(gated, "org/model")
+        self.assertIn("Sin HF_TOKEN", without_token or "")
+        self.assertIn("no tiene acceso a org/model", with_token or "")
+        self.assertIsNone(main_module.huggingface_failure_reason(ValueError("x"), "org/model"))
+
+    def test_download_validation_reports_gated_access_before_queueing(self) -> None:
+        info = SimpleNamespace(
+            sha="abc",
+            tags=["gguf"],
+            gated="manual",
+            siblings=[SimpleNamespace(rfilename="Model-Q4_K_M.gguf", size=1024)],
+        )
+        api = SimpleNamespace(model_info=lambda *_args, **_kwargs: info)
+        response = httpx.Response(401, request=httpx.Request("HEAD", "https://huggingface.co/org/model"))
+        denied = main_module.GatedRepoError("gated", response=response)
+        with patch.object(main_module, "HfApi", return_value=api), \
+                patch.object(main_module, "get_hf_file_metadata", side_effect=denied), \
+                patch.object(settings, "hf_token", ""), \
+                self.assertRaises(main_module.ModelDownloadValidationError) as caught:
+            asyncio.run(main_module.validate_hf_download("org/model", "main", ["Model-Q4_K_M.gguf"]))
+        self.assertEqual(caught.exception.status_code, 403)
+        self.assertIn("Repositorio restringido", caught.exception.detail)
+
+    def test_download_validation_rejects_drafter_without_main_model(self) -> None:
+        drafter = "Mistral-Large-4-1T-A52B-DSpark-Q8_0.gguf"
+        self.assertEqual(main_module.gguf_file_role(drafter, {}), "draft-dspark")
+        self.assertEqual(main_module.gguf_file_role("OrcaCyber-Nano-1.0-AI-Defense-DFlash2-Q8_0.gguf", {}), "draft-dflash")
+        orca = [
+            SimpleNamespace(rfilename=name, size=size)
+            for name, size in (
+                ("OrcaCyber-Nano-1.0-AI-Defense-DFlash2-Q8_0.gguf", 2_100),
+                ("OrcaCyber-Nano-1.0-AI-Defense-Mix-15.7G.gguf", 15_700),
+                ("OrcaCyber-Nano-1.0-AI-Defense-Mix-13G.gguf", 13_000),
+                ("mmproj-OrcaCyber-Nano-1.0-AI-Defense-F16.gguf", 900),
+            )
+        ]
+        main_files = {name for group in main_module.hf_gguf_groups(orca) for name in group["files"]}
+        self.assertNotIn("OrcaCyber-Nano-1.0-AI-Defense-DFlash2-Q8_0.gguf", main_files)
+        self.assertIn("OrcaCyber-Nano-1.0-AI-Defense-Mix-15.7G.gguf", main_files)
+        info = SimpleNamespace(
+            sha="abc",
+            tags=["gguf"],
+            siblings=[
+                SimpleNamespace(rfilename=drafter, size=1024),
+                SimpleNamespace(rfilename="mmproj-Mistral-BF16.gguf", size=1024),
+            ],
+        )
+        api = SimpleNamespace(model_info=lambda *_args, **_kwargs: info)
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(settings, "hf_home", directory), \
+                patch.object(main_module, "HfApi", return_value=api), \
+                self.assertRaises(main_module.ModelDownloadValidationError) as caught:
+            asyncio.run(main_module.validate_hf_download(
+                "org/Mistral-GGUF", "main", [drafter, "mmproj-Mistral-BF16.gguf"],
+            ))
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertIn("falta el modelo principal", caught.exception.detail)
+
     def test_shared_engram_is_linked_as_missing_final_shard(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             snapshot = Path(directory)
@@ -5160,6 +5224,40 @@ class ProfileApiTests(unittest.TestCase):
             self.assertEqual(jobs, [])
         db.path = original_path
 
+    def test_huggingface_file_download_skips_files_already_in_cache(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db.path = root / "hf-download-partial.db"
+            cache = root / "hub"
+            cached = cache / "models--org--model-GGUF" / "snapshots" / "resolved-sha" / "model-DFlash2-Q8_0.gguf"
+            cached.parent.mkdir(parents=True)
+            cached.write_bytes(b"drafter")
+            info = SimpleNamespace(
+                sha="resolved-sha",
+                siblings=[
+                    SimpleNamespace(rfilename="model-Mix-15.7G.gguf", size=60),
+                    SimpleNamespace(rfilename="model-DFlash2-Q8_0.gguf", size=20),
+                ],
+            )
+            with (
+                patch("backend.main.HfApi") as api,
+                patch("backend.main.huggingface_cache_dir", return_value=cache),
+                patch("backend.main.model_download_memory_limit_bytes", return_value=100),
+                patch("backend.main.download_hf_files", new=AsyncMock()) as download,
+                TestClient(app) as client,
+            ):
+                api.return_value.model_info.return_value = info
+                response = client.post("/api/models/huggingface/files/download", json={
+                    "repo_id": "org/model-GGUF",
+                    "files": ["model-Mix-15.7G.gguf", "model-DFlash2-Q8_0.gguf"],
+                })
+            self.assertEqual(response.status_code, 200)
+            queued = download.await_args.args
+            self.assertEqual(queued[1].files, ["model-Mix-15.7G.gguf"])
+            self.assertEqual(queued[2], 60)
+        db.path = original_path
+
     def test_huggingface_download_reports_byte_progress_of_incomplete_blobs(self) -> None:
         original_path = db.path
         with tempfile.TemporaryDirectory() as directory:
@@ -5315,6 +5413,154 @@ class ProfileApiTests(unittest.TestCase):
             job = db.rows("SELECT status,message FROM jobs WHERE id=?", (job_id,))[0]
             self.assertEqual(job["status"], "failed")
             self.assertIn("Descarga bloqueada", job["message"])
+        db.path = original_path
+
+    def test_env_settings_write_only_token_and_validated_values(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            db.path = Path(directory) / "env.db"
+            env_file = Path(directory) / ".env"
+            env_file.write_text("# comentario\nHF_TOKEN=hf_previousTokenValue0000\nHF_DOWNLOAD_WORKERS=4\nPORT=8088\n", encoding="utf-8")
+            new_token = "hf_" + "a" * 30
+            with (
+                patch.object(main_module, "ENV_FILE", env_file),
+                patch.object(settings, "hf_token", "hf_previousTokenValue0000"),
+                patch.object(settings, "hf_download_workers", 4),
+                patch.object(settings, "benchmark_repetitions", 3),
+                patch("backend.main.HfApi") as api,
+                TestClient(app) as client,
+            ):
+                api.return_value.whoami.return_value = {"name": "tester"}
+                snapshot = client.get("/api/settings/env")
+                self.assertEqual(snapshot.status_code, 200)
+                self.assertNotIn("hf_previousTokenValue0000", snapshot.text)
+                self.assertTrue(snapshot.json()["hf_token_configured"])
+
+                rejected = client.put("/api/settings/env", json={"values": {"PORT": 9000}})
+                self.assertEqual(rejected.status_code, 400)
+                out_of_range = client.put("/api/settings/env", json={"values": {"HF_DOWNLOAD_WORKERS": 99}})
+                self.assertEqual(out_of_range.status_code, 400)
+                injected = client.put("/api/settings/env", json={"values": {"ASSISTANT_MODEL": "x\nMYDGX_API_KEY=y"}})
+                self.assertEqual(injected.status_code, 400)
+
+                saved = client.put("/api/settings/env", json={
+                    "values": {"HF_DOWNLOAD_WORKERS": 8, "BENCHMARK_REPETITIONS": 2},
+                    "hf_token": new_token,
+                })
+                self.assertEqual(saved.status_code, 200)
+                self.assertNotIn(new_token, saved.text)
+                self.assertEqual(saved.json()["hf_user"], "tester")
+                self.assertEqual(settings.hf_download_workers, 8)
+                self.assertEqual(settings.hf_token, new_token)
+                content = env_file.read_text(encoding="utf-8")
+                self.assertIn("# comentario", content)
+                self.assertIn(f"HF_TOKEN={new_token}", content)
+                self.assertIn("HF_DOWNLOAD_WORKERS=8", content)
+                self.assertIn("BENCHMARK_REPETITIONS=2", content)
+                self.assertIn("PORT=8088", content)
+                self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
+
+                cleared = client.put("/api/settings/env", json={"clear_hf_token": True})
+                self.assertEqual(cleared.status_code, 200)
+                self.assertFalse(cleared.json()["hf_token_configured"])
+                self.assertIsNone(main_module.huggingface_token())
+                self.assertIn("HF_TOKEN=\n", env_file.read_text(encoding="utf-8"))
+        db.path = original_path
+
+    def test_gated_access_probe_distinguishes_token_states(self) -> None:
+        files = ["README.md", "model-Q4_K_M.gguf"]
+        response = httpx.Response(401, request=httpx.Request("GET", "https://huggingface.co/org/model"))
+        gated = main_module.GatedRepoError("gated", response=response)
+        with patch.object(main_module, "get_hf_file_metadata", side_effect=gated) as probe:
+            with patch.object(main_module, "huggingface_token", return_value=None):
+                self.assertEqual(main_module.hf_gated_access("org/model", "main", files), "no_token")
+            with patch.object(main_module, "huggingface_token", return_value="hf_placeholder_token_value"):
+                self.assertEqual(main_module.hf_gated_access("org/model", "main", files), "denied")
+            self.assertIn("model-Q4_K_M.gguf", probe.call_args.args[0])
+        with patch.object(main_module, "get_hf_file_metadata", return_value=object()):
+            self.assertEqual(main_module.hf_gated_access("org/model", "main", files), "granted")
+        self.assertEqual(main_module.hf_gated_mode(SimpleNamespace(gated="manual")), "manual")
+        self.assertEqual(main_module.hf_gated_mode(SimpleNamespace(gated=False)), "")
+
+    def test_notifications_dedupe_redact_and_mark_read(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            db.path = Path(directory) / "notifications.db"
+            with TestClient(app) as client:
+                db.notify("download.failed", "Descarga fallida", "org/model: sin acceso", target="org/model", log="Authorization: Bearer hf_secretvalue123456789")
+                db.notify("download.failed", "Descarga fallida", "org/model: sin acceso", target="org/model")
+                db.notify("benchmark.failed", "Error ejecutando benchmark", "gguf:abc: fallo", target="gguf:abc")
+                listed = client.get("/api/notifications").json()
+                self.assertEqual(listed["unread"], 2)
+                self.assertEqual([item["kind"] for item in listed["items"]], ["benchmark.failed", "download.failed"])
+                self.assertNotIn("hf_secretvalue123456789", json.dumps(listed))
+                read = client.post("/api/notifications/read", json={"ids": [listed["items"][0]["id"]]}).json()
+                self.assertEqual(read["unread"], 1)
+                self.assertEqual(client.post("/api/notifications/read", json={"all": True}).json()["unread"], 0)
+        db.path = original_path
+
+    def test_failed_hf_files_download_creates_notification(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory, patch.object(settings, "hf_home", directory):
+            db.path = Path(directory) / "download-notify.db"
+            db.initialize()
+            job_id = db.create_job("huggingface.files.download", "org/model")
+            payload = main_module.HfFilesDownloadRequest(repo_id="org/model", files=["model-Q4_K_M.gguf"])
+            with patch.object(main_module, "hf_hub_download", side_effect=OSError(28, "No space left on device")):
+                asyncio.run(main_module.download_hf_files(job_id, payload))
+            job = db.rows("SELECT status,message FROM jobs WHERE id=?", (job_id,))[0]
+            self.assertEqual(job["status"], "failed")
+            self.assertIn("Sin espacio en disco", job["message"])
+            notice = db.rows("SELECT kind,title,message FROM notifications")
+            self.assertEqual(notice[0]["kind"], "download.failed")
+            self.assertIn("org/model", notice[0]["message"])
+        db.path = original_path
+
+    def test_failed_hf_download_cleanup_keeps_previous_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(settings, "hf_home", directory):
+            repo = Path(directory) / "hub" / "models--org--model"
+            snapshot = repo / "snapshots" / "abc"
+            blobs = repo / "blobs"
+            snapshot.mkdir(parents=True)
+            blobs.mkdir()
+            (blobs / "old").write_bytes(b"old")
+            (snapshot / "README.md").symlink_to(blobs / "old")
+            before = main_module.hf_snapshot_entries("org/model")
+            (blobs / "new").write_bytes(b"new")
+            (snapshot / "model-00001-of-00002.gguf").symlink_to(blobs / "new")
+            (blobs / "partial.incomplete").write_bytes(b"x")
+            removed = main_module.discard_failed_hf_download("org/model", before)
+            self.assertEqual(removed, 2)
+            self.assertTrue((snapshot / "README.md").exists())
+            self.assertFalse((blobs / "new").exists())
+            self.assertFalse((blobs / "partial.incomplete").exists())
+
+            fresh = Path(directory) / "hub" / "models--org--fresh"
+            (fresh / "blobs").mkdir(parents=True)
+            (fresh / "blobs" / "x.incomplete").write_bytes(b"x")
+            main_module.discard_failed_hf_download("org/fresh", set())
+            self.assertFalse(fresh.exists())
+
+    def test_benchmark_failure_marks_model_health(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory, patch.object(settings, "hf_home", directory):
+            db.path = Path(directory) / "health.db"
+            db.initialize()
+            model = {"model_repo": "org/model-GGUF", "model_filename": "model-Q4_K_M.gguf"}
+            self.assertTrue(main_module.benchmark_failure_blames_model("RuntimeError: exiting due to model loading error", False))
+            self.assertFalse(main_module.benchmark_failure_blames_model("RuntimeError: No hay puertos locales libres", True))
+            self.assertEqual(main_module.mark_model_health_from_benchmark(model, "model loading error", "job"), "defective")
+            self.assertEqual(main_module.mark_model_health_from_benchmark(model, "tensor data is not within the file bounds", "job"), "incomplete")
+            self.assertEqual(main_module.model_health_marks()["org/model-gguf"]["status"], "incomplete")
+            main_module.clear_model_health("org/model-GGUF", "other.gguf")
+            self.assertIn("org/model-gguf", main_module.model_health_marks())
+            main_module.clear_model_health("org/model-GGUF", "model-Q4_K_M.gguf")
+            self.assertNotIn("org/model-gguf", main_module.model_health_marks())
+            files = [
+                {"name": "mmproj-model-BF16.gguf", "complete": True},
+                {"name": "Model-DSpark-Q8_0.gguf", "complete": True},
+            ]
+            self.assertEqual(main_module.local_hf_health("org/drafter-only", files, {})["status"], "incomplete")
         db.path = original_path
 
     def test_huggingface_favorites_are_persisted(self) -> None:
@@ -6477,6 +6723,30 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(response.json()["error"]["code"], "search_unavailable")
         finally:
             settings.gateway_api_key = original_key
+
+    def test_gateway_errors_default_to_english_and_follow_the_requested_language(self) -> None:
+        with (
+            patch("backend.gateway.gateway_runtime_config", return_value={
+                "enabled": False,
+                "host": "127.0.0.1",
+                "port": 4000,
+                "request_timeout_seconds": 600,
+                "max_request_mb": 32,
+                "web_search": False,
+            }),
+            TestClient(gateway_app) as gateway,
+        ):
+            default = gateway.get("/v1/models")
+            spanish = gateway.get("/v1/models", headers={"Accept-Language": "es-ES,es;q=0.9"})
+            explicit = gateway.get("/v1/models", headers={"Accept-Language": "es", "X-MyDGX-Language": "en"})
+            anthropic = gateway.post("/v1/messages", json={}, headers={"X-MyDGX-Language": "es"})
+        self.assertEqual(default.status_code, 503)
+        self.assertEqual(default.json()["error"]["message"], "Gateway disabled")
+        self.assertEqual(default.json()["error"]["code"], "gateway_unavailable")
+        self.assertEqual(spanish.json()["error"]["message"], "Gateway desactivado")
+        self.assertEqual(explicit.json()["error"]["message"], "Gateway disabled")
+        self.assertEqual(anthropic.json()["error"]["message"], "Gateway desactivado")
+        self.assertEqual(anthropic.json()["type"], "error")
 
     def test_opencode_enables_searxng_tool_without_storing_the_key(self) -> None:
         import importlib.util

@@ -10,6 +10,13 @@
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/language.sh
+if [[ -f "$ROOT/scripts/lib/language.sh" ]]; then
+  source "$ROOT/scripts/lib/language.sh"
+else
+  pick() { if [[ "${MYDGX_LANGUAGE:-en}" == "es" ]]; then printf '%s' "$1"; else printf '%s' "${2:-$1}"; fi; }
+  say() { pick "$@"; printf '\n'; }
+fi
 WORKSPACE="${MYDGX_CLAUDE_HOME:-$HOME/claude-code}"
 CONFIG_WRITER="$ROOT/scripts/claude_code_workspace.py"
 # shellcheck source=scripts/mydgx_gateway.sh
@@ -21,7 +28,8 @@ GATEWAY=""
 CLAUDE_ARGS=()
 
 usage() {
-  cat <<EOF
+  if [[ "$MYDGX_LANGUAGE" == es ]]; then
+    cat <<EOF
 Uso: $ROOT/start.sh install-claude-code
      $ROOT/start.sh claude setup [--active] [--model ALIAS]
      $ROOT/start.sh claude [ALIAS|--model ALIAS] [--active] [-- args de claude]
@@ -41,6 +49,28 @@ Variables opcionales:
   MYDGX_CLAUDE_HOME               Workspace; por defecto, $HOME/claude-code.
   MYDGX_CLAUDE_MAX_OUTPUT_TOKENS  Límite de salida; por defecto, contexto/8.
 EOF
+  else
+    cat <<EOF
+Usage: $ROOT/start.sh install-claude-code
+       $ROOT/start.sh claude setup [--active] [--model ALIAS]
+       $ROOT/start.sh claude [ALIAS|--model ALIAS] [--active] [-- claude args]
+
+  install-claude-code  Installs the CLI if missing and prepares $WORKSPACE.
+  claude setup         Refreshes configuration without opening a session.
+  claude               Discovers compatible gateway models, refreshes
+                       configuration, and opens Claude Code with the given alias.
+  --active             Accepts edits, prompts for bash confirmation, and enables
+                       Playwright, Shodan, and NVD MCP. Without it, uses
+                       plan/read-only mode. Web search (SearXNG) is added in both
+                       modes when the gateway has it enabled.
+
+Optional variables:
+  MYDGX_GATEWAY_URL               OpenAI base URL; default is the local MyDGX gateway.
+  MYDGX_GATEWAY_API_KEY           Gateway key, via environment only.
+  MYDGX_CLAUDE_HOME               Workspace; default is $HOME/claude-code.
+  MYDGX_CLAUDE_MAX_OUTPUT_TOKENS  Output limit; default is context/8.
+EOF
+  fi
 }
 
 ensure_cli() {
@@ -52,7 +82,7 @@ ensure_cli() {
   "$ROOT/install_claude_code.sh"
   hash -r || true
   command -v claude >/dev/null 2>&1 || {
-    printf 'ERROR: Claude Code no está disponible en PATH.\n' >&2
+    say "ERROR: Claude Code no está disponible en PATH." "ERROR: Claude Code is not available on PATH." >&2
     exit 1
   }
 }
@@ -80,16 +110,19 @@ install_workspace() {
   local result
   ACTIVE=true
   python3 "$CONFIG_WRITER" --workspace "$WORKSPACE" --base-url "${GATEWAY:-http://127.0.0.1:4000/v1}" --assets-only >/dev/null
-  printf 'Claude Code configurado en %s\n' "$WORKSPACE"
-  printf 'Skills instalados en %s/.claude/skills\n' "$WORKSPACE"
+  printf "$(pick 'Claude Code configurado en %s\n' 'Claude Code configured at %s\n')" "$WORKSPACE"
+  printf "$(pick 'Skills instalados en %s/.claude/skills\n' 'Skills installed in %s/.claude/skills\n')" "$WORKSPACE"
   if ! prepare_gateway; then
-    printf 'AVISO: assets instalados; mydgx-settings.json se generará al definir la clave.\n' >&2
+    say "AVISO: assets instalados; mydgx-settings.json se generará al definir la clave." \
+      "NOTE: assets installed; mydgx-settings.json will be generated once the key is set." >&2
   elif result="$(write_config)"; then
     printf 'Gateway: %s\n' "${result%%$'\t'*}"
   else
-    printf 'AVISO: assets instalados, pero falta un modelo de chat/visión cargado para generar mydgx-settings.json.\n' >&2
+    say "AVISO: assets instalados, pero falta un modelo de chat/visión cargado para generar mydgx-settings.json." \
+      "NOTE: assets installed, but no chat/vision model is loaded to generate mydgx-settings.json." >&2
   fi
-  printf 'Siguiente: cd "%s" && %s/start.sh claude\n' "$WORKSPACE" "$ROOT"
+  printf "$(pick 'Siguiente: cd "%s" && %s/start.sh claude\n' 'Next: cd "%s" && %s/start.sh claude\n')" \
+    "$WORKSPACE" "$ROOT"
 }
 
 resolve_project() {
@@ -97,7 +130,9 @@ resolve_project() {
   if [[ "$PWD" == "$ROOT" ]]; then
     cd "$WORKSPACE"
   elif [[ "$PWD" != "$WORKSPACE" && "$PWD" != "$WORKSPACE"/* ]]; then
-    printf 'ERROR: ejecuta Claude Code desde %s o uno de sus subdirectorios.\n' "$WORKSPACE" >&2
+    printf 'ERROR: %s\n' "$(pick \
+      "ejecuta Claude Code desde $WORKSPACE o uno de sus subdirectorios." \
+      "run Claude Code from $WORKSPACE or one of its subdirectories.")" >&2
     exit 2
   fi
 }
@@ -106,15 +141,19 @@ run_claude() {
   ensure_cli
   resolve_project
   "$ACTIVE" && ensure_node_for_mcp
-  if [[ "$ACTIVE" == true && -z "${SHODAN_API_KEY:-}" ]]; then
-    printf 'AVISO: SHODAN_API_KEY no está definida; Shodan MCP queda desactivado.\n' >&2
+  if [[ "$ACTIVE" == true ]] && ! python3 "$ROOT/scripts/mcp_env.py" --has SHODAN_API_KEY; then
+    printf "$(pick \
+      'AVISO: SHODAN_API_KEY no está en el entorno ni en %s/.env; Shodan MCP queda desactivado.\n' \
+      'NOTE: SHODAN_API_KEY is not in the environment or in %s/.env; Shodan MCP is disabled.\n')" \
+      "$ROOT" >&2
   fi
 
   local result url selected settings mcp
   prepare_gateway || pause_on_error $? || exit $?
   result="$(write_config)" || pause_on_error $? || exit $?
   [[ -n "$result" ]] || {
-    printf 'ERROR: no se recibió configuración de Claude Code.\n' >&2
+    say "ERROR: no se recibió configuración de Claude Code." \
+      "ERROR: did not receive Claude Code configuration." >&2
     exit 1
   }
   IFS=$'\t' read -r url selected settings mcp <<<"$result"
@@ -132,7 +171,7 @@ run_claude() {
   [[ -n "$mcp" ]] && args+=(--mcp-config "$mcp")
 
   # A stderr: stdout queda limpio para `-p --output-format json`.
-  printf 'Claude Code: %s mediante %s, modo %s.\n' \
+  printf "$(pick 'Claude Code: %s mediante %s, modo %s.\n' 'Claude Code: %s via %s, mode %s.\n')" \
     "$selected" "$ANTHROPIC_BASE_URL" "$([[ "$ACTIVE" == true ]] && printf active || printf plan)" >&2
   printf 'Workspace: %s\nConfig: %s\n' "$PWD" "$settings" >&2
   ((${#CLAUDE_ARGS[@]})) && exec claude "${args[@]}" "${CLAUDE_ARGS[@]}"
@@ -159,7 +198,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --model)
       [[ $# -ge 2 && -z "$MODEL" ]] || {
-        printf 'ERROR: --model necesita un único alias.\n' >&2
+        say "ERROR: --model necesita un único alias." "ERROR: --model requires a single alias." >&2
         exit 2
       }
       MODEL="$2"
@@ -195,7 +234,7 @@ case "$COMMAND" in
     prepare_gateway || exit $?
     result="$(write_config)" || exit $?
     IFS=$'\t' read -r _ _ settings _ <<<"$result"
-    printf 'Configuración actualizada: %s\n' "$settings"
+    printf "$(pick 'Configuración actualizada: %s\n' 'Configuration updated: %s\n')" "$settings"
     ;;
   run)
     run_claude

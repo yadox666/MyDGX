@@ -6,8 +6,18 @@
 # - Los secretos del gateway, si hacen falta, se pasan mediante el entorno.
 set -Eeuo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/language.sh
+if [[ -f "$ROOT/scripts/lib/language.sh" ]]; then
+  source "$ROOT/scripts/lib/language.sh"
+else
+  pick() { if [[ "${MYDGX_LANGUAGE:-en}" == "es" ]]; then printf '%s' "$1"; else printf '%s' "${2:-$1}"; fi; }
+  say() { pick "$@"; printf '\n'; }
+fi
+
 if command -v opencode >/dev/null 2>&1; then
-  printf 'OpenCode ya está instalado: %s\n' "$(opencode --version 2>&1 | awk 'NR == 1 { print; exit }')"
+  local_version="$(opencode --version 2>&1 | awk 'NR == 1 { print; exit }')"
+  printf "$(pick 'OpenCode ya está instalado: %s\n' 'OpenCode is already installed: %s\n')" "$local_version"
   exit 0
 fi
 
@@ -33,7 +43,8 @@ elif command -v npm >/dev/null 2>&1; then
 elif command -v bun >/dev/null 2>&1; then
   bun install -g opencode-ai
 else
-  printf 'ERROR: instala Homebrew, Node.js/npm o Bun para instalar OpenCode.\n' >&2
+  say "ERROR: instala Homebrew, Node.js/npm o Bun para instalar OpenCode." \
+    "ERROR: install Homebrew, Node.js/npm, or Bun to install OpenCode." >&2
   exit 1
 fi
 
@@ -43,7 +54,9 @@ case ":$PATH:" in
 esac
 hash -r || true
 command -v opencode >/dev/null 2>&1 || {
-  printf 'ERROR: OpenCode no quedó disponible en PATH. Abre una terminal nueva.\n' >&2
+  say "ERROR: OpenCode no quedó disponible en PATH. Abre una terminal nueva." \
+    "ERROR: OpenCode is not available on PATH. Open a new terminal." >&2
   exit 1
 }
-printf 'OpenCode instalado: %s\n' "$(opencode --version 2>&1 | awk 'NR == 1 { print; exit }')"
+installed_version="$(opencode --version 2>&1 | awk 'NR == 1 { print; exit }')"
+printf "$(pick 'OpenCode instalado: %s\n' 'OpenCode installed: %s\n')" "$installed_version"

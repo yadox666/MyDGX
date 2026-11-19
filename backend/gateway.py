@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.datastructures import UploadFile
 
+from backend.i18n import DEFAULT_LANGUAGE, request_language, translate_text
 from backend.main import (
     COMFYUI_MANAGED_MODELS,
     MultimodalRunRequest,
@@ -940,6 +941,35 @@ async def reject_cross_site_requests(request: Request, call_next: Any) -> Any:
     return await call_next(request)
 
 
+# API clients rarely send a language, so errors default to English; only error.message is
+# translated, never model output.
+@app.middleware("http")
+async def translate_error_messages(request: Request, call_next: Any) -> Any:
+    language = request_language(request.headers, default="en")
+    response = await call_next(request)
+    if (
+        language == DEFAULT_LANGUAGE
+        or response.status_code < 400
+        or not response.headers.get("content-type", "").startswith("application/json")
+        or int(response.headers.get("content-length") or 0) > ERROR_TRANSLATION_MAX_BYTES
+    ):
+        return response
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    try:
+        payload = json.loads(body)
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            error["message"] = translate_text(error["message"], language)
+            body = json.dumps(payload, ensure_ascii=False).encode()
+    except ValueError:
+        pass
+    result = Response(content=body, status_code=response.status_code, background=response.background)
+    result.raw_headers = [
+        (name, value) for name, value in response.raw_headers if name.lower() != b"content-length"
+    ] + [(b"content-length", str(len(body)).encode())]
+    return result
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     if request.url.path.startswith("/v1/messages"):
@@ -949,6 +979,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     return openai_error(str(exc.detail), exc.status_code, code)
 
 
+ERROR_TRANSLATION_MAX_BYTES = 64 * 1024
 SEARCH_QUERY_MAX = 300
 SEARCH_RESULT_MAX = 5
 _TAG_RE = re.compile(r"<[^>]*>")

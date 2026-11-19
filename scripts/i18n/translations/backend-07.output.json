@@ -1,0 +1,15 @@
+{
+  "Hugging Face denegó el acceso a {0}: el HF_TOKEN no tiene permiso de lectura": "Hugging Face denied access to {0}: the HF_TOKEN lacks read permission",
+  "Hugging Face limitó las peticiones; espera unos minutos y vuelve a intentarlo": "Hugging Face rate-limited the requests; wait a few minutes and try again",
+  "Hugging Face no está disponible ahora (HTTP {0}); vuelve a intentarlo más tarde": "Hugging Face is unavailable right now (HTTP {0}); try again later",
+  "Hugging Face rechazó el HF_TOKEN: es inválido o ha caducado": "Hugging Face rejected the HF_TOKEN: it is invalid or expired",
+  "La selección solo contiene drafters o el proyector de visión: falta el modelo principal. Elige también una cuantización del modelo que quepa en la memoria del equipo.": "The selection only contains drafters or the vision projector: the main model is missing. Also choose a model quantization that fits in this machine's memory.",
+  "Repositorio no encontrado: {0} no existe o es privado y requiere HF_TOKEN": "Repository not found: {0} does not exist or is private and requires HF_TOKEN",
+  "Repositorio no encontrado: {0} no existe o la cuenta del HF_TOKEN no puede verlo": "Repository not found: {0} does not exist or the HF_TOKEN account cannot see it",
+  "Repositorio restringido: la cuenta del HF_TOKEN no tiene acceso a {0}. Acepta sus condiciones o pide acceso en Hugging Face y vuelve a intentarlo": "Gated repository: the HF_TOKEN account has no access to {0}. Accept its conditions or request access on Hugging Face and try again",
+  "Repositorio restringido: {0} exige una cuenta de Hugging Face con sus condiciones aceptadas. Sin HF_TOKEN no se puede descargar; acepta las condiciones y configura HF_TOKEN en el .env de MyDGX": "Gated repository: {0} requires a Hugging Face account that has accepted its conditions. It cannot be downloaded without HF_TOKEN; accept the conditions and set HF_TOKEN in the MyDGX .env",
+  "Revisión no encontrada en {0}; recarga el modelo y vuelve a intentarlo": "Revision not found in {0}; reload the model and try again",
+  "Sin conexión con Hugging Face: revisa la red del equipo y vuelve a intentarlo": "No connection to Hugging Face: check this machine's network and try again",
+  "Sin espacio en disco: libera espacio y vuelve a intentarlo": "Out of disk space: free some space and try again",
+  "Un archivo seleccionado ya no está en {0}; recarga el modelo y vuelve a elegir archivos": "A selected file is no longer in {0}; reload the model and choose the files again"
+}

@@ -38,6 +38,8 @@ import {
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  KeyRound,
+  Bell,
   Sparkles,
   Square,
   Star,
@@ -381,8 +383,17 @@ type Models = {
     memory_estimate?: MemoryEstimate | null;
     manual_settings?: boolean;
     speculative?: { spec_type: string; draft_filename: string };
+    health?: ModelHealth | null;
   }>;
 };
+
+type ModelHealth = { status: "defective" | "incomplete"; reason: string; file?: string; at?: string };
+
+function ModelHealthBadge({ health }: { health: ModelHealth }) {
+  const label = health.status === "incomplete" ? t("INCOMPLETO") : t("DEFECTUOSO");
+  const detail = health.file ? `${health.file}: ${health.reason}` : health.reason;
+  return <span className={`badge model-health ${health.status}`} title={detail}><TriangleAlert size={11} />{" "}{label}</span>;
+}
 
 function searchStateClass(text: string, resultCount: number | null) {
   if (!text.trim()) return "";
@@ -866,7 +877,8 @@ function hfFileGroups(files: HfRemoteFile[]): HfFileGroup[] {
     const lower = file.name.toLowerCase();
     const gguf = lower.endsWith(".gguf");
     const mmproj = /(?:^|[/_.-])mmproj(?:[/_.-]|$)/i.test(file.name);
-    const auxiliary = !gguf || /(?:^|[/_.-])imatrix(?:[/_.-]|$)/i.test(file.name);
+    const drafter = /(?:^|\/)(?:mtp|dspark|dflash|draft|eagle3?|speculative)\d*[-_/]|[-_.](?:dspark|dflash|eagle3)\d*[-_.]/i.test(file.name);
+    const auxiliary = !gguf || drafter || /(?:^|[/_.-])imatrix(?:[/_.-]|$)/i.test(file.name);
     const kind: HfFileGroup["kind"] = auxiliary ? "auxiliary" : mmproj ? "mmproj" : "weights";
     const shardBase = file.name.replace(/-\d{5}-of-\d{5}(?=\.gguf$)/i, "");
     const id = kind === "auxiliary" ? "auxiliary" : `${kind}:${shardBase}`;
@@ -1620,6 +1632,44 @@ type HfFileGroup = {
   sizeKnown: boolean;
 };
 
+type HfGatedAccess = "public" | "granted" | "no_token" | "denied" | "unknown";
+
+function hfGatedBlocked(remote: HfInspection["remote"]) {
+  return Boolean(remote?.gated && (remote.access === "no_token" || remote.access === "denied"));
+}
+
+function GatedAccessNotice({ repoId, mode, access }: { repoId: string; mode?: string; access?: HfGatedAccess }) {
+  const modelUrl = `https://huggingface.co/${repoId}`;
+  if (access === "granted") {
+    return <div className="gated-access-notice granted">
+      <ShieldCheck size={15} />
+      <span><strong>{t("Repositorio gated · acceso concedido")}</strong><small>{t("Tu token de Hugging Face tiene acceso; puedes descargarlo.")}</small></span>
+    </div>;
+  }
+  const manual = mode === "manual";
+  return <div className="gated-access-notice">
+    <TriangleAlert size={15} />
+    <div>
+      <strong>{access === "denied"
+        ? t("Repositorio gated · tu token no tiene acceso")
+        : access === "no_token"
+        ? t("Repositorio gated · hace falta un token de Hugging Face")
+        : t("Repositorio gated · requiere acceso autenticado")}</strong>
+      <small>{manual
+        ? t("El autor revisa cada solicitud: la descarga no funcionará hasta que la apruebe.")
+        : t("Hugging Face concede el acceso en cuanto aceptas las condiciones del modelo.")}</small>
+      <ol>
+        <li>{t("Inicia sesión en Hugging Face y abre")}{" "}<a href={modelUrl} target="_blank" rel="noreferrer">{repoId}</a>.</li>
+        <li>{manual ? t("Pulsa «Request access», rellena el formulario y espera la aprobación del autor.") : t("Pulsa «Agree and access repository» para aceptar las condiciones.")}</li>
+        {access !== "denied" && <li>{t("Crea un token de lectura en")}{" "}<a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">huggingface.co/settings/tokens</a>.</li>}
+        {access !== "denied" && <li>{t("Pégalo en Configuración → Token de Hugging Face y pulsa Guardar.")}</li>}
+        {access === "denied" && <li>{t("Comprueba que el token guardado en Configuración pertenece a la cuenta que aceptó las condiciones.")}</li>}
+        <li>{t("Vuelve a abrir Detalles de este modelo y descarga.")}</li>
+      </ol>
+    </div>
+  </div>;
+}
+
 type HfInspection = {
   repo_id: string;
   description: string;
@@ -1631,6 +1681,8 @@ type HfInspection = {
   remote?: {
     revision: string;
     gated: boolean;
+    gated_mode?: "auto" | "manual" | "";
+    access?: HfGatedAccess;
     private: boolean;
     license?: string | null;
     pipeline_tag?: string | null;
@@ -2711,6 +2763,12 @@ function Dashboard({
   const uptimeRemainingMinutes = uptimeMinutes % 60;
   const uptimeLabel = t("{days} d {hours} h {minutes} min", { days: uptimeDays, hours: uptimeHours, minutes: uptimeRemainingMinutes });
   const branding = deviceBranding(overview.host);
+  const hour = new Date().getHours();
+  const greeting = hour >= 6 && hour < 14
+    ? t("Buenos días, tu Spark está")
+    : hour >= 14 && hour < 21
+      ? t("Buenas tardes, tu Spark está")
+      : t("Buenas noches, tu Spark está");
   const gatewayDisplayHosts = gateway
     ? gateway.host === "0.0.0.0" || gateway.host === "::"
       ? gateway.network_addresses?.length
@@ -2736,7 +2794,7 @@ function Dashboard({
                   <span>{branding.label} · {branding.subtitle}</span>
                 </div>
               ) : <span className="eyebrow">{t("CENTRO DE CONTROL")}</span>}
-              <h1>{t("Buenos días, tu Spark está")}{" "}{overview.services.ollama ? t("listo.") : t("en espera.")}</h1>
+              <h1>{greeting}{" "}{overview.services.ollama ? t("listo.") : t("en espera.")}</h1>
               <p>
                 {overview.host.hostname} · {overview.host.architecture}{" "}{t("· activo hace")}{" "}{uptimeLabel}
               </p>
@@ -3631,6 +3689,10 @@ function ModelsView({
   }
 
   async function downloadRecommendation(model: HfRecommendation) {
+    if (model.gated) {
+      await inspect(model.id, model.recommended_files);
+      return;
+    }
     if (model.recommended_files.length) {
       void preflightDownload({
         repoId: model.id,
@@ -4126,7 +4188,7 @@ function ModelsView({
                     {model.assistant && <span className="badge assistant"><Bot size={11} />{" "}{t("Chatbot")}</span>}
                     {model.persistent && <span className="badge">{t("Default")}</span>}
                     <UncensoredBadge name={model.repo_id} flagged={model.uncensored} />
-                    {incomplete && <span className="badge warning">{t("Incompleto")}</span>}
+                    {model.health ? <ModelHealthBadge health={model.health} /> : incomplete && <span className="badge warning">{t("Incompleto")}</span>}
                     {cardOnly && <span className="badge warning" title={t("Solo está la ficha del modelo; no hay archivos de pesos")}>{t("Sin pesos")}</span>}
                     {model.speculative && <span className="badge" title={t("Decodificación especulativa con {value}", { value: model.speculative.draft_filename || t("el MTP integrado en el GGUF") })}><Zap size={11} /> {SPEC_LABELS[model.speculative.spec_type] ?? model.speculative.spec_type}</span>}
                     {model.manual_settings && <span className="badge" title={t("Tiene ajustes manuales que mandan sobre la ficha y la cabecera GGUF")}><SlidersHorizontal size={11} />{" "}{t("Manual")}</span>}
@@ -4145,11 +4207,17 @@ function ModelsView({
                   size={model.size}
                   total={totalMemory}
                   memory={model.memory_estimate}
-                  extra={verification && <div className={`model-verification ${verification.status}`}>
-                    <ShieldCheck size={13} />
-                    <div><strong>{verification.message}</strong><small>{verification.status === "completed" ? t("Integridad comprobada") : verification.status === "failed" ? t("La verificación falló") : t("{progress}% completado", { progress: Math.round(verification.progress) })}</small></div>
-                    {verificationActive && <span style={{ width: `${verification.progress}%` }} />}
-                  </div>}
+                  extra={<>
+                    {model.health && <div className={`model-health-note ${model.health.status}`}>
+                      <TriangleAlert size={13} />
+                      <div><strong>{model.health.status === "incomplete" ? t("Modelo incompleto") : t("Modelo defectuoso")}</strong><small>{model.health.file ? `${model.health.file}: ${model.health.reason}` : model.health.reason}</small></div>
+                    </div>}
+                    {verification && <div className={`model-verification ${verification.status}`}>
+                      <ShieldCheck size={13} />
+                      <div><strong>{verification.message}</strong><small>{verification.status === "completed" ? t("Integridad comprobada") : verification.status === "failed" ? t("La verificación falló") : t("{progress}% completado", { progress: Math.round(verification.progress) })}</small></div>
+                      {verificationActive && <span style={{ width: `${verification.progress}%` }} />}
+                    </div>}
+                  </>}
                   actions={<>
                     <label className={`persistence-toggle ${model.quantizations.length ? "" : "disabled"}`} title={model.quantizations.length ? t("Incluir en el perfil Default, que arranca siempre con MyDGX") : t("El perfil Default requiere un GGUF")}>
                       <input type="checkbox" disabled={!model.quantizations.length} checked={model.persistent} onChange={(event) => void togglePersistence("huggingface", model.repo_id, event.target.checked, chosenContexts[model.repo_id])} />
@@ -4325,7 +4393,7 @@ function ModelsView({
                     </div>
                     <span className={`recommendation-status ${statusClass}`}>{t(model.recommendation_status)}</span>
                   </div>
-                  <div className="catalog-top"><div className="model-icon hf"><HuggingFaceIcon /></div><div className="recommendation-tags">{installed && <span className="installed">{t("instalado")}</span>}{model.uncensored && <span className="uncensored">{t("sin censura")}</span>}{model.hft_catalog && <span className="uncensored">hft.md</span>}{model.tasks.map((item) => <span key={item}>{item}</span>)}</div></div>
+                  <div className="catalog-top"><div className="model-icon hf"><HuggingFaceIcon /></div><div className="recommendation-tags">{installed && <span className="installed">{t("instalado")}</span>}{model.uncensored && <span className="uncensored">{t("sin censura")}</span>}{model.gated && <span className="restricted" title={t("Requiere aceptar condiciones en Hugging Face y un token con acceso")}>gated</span>}{model.hft_catalog && <span className="uncensored">hft.md</span>}{model.tasks.map((item) => <span key={item}>{item}</span>)}</div></div>
                   <div className="recommendation-name" title={model.id}>
                     <span><strong>{model.id.split("/").pop() || model.id}</strong><ModelTermsButton text={`${model.id} ${model.recommended_quantization} ${model.architecture} ${model.runtime_requirement} ${model.speculative_methods.join(" ")} ${model.tasks.join(" ")}`} label={model.id} onOpen={setGlossaryRequest} /></span>
                     {model.id.includes("/") && <small>{model.id}</small>}
@@ -4367,7 +4435,7 @@ function ModelsView({
                       ? <button className="button primary" disabled><CheckCircle2 size={15} />{" "}{t("Instalado")}</button>
                       : model.gguf_search
                       ? <button className="button primary" onClick={() => searchGgufVariant(model.gguf_search ?? "")} title={t("Este modelo solo tiene pesos safetensors o PyTorch y en la Spark no hay motor que los ejecute; busca una versión GGUF para llama.cpp")}><Search size={15} />{" "}{t("Buscar versión GGUF")}</button>
-                      : <button className="button primary" disabled={!model.fits || downloadBusy !== null} onClick={() => downloadRecommendation(model)}><Download className={downloadBusy === model.id ? "spin" : ""} size={15} /> {downloadBusy === model.id ? t("Preparando…") : model.recommended_files.length ? t("Descargar recomendada") : t("Descargar snapshot")}</button>}
+                      : <button className="button primary" disabled={!model.fits || downloadBusy !== null} onClick={() => downloadRecommendation(model)} title={model.gated ? t("Repositorio gated: abre los detalles para comprobar el acceso antes de descargar") : undefined}><Download className={downloadBusy === model.id ? "spin" : ""} size={15} /> {downloadBusy === model.id ? t("Preparando…") : model.gated ? t("Comprobar acceso") : model.recommended_files.length ? t("Descargar recomendada") : t("Descargar snapshot")}</button>}
                   </div>
                 </Card>
               );
@@ -4511,9 +4579,7 @@ function ModelsView({
             <Download size={15} />
             <span><strong>{t("Esta es la opción que MyDGX recomienda para tu Spark")}</strong><small>{t("Ya está seleccionada completa. Si está dividida en varios archivos, se descargarán juntos. No necesitas elegir entre S, M o L salvo que quieras ajustar manualmente calidad y tamaño.")}</small></span>
           </div>}
-          {inspection.remote?.gated && <div className="profile-warning">
-            <ShieldCheck size={15} />{t("Este repositorio requiere aceptar sus condiciones en Hugging Face y configurar acceso antes de descargar.")}
-          </div>}
+          {inspection.remote?.gated && <GatedAccessNotice repoId={inspection.repo_id} mode={inspection.remote.gated_mode} access={inspection.remote.access} />}
           <div className="hf-model-description">
             <div>
               <strong>{t("Descripción del modelo")}</strong>
@@ -4588,9 +4654,11 @@ function ModelsView({
             </small>
             <button
               className="button primary"
-              disabled={inspection.remote?.download_supported === false || !selectedFiles.length || !selectedSizeKnown || selectedDownloadTooLarge || downloadBusy !== null}
+              disabled={inspection.remote?.download_supported === false || hfGatedBlocked(inspection.remote) || !selectedFiles.length || !selectedSizeKnown || selectedDownloadTooLarge || downloadBusy !== null}
               title={inspection.remote?.download_supported === false
                 ? inspection.remote.download_block_reason
+                : hfGatedBlocked(inspection.remote)
+                ? t("Repositorio gated: sigue los pasos indicados para obtener acceso")
                 : selectedDownloadTooLarge
                 ? t("La selección supera la memoria total del sistema")
                 : !selectedSizeKnown && selectedFiles.length ? t("No se puede comprobar que la selección cabe") : undefined}
@@ -5056,7 +5124,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   }
 
   async function duplicate(profile: Profile) {
-    const suggestion = `${profile.name} copia`.replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+    const suggestion = t("{name} copia", { name: profile.name }).replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
     const name = window.prompt(
       t("Nombre del nuevo perfil (copia de {name}).\nLetras, números, espacios y · . _ - ; de 2 a 80 caracteres.", { name: profile.name }),
       suggestion,
@@ -6572,6 +6640,25 @@ function BenchmarkModalityChartsView({ modality, runs }: { modality: string; run
     </Card>;
   };
   const scatter = rows.filter((row) => row.primary != null && row.secondary != null);
+  const gain = (value: number, better: "higher" | "lower") => (better === "higher" ? value : -value);
+  const dominates = (a: typeof rows[number], b: typeof rows[number]) => {
+    const aX = gain(Number(a.primary), primary.better);
+    const aY = gain(Number(a.secondary), secondary.better);
+    const bX = gain(Number(b.primary), primary.better);
+    const bY = gain(Number(b.secondary), secondary.better);
+    return aX >= bX && aY >= bY && (aX > bX || aY > bY);
+  };
+  const frontier = scatter
+    .filter((row) => !scatter.some((other) => other !== row && dominates(other, row)))
+    .sort((a, b) => gain(Number(b.primary), primary.better) - gain(Number(a.primary), primary.better))
+    .slice(0, 8);
+  const others = scatter.filter((row) => !frontier.includes(row));
+  const logAxis = (key: "primary" | "secondary") => {
+    const values = scatter.map((row) => Number(row[key])).filter((value) => value > 0);
+    return values.length === scatter.length && Math.max(...values) / Math.min(...values) >= 8;
+  };
+  const logX = logAxis("primary");
+  const logY = logAxis("secondary");
   return <section className="benchmark-modality">
     <header>
       <span className="benchmark-modality-icon" style={{ "--category": color } as CSSProperties}><ModalityIcon modality={modality} size={17} /></span>
@@ -6584,19 +6671,20 @@ function BenchmarkModalityChartsView({ modality, runs }: { modality: string; run
       {bar("secondary", secondary.label, secondary.hint, secondary.better, secondary.format, "var(--blue)")}
     </div>
     {scatter.length >= 2 && <Card className="benchmark-chart">
-      <div><strong>{primary.label}{" "}{t("frente a")}{" "}{secondary.label.toLowerCase()}</strong><small>{t("Cada burbuja es un modelo; su tamaño es el peso en disco. Mejor:")}{" "}{primary.better === "higher" ? t("derecha") : t("izquierda")}{" "}{t("y")}{" "}{secondary.better === "higher" ? t("arriba") : t("abajo")}.</small></div>
-      <ResponsiveContainer width="100%" height={260}>
-        <ScatterChart margin={{ top: 12, right: 24, left: 4, bottom: 12 }}>
-          <CartesianGrid stroke="var(--border)" />
-          <XAxis type="number" dataKey="primary" name={primary.label} tickFormatter={(value) => primary.format(Number(value))} tick={{ fontSize: 11 }} />
-          <YAxis type="number" dataKey="secondary" name={secondary.label} tickFormatter={(value) => secondary.format(Number(value))} width={70} tick={{ fontSize: 11 }} />
-          <ZAxis type="number" dataKey="size" range={[60, 600]} name="GB" />
+      <div><strong>{primary.label}{" "}{t("frente a")}{" "}{secondary.label.toLowerCase()}</strong><small>{t("Cada burbuja es un modelo; su tamaño es el peso en disco. Mejor:")}{" "}{primary.better === "higher" ? t("derecha") : t("izquierda")}{" "}{t("y")}{" "}{secondary.better === "higher" ? t("arriba") : t("abajo")}.{" "}{t("Solo se rotulan los modelos de la frontera óptima; pasa el ratón por el resto.")}{logX || logY ? ` ${t("Escala logarítmica.")}` : ""}</small></div>
+      <ResponsiveContainer width="100%" height={340}>
+        <ScatterChart margin={{ top: 22, right: 32, left: 4, bottom: 12 }}>
+          <CartesianGrid stroke="var(--border)" strokeOpacity={0.6} />
+          <XAxis type="number" dataKey="primary" name={primary.label} scale={logX ? "log" : "auto"} domain={logX ? ["auto", "auto"] : [0, "auto"]} allowDataOverflow={false} tickFormatter={(value) => primary.format(Number(value))} tick={{ fontSize: 11 }} />
+          <YAxis type="number" dataKey="secondary" name={secondary.label} scale={logY ? "log" : "auto"} domain={logY ? ["auto", "auto"] : [0, "auto"]} tickFormatter={(value) => secondary.format(Number(value))} width={70} tick={{ fontSize: 11 }} />
+          <ZAxis type="number" dataKey="size" range={[40, 420]} name="GB" />
           <Tooltip cursor={{ strokeDasharray: "3 3" }} content={({ payload }) => {
             const row = payload?.[0]?.payload as typeof rows[number] | undefined;
             return row ? <div className="benchmark-tooltip"><strong>{row.name}</strong><span>{primary.label}: {primary.format(Number(row.primary))}</span><span>{secondary.label}: {secondary.format(Number(row.secondary))}</span><span>{t("Disco:")}{" "}{row.size.toFixed(1)}{" "}{t("GB · score")}{" "}{row.score}</span></div> : null;
           }} />
-          <Scatter data={scatter} fill={color} fillOpacity={0.7} isAnimationActive={false}>
-            <LabelList dataKey="name" position="top" style={{ fontSize: 11, fill: "var(--text-secondary)" }} />
+          <Scatter data={others} fill={color} fillOpacity={0.28} stroke={color} strokeOpacity={0.5} isAnimationActive={false} />
+          <Scatter data={frontier} fill={color} fillOpacity={0.85} stroke="var(--surface)" isAnimationActive={false}>
+            <LabelList dataKey="name" position="top" offset={8} style={{ fontSize: 11, fontWeight: 650, fill: "var(--text)" }} />
           </Scatter>
         </ScatterChart>
       </ResponsiveContainer>
@@ -7894,7 +7982,61 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
   );
 }
 
-function LogsView({ notify }: { notify: (message: string, error?: boolean) => void }) {
+type AppNotification = {
+  id: number;
+  created_at: string;
+  level: "info" | "warning" | "error";
+  kind: string;
+  target: string;
+  title: string;
+  message: string;
+  log: string;
+  read_at: string | null;
+};
+type NotificationsResponse = { unread: number; items: AppNotification[] };
+
+function NotificationBell({ unread, popup, onOpen }: { unread: number; popup: AppNotification | null; onOpen: () => void }) {
+  return <div className="notification-bell-wrap">
+    <button className={`notification-bell ${unread ? "has-unread" : ""}`} onClick={onOpen} title={t("Notificaciones")} aria-label={unread ? t("{count} notificación(es) sin leer", { count: unread }) : t("Notificaciones")}>
+      <Bell size={16} />
+      {unread > 0 && <span className="notification-count">{unread > 99 ? "99+" : unread}</span>}
+    </button>
+    {popup && <button className={`notification-popup ${popup.level}`} onClick={onOpen} role="status">
+      <TriangleAlert size={15} />
+      <span><strong>{popup.title}</strong><small>{popup.message}</small></span>
+    </button>}
+  </div>;
+}
+
+function NotificationsPanel({ data, onRead }: { data: NotificationsResponse | null; onRead: (ids: number[] | "all") => void }) {
+  const [fresh, setFresh] = useState<Set<number>>(new Set());
+  const unreadIds = useMemo(() => (data?.items ?? []).filter((item) => !item.read_at).map((item) => item.id), [data]);
+  useEffect(() => {
+    if (!unreadIds.length) return;
+    setFresh((current) => new Set([...current, ...unreadIds]));
+    const timer = window.setTimeout(() => onRead(unreadIds), 800);
+    return () => window.clearTimeout(timer);
+  }, [onRead, unreadIds]);
+  const items = data?.items ?? [];
+  return <Card className="notifications-panel">
+    <div className="notifications-head">
+      <div><Bell size={16} /><span><strong>{t("Notificaciones")}</strong><small>{items.length ? t("{count} aviso(s) recientes · se marcan como leídos al verlos", { count: items.length }) : t("Sin avisos")}</small></span></div>
+      {data && data.unread > 0 && <button className="button secondary compact" onClick={() => onRead("all")}>{t("Marcar todas como leídas")}</button>}
+    </div>
+    {items.length ? <ol className="notifications-list">
+      {items.map((item) => <li key={item.id} className={`${item.level} ${fresh.has(item.id) ? "fresh" : ""}`}>
+        <TriangleAlert size={15} />
+        <div>
+          <div className="notification-line"><strong>{item.title}</strong><time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString(locale)}</time></div>
+          <p>{item.message}</p>
+          {item.log && <details><summary>{t("Log")}</summary><pre>{item.log}</pre></details>}
+        </div>
+      </li>)}
+    </ol> : <p className="notifications-empty">{t("Aquí aparecerán las descargas fallidas, los errores al cargar modelos o al ejecutar benchmarks y los modelos defectuosos.")}</p>}
+  </Card>;
+}
+
+function LogsView({ notify, notifications, onReadNotifications }: { notify: (message: string, error?: boolean) => void; notifications: NotificationsResponse | null; onReadNotifications: (ids: number[] | "all") => void }) {
   const [data, setData] = useState<SystemLogsResponse | null>(null);
   const [level, setLevel] = useState(() => localStorage.getItem("mydgx-logs-level") || "");
   const [category, setCategory] = useState(() => localStorage.getItem("mydgx-logs-category") || "");
@@ -7949,6 +8091,7 @@ function LogsView({ notify }: { notify: (message: string, error?: boolean) => vo
           <button className="icon-button" onClick={() => void load()} aria-label={t("Actualizar logs")}><RefreshCw size={16} /></button>
         </div>}
       />
+      <NotificationsPanel data={notifications} onRead={onReadNotifications} />
       <div className="logs-summary">
         <Card><small>{t("Últimas 24 h")}</small><strong>{Object.values(counts).reduce((total, count) => total + (count ?? 0), 0)}</strong></Card>
         <Card className="warning"><small>{t("Warnings")}</small><strong>{counts.warning ?? 0}</strong></Card>
@@ -8003,6 +8146,151 @@ function LogsView({ notify }: { notify: (message: string, error?: boolean) => vo
   );
 }
 
+type EnvSetting = { key: string; type: "bool" | "int" | "str"; value: boolean | number | string; default: boolean | number | string | null; min: number | null; max: number | null; restart: boolean };
+type EnvSettings = { env_file: boolean; hf_token_configured: boolean; settings: EnvSetting[] };
+type EnvSettingsUpdate = EnvSettings & { updated: string[]; restart_required: string[]; hf_user?: string };
+
+function envSettingGroups(): Array<{ title: string; items: Record<string, { label: string; hint: string }> }> {
+  return [
+    { title: t("Descargas"), items: {
+      HF_DOWNLOAD_WORKERS: { label: t("Descargas en paralelo"), hint: t("Archivos o shards simultáneos al bajar de Hugging Face") },
+      MODEL_IMPORT_MAX_GB: { label: t("ZIP de importación máximo (GB)"), hint: t("Tamaño máximo de un modelo importado desde un ZIP") },
+    } },
+    { title: t("Benchmarks"), items: {
+      BENCHMARK_ENABLED: { label: t("Benchmarks"), hint: t("Permite medir modelos desde MyDGX") },
+      BENCHMARK_AUTO_NEW_MODELS: { label: t("Comprobar modelos nuevos"), hint: t("Pasa un benchmark a cada GGUF descargado y marca los defectuosos o incompletos") },
+      BENCHMARK_REPETITIONS: { label: t("Repeticiones por caso"), hint: t("Más repeticiones dan medidas más estables, pero tardan más") },
+      BENCHMARK_QUIET_SECONDS: { label: t("Espera sin actividad (s)"), hint: t("Tiempo sin uso antes de lanzar benchmarks automáticos") },
+    } },
+    { title: t("Chatbot y perfiles"), items: {
+      ASSISTANT_ENABLED: { label: t("Chatbot de MyDGX"), hint: t("Asistente operativo del panel") },
+      ASSISTANT_MODEL: { label: t("Modelo del chatbot"), hint: t("Nombre exacto en Ollama, por ejemplo llama3.2:3b") },
+      ENABLE_PROFILE_AUTOSTART: { label: t("Restaurar perfiles al arrancar"), hint: t("Vuelve a encender los perfiles activos tras reiniciar MyDGX") },
+      DEFAULT_PROFILE_ID: { label: t("Perfil predeterminado"), hint: t("ID del perfil que se activa al arrancar; vacío para ninguno") },
+      PROFILE_START_TIMEOUT_SECONDS: { label: t("Tiempo máximo de arranque (s)"), hint: t("Espera máxima a que un modelo responda al encenderlo") },
+    } },
+    { title: t("Sesión y retención"), items: {
+      MYDGX_SESSION_TTL_MINUTES: { label: t("Duración de la sesión (min)"), hint: t("Se aplica a los nuevos inicios de sesión") },
+      METRICS_RETENTION_HOURS: { label: t("Retención de métricas (h)"), hint: t("Telemetría que se conserva en la base de datos") },
+      LOG_RETENTION_DAYS: { label: t("Retención de logs (días)"), hint: t("Eventos y auditoría que se conservan") },
+    } },
+  ];
+}
+
+function ServerSettingsCard({ notify }: { notify: (message: string, error?: boolean) => void }) {
+  const [env, setEnv] = useState<EnvSettings | null>(null);
+  const [draft, setDraft] = useState<Record<string, boolean | number | string>>({});
+  const [token, setToken] = useState("");
+  const [tokenStatus, setTokenStatus] = useState("");
+  const [busy, setBusy] = useState<"" | "save" | "token" | "verify" | "clear">("");
+
+  const load = useCallback(async () => {
+    try {
+      const result = await api<EnvSettings>("/api/settings/env");
+      setEnv(result);
+      setDraft(Object.fromEntries(result.settings.map((item) => [item.key, item.value])));
+    } catch (error) {
+      notify((error as Error).message, true);
+    }
+  }, [notify]);
+  useEffect(() => { void load(); }, [load]);
+
+  const changed = env ? env.settings.filter((item) => draft[item.key] !== item.value) : [];
+
+  async function submit(body: Record<string, unknown>, mode: typeof busy) {
+    setBusy(mode);
+    try {
+      const result = await api<EnvSettingsUpdate>("/api/settings/env", { method: "PUT", body: JSON.stringify(body) });
+      setEnv(result);
+      setDraft(Object.fromEntries(result.settings.map((item) => [item.key, item.value])));
+      return result;
+    } catch (error) {
+      notify((error as Error).message, true);
+      return null;
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveValues(event: FormEvent) {
+    event.preventDefault();
+    if (!changed.length) return;
+    const result = await submit({ values: Object.fromEntries(changed.map((item) => [item.key, draft[item.key]])) }, "save");
+    if (!result) return;
+    notify(result.restart_required.length
+      ? t("Guardado en .env. {keys} se aplicará al reiniciar MyDGX", { keys: result.restart_required.join(", ") })
+      : t("Guardado en .env y aplicado"));
+  }
+
+  async function saveToken(event: FormEvent) {
+    event.preventDefault();
+    if (!token.trim()) return;
+    const result = await submit({ hf_token: token.trim() }, "token");
+    if (!result) return;
+    setToken("");
+    setTokenStatus(result.hf_user ? t("Válido · cuenta {user}", { user: result.hf_user }) : t("Válido"));
+    notify(t("Token de Hugging Face guardado"));
+  }
+
+  async function clearToken() {
+    if (!window.confirm(t("¿Quitar el token de Hugging Face? Los repositorios restringidos dejarán de poder descargarse."))) return;
+    const result = await submit({ clear_hf_token: true }, "clear");
+    if (!result) return;
+    setTokenStatus("");
+    notify(t("Token de Hugging Face eliminado; solo se podrán descargar modelos públicos"));
+  }
+
+  async function verifyToken() {
+    setBusy("verify");
+    try {
+      const result = await api<{ configured: boolean; valid: boolean; user: string }>("/api/settings/hf-token/verify", { method: "POST" });
+      setTokenStatus(!result.configured ? t("Sin token") : result.user ? t("Válido · cuenta {user}", { user: result.user }) : t("Válido"));
+    } catch (error) {
+      setTokenStatus((error as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const byKey = new Map((env?.settings ?? []).map((item) => [item.key, item]));
+  return <Card className="server-settings">
+    <div className="card-kicker"><SlidersHorizontal size={16} />{" "}{t("Servidor · .env")}</div>
+    <p className="server-settings-intro">{t("Se guardan en el .env del equipo. La autenticación, la exposición en red y las operaciones privilegiadas solo se cambian a mano en ese archivo.")}</p>
+    <form className="server-settings-token" onSubmit={saveToken}>
+      <div><KeyRound size={16} /><span><strong>{t("Token de Hugging Face")}</strong><small>{env?.hf_token_configured ? t("Configurado · no se muestra nunca") : t("Sin token · solo modelos públicos")}{tokenStatus ? ` · ${tokenStatus}` : ""}</small></span></div>
+      <div className="inline-form">
+        <input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder={env?.hf_token_configured ? t("Nuevo token hf_…") : "hf_…"} autoComplete="off" spellCheck={false} aria-label={t("Token de Hugging Face")} />
+        <button className="button primary" type="submit" disabled={!token.trim() || Boolean(busy)}>{busy === "token" ? t("Comprobando…") : t("Guardar token")}</button>
+        <button className="button secondary" type="button" disabled={!env?.hf_token_configured || Boolean(busy)} onClick={() => void verifyToken()}>{busy === "verify" ? t("Comprobando…") : t("Comprobar")}</button>
+        <button className="button danger" type="button" disabled={!env?.hf_token_configured || Boolean(busy)} onClick={() => void clearToken()}>{t("Quitar")}</button>
+      </div>
+    </form>
+    {env && <form className="server-settings-form" onSubmit={saveValues}>
+      {envSettingGroups().map((group) => <fieldset key={group.title}>
+        <legend>{group.title}</legend>
+        {Object.entries(group.items).map(([key, meta]) => {
+          const item = byKey.get(key);
+          if (!item) return null;
+          const value = draft[key];
+          return <label key={key} className={`server-setting ${item.type === "bool" ? "is-toggle" : ""}`}>
+            <span><strong>{meta.label}{item.restart && <em>{t("requiere reinicio")}</em>}</strong><small>{meta.hint}</small></span>
+            {item.type === "bool"
+              ? <input type="checkbox" checked={Boolean(value)} onChange={(event) => setDraft({ ...draft, [key]: event.target.checked })} />
+              : item.type === "int"
+                ? <input type="number" min={item.min ?? undefined} max={item.max ?? undefined} value={Number(value)} onChange={(event) => setDraft({ ...draft, [key]: Math.trunc(Number(event.target.value)) })} />
+                : <input type="text" value={String(value ?? "")} spellCheck={false} onChange={(event) => setDraft({ ...draft, [key]: event.target.value.trim() })} />}
+          </label>;
+        })}
+      </fieldset>)}
+      <div className="gateway-actions">
+        <small>{changed.length ? t("{count} cambio(s) sin guardar", { count: changed.length }) : t("Sin cambios")}</small>
+        <button className="button secondary" type="button" disabled={!changed.length || Boolean(busy)} onClick={() => env && setDraft(Object.fromEntries(env.settings.map((item) => [item.key, item.value])))}>{t("Descartar")}</button>
+        <button className="button primary" type="submit" disabled={!changed.length || Boolean(busy)}>{busy === "save" ? t("Guardando…") : t("Guardar en .env")}</button>
+      </div>
+    </form>}
+  </Card>;
+}
+
 function SettingsView({ config, themePreference, setThemePreference, notify }: { config: Config | null; themePreference: ThemePreference; setThemePreference: (preference: ThemePreference) => void; notify: (message: string, error?: boolean) => void }) {
   const [languagePreference, setLanguageChoice] = useState<LanguagePreference>(storedLanguagePreference);
   const chooseLanguage = (preference: LanguagePreference) => {
@@ -8055,11 +8343,11 @@ function SettingsView({ config, themePreference, setThemePreference, notify }: {
       <Card>
         <div className="card-kicker"><Activity size={16} />{" "}{t("Integraciones")}</div>
         <div className="integration-list">
-          <div><span><strong>{t("Hugging Face")}</strong><small>{t("Token cargado desde .env")}</small></span><span className={`badge ${config?.hf_token_configured ? "live" : ""}`}>{config?.hf_token_configured ? t("Configurado") : t("Público")}</span></div>
           <div><span><strong>{t("Actualizaciones")}</strong><small>{t("Operación privilegiada controlada")}</small></span><span className={`badge ${config?.system_updates_enabled ? "live" : ""}`}>{config?.system_updates_enabled ? t("Activadas") : t("Bloqueadas")}</span></div>
           <div><span><strong>{t("Servicios")}</strong><small>{t("systemd con lista permitida")}</small></span><span className={`badge ${config?.service_control_enabled ? "live" : ""}`}>{config?.service_control_enabled ? t("Activado") : t("Solo lectura")}</span></div>
         </div>
       </Card>
+      <ServerSettingsCard notify={notify} />
       <Card className="gateway-settings">
         <div className="gateway-settings-head">
           <div><Bot size={17} /><span><strong>{t("Gateway OpenAI del perfil activo")}</strong><small>{gateway?.endpoint ?? config?.gateway_url ?? t("Cargando…")}</small></span></div>
@@ -8202,6 +8490,53 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
     toastTimer.current = window.setTimeout(() => setToast(null), 4200);
   }, []);
   useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+
+  const [notifications, setNotifications] = useState<NotificationsResponse | null>(null);
+  const [notificationPopup, setNotificationPopup] = useState<AppNotification | null>(null);
+  const lastNotificationId = useRef<number | null>(null);
+  const popupTimer = useRef<number | undefined>(undefined);
+  const refreshNotifications = useCallback(async () => {
+    try {
+      const result = await api<NotificationsResponse>("/api/notifications?limit=100");
+      setNotifications(result);
+      const newest = result.items[0]?.id ?? 0;
+      if (lastNotificationId.current !== null) {
+        const arrived = result.items.find((item) => item.id > (lastNotificationId.current ?? 0) && !item.read_at);
+        if (arrived) {
+          setNotificationPopup(arrived);
+          window.clearTimeout(popupTimer.current);
+          popupTimer.current = window.setTimeout(() => setNotificationPopup(null), 4000);
+        }
+      }
+      lastNotificationId.current = Math.max(lastNotificationId.current ?? 0, newest);
+    } catch {
+      // The header bell is secondary; the main views already report connection errors.
+    }
+  }, []);
+  const readNotifications = useCallback(async (ids: number[] | "all") => {
+    try {
+      const result = await api<{ unread: number }>("/api/notifications/read", {
+        method: "POST",
+        body: JSON.stringify(ids === "all" ? { all: true } : { ids }),
+      });
+      const readAt = new Date().toISOString();
+      setNotifications((current) => current && {
+        unread: result.unread,
+        items: current.items.map((item) => (ids === "all" || ids.includes(item.id)) && !item.read_at ? { ...item, read_at: readAt } : item),
+      });
+    } catch (requestError) {
+      notify((requestError as Error).message, true);
+    }
+  }, [notify]);
+  useEffect(() => {
+    const initial = window.setTimeout(() => void refreshNotifications(), 0);
+    const timer = window.setInterval(refreshNotifications, 5000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+      window.clearTimeout(popupTimer.current);
+    };
+  }, [refreshNotifications]);
 
   const refreshOverview = useCallback(async () => {
     try {
@@ -8346,7 +8681,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   else if (view === "multimodal") content = <MultimodalLabView notify={notify} />;
   else if (view === "storage") content = <StorageView notify={notify} />;
   else if (view === "system") content = <SystemView config={config} jobs={jobs} overview={overview} notify={notify} />;
-  else if (view === "logs") content = <LogsView notify={notify} />;
+  else if (view === "logs") content = <LogsView notify={notify} notifications={notifications} onReadNotifications={readNotifications} />;
   else content = <SettingsView config={config} themePreference={themePreference} setThemePreference={setThemePreference} notify={notify} />;
 
   return (
@@ -8394,6 +8729,16 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
             <button className="theme-toggle" onClick={toggleTheme} title={themePreference === "system" ? t("Tema automático según el sistema") : t("Tema fijo")}>{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}<span>{theme === "dark" ? t("Modo día") : t("Modo noche")}</span></button>
             <FontSizeControl onChange={setFontScale} />
             <button className="theme-toggle language-toggle" onClick={() => setLanguagePreference(language === "es" ? "en" : "es")} title={language === "es" ? t("Switch to English") : t("Cambiar a español")} aria-label={language === "es" ? t("Switch to English") : t("Cambiar a español")}><Languages size={16} /><span>{language.toUpperCase()}</span></button>
+            <NotificationBell
+              unread={notifications?.unread ?? 0}
+              popup={notificationPopup}
+              onOpen={() => {
+                setNotificationPopup(null);
+                setMenuOpen(false);
+                setView("logs");
+                window.scrollTo({ top: 0 });
+              }}
+            />
             {onLogout && <button className="session-logout" onClick={onLogout} title={t("Cerrar sesión")} aria-label={t("Cerrar sesión")}><LogOut size={16} /></button>}
           </div>
         </header>

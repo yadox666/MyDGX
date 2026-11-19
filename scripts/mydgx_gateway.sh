@@ -76,9 +76,12 @@ gateway_client_key() {
   elif gateway_is_local "$url"; then
     printf 'local-mydgx-gateway'
   else
-    printf 'ERROR: el gateway %s no es local y requiere clave.\n' "$url" >&2
-    printf '       Exporta MYDGX_GATEWAY_API_KEY con el valor de GATEWAY_API_KEY del DGX\n' >&2
-    printf '       o usa el túnel SSH del Tray (http://127.0.0.1:14000/v1).\n' >&2
+    say "ERROR: el gateway $url no es local y requiere clave." \
+      "ERROR: the gateway $url is not local and requires a key." >&2
+    say "       Exporta MYDGX_GATEWAY_API_KEY con el valor de GATEWAY_API_KEY del DGX" \
+      "       Export MYDGX_GATEWAY_API_KEY with the DGX's GATEWAY_API_KEY value" >&2
+    say "       o usa el túnel SSH del Tray (http://127.0.0.1:14000/v1)." \
+      "       or use the Tray SSH tunnel (http://127.0.0.1:14000/v1)." >&2
     return 2
   fi
 }
@@ -88,7 +91,7 @@ gateway_client_key() {
 pause_on_error() {
   local status="$1"
   if [[ "$status" -ne 0 && -t 0 && -t 1 ]]; then
-    printf '\nPulsa Enter para cerrar esta ventana.' >&2
+    printf '\n%s' "$(pick "Pulsa Enter para cerrar esta ventana." "Press Enter to close this window.")" >&2
     read -r _ || true
   fi
   return "$status"
@@ -97,7 +100,8 @@ pause_on_error() {
 # Exporta PLAYWRIGHT_BROWSERS_PATH e instala Chromium si falta (perfil activo).
 ensure_node_for_mcp() {
   command -v npx >/dev/null 2>&1 || {
-    printf 'ERROR: --active requiere Node.js y npx para los servidores MCP.\n' >&2
+    say "ERROR: --active requiere Node.js y npx para los servidores MCP." \
+      "ERROR: --active requires Node.js and npx for the MCP servers." >&2
     exit 1
   }
   if [[ "$(uname -s)" == Darwin ]]; then
@@ -108,8 +112,10 @@ ensure_node_for_mcp() {
   mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
   if [[ "${MYDGX_PLAYWRIGHT_BROWSER:-}" != "chrome" ]] &&
      ! compgen -G "$PLAYWRIGHT_BROWSERS_PATH/chromium-"* >/dev/null; then
-    printf 'Instalando Chromium para Playwright MCP (solo la primera vez)...\n' >&2
+    say "Instalando Chromium para Playwright MCP (solo la primera vez)..." \
+      "Installing Chromium for Playwright MCP (first time only)..." >&2
     npx -y playwright@1.49.1 install chromium >&2 ||
-      printf 'AVISO: Chromium no se pudo instalar; Playwright puede no iniciar.\n' >&2
+      say "AVISO: Chromium no se pudo instalar; Playwright puede no iniciar." \
+        "NOTE: Chromium could not be installed; Playwright may not start." >&2
   fi
 }

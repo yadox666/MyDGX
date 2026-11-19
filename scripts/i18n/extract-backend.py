@@ -15,7 +15,7 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCES = [ROOT / "backend/main.py"]
+SOURCES = [ROOT / "backend/main.py", ROOT / "backend/gateway.py"]
 SPANISH = re.compile(r"[áéíóúñÁÉÍÓÚÑ¿¡]|\b(el|la|los|las|de|del|que|no|un|una|para|con|sin|por|se|ya|está|hay|puede|desde|antes|ningún|ninguna)\b", re.I)
 LOG_CALLS = {"log", "debug", "info", "warning", "error", "exception", "critical"}
 

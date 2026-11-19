@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=lib/language.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/language.sh"
+
 MODE="--audit"
 CONFIRMATION=""
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,7 +31,8 @@ PRESERVED_SERVICES=(
 )
 
 usage() {
-  cat <<'EOF'
+  if [[ "$MYDGX_LANGUAGE" == es ]]; then
+    cat <<'EOF'
 Uso:
   ./start.sh serverize [--audit]
   sudo ./start.sh serverize --disable --confirm DISABLE-DESKTOP-SERVICES
@@ -45,10 +49,29 @@ instaladas fuera de APT en /home, /root, /opt, /usr/local y /srv. De los kernels
 antiguo, también el que está en ejecución. Guarda el estado previo en
 /var/lib/mydgx/serverize/.
 EOF
+  else
+    cat <<'EOF'
+Usage:
+  ./start.sh serverize [--audit]
+  sudo ./start.sh serverize --disable --confirm DISABLE-DESKTOP-SERVICES
+  sudo ./start.sh serverize --apply --confirm CONVERT-TO-HEADLESS-SERVER
+
+--audit  Only inventories packages/services and simulates APT. This is the default mode.
+--disable Disables the desktop and dispensable services without removing packages.
+--apply  Applies the verified plan, switches to multi-user.target, and removes the desktop.
+--keep PACKAGE  Also keeps this APT package. Can be repeated.
+
+--apply mode preserves network, SSH, Avahi/mDNS, NVIDIA, CUDA, Docker, Ollama,
+MyDGX and firmware, and packages that apps installed outside APT depend on
+in /home, /root, /opt, /usr/local and /srv. Of the kernels it keeps the two most recent and, if older,
+also the one that is running. Saves prior state in
+/var/lib/mydgx/serverize/.
+EOF
+  fi
 }
 
 fail() {
-  printf 'ERROR: %s\n' "$*" >&2
+  printf 'ERROR: %s\n' "$(pick "$@")" >&2
   exit 1
 }
 
@@ -67,13 +90,14 @@ while (($#)); do
       shift
       ;;
     --confirm)
-      (($# >= 2)) || fail "--confirm necesita un valor."
+      (($# >= 2)) || fail "--confirm necesita un valor." "--confirm requires a value."
       CONFIRMATION="$2"
       shift 2
       ;;
     --keep)
-      (($# >= 2)) || fail "--keep necesita un nombre de paquete."
-      [[ "$2" =~ ^[a-z0-9][a-z0-9+.-]+(:[a-z0-9]+)?$ ]] || fail "Nombre de paquete no válido: $2"
+      (($# >= 2)) || fail "--keep necesita un nombre de paquete." "--keep requires a package name."
+      [[ "$2" =~ ^[a-z0-9][a-z0-9+.-]+(:[a-z0-9]+)?$ ]] ||
+        fail "Nombre de paquete no válido: $2" "Invalid package name: $2"
       KEEP_PACKAGES+=("${2%%:*}")
       shift 2
       ;;
@@ -82,22 +106,26 @@ while (($#)); do
       exit 0
       ;;
     *)
-      fail "Opción no permitida: $1"
+      fail "Opción no permitida: $1" "Option not allowed: $1"
       ;;
   esac
 done
 
-[[ "$(uname -s)" == "Linux" ]] || fail "Esta operación solo está disponible en Linux."
+[[ "$(uname -s)" == "Linux" ]] ||
+  fail "Esta operación solo está disponible en Linux." "This operation is only available on Linux."
 for command in apt-get apt-mark dpkg dpkg-query systemctl awk grep sed sort find xargs \
     readelf ldconfig df python3; do
-  command -v "$command" >/dev/null 2>&1 || fail "Falta el comando requerido: $command"
+  command -v "$command" >/dev/null 2>&1 ||
+    fail "Falta el comando requerido: $command" "Required command not found: $command"
 done
-[[ -r /etc/os-release ]] || fail "No se pudo identificar el sistema operativo."
+[[ -r /etc/os-release ]] ||
+  fail "No se pudo identificar el sistema operativo." "Could not identify the operating system."
 # shellcheck disable=SC1091
 source /etc/os-release
 [[ "${ID:-}" == "ubuntu" || "${ID_LIKE:-}" == *debian* ]] ||
-  fail "Solo se admiten sistemas Ubuntu/Debian administrados por APT."
-[[ -d /run/systemd/system ]] || fail "systemd no está activo."
+  fail "Solo se admiten sistemas Ubuntu/Debian administrados por APT." \
+    "Only Ubuntu/Debian systems managed by APT are supported."
+[[ -d /run/systemd/system ]] || fail "systemd no está activo." "systemd is not active."
 
 installed_packages() {
   dpkg-query -W -f='${binary:Package}\t${db:Status-Abbrev}\n' 2>/dev/null |
@@ -157,7 +185,9 @@ load_mydgx_packages() {
       }
     ' "$DEPLOY_SCRIPT"
   )
-  ((count >= 10)) || fail "No se pudo leer la lista de dependencias de MyDGX en deploy.sh."
+  ((count >= 10)) ||
+    fail "No se pudo leer la lista de dependencias de MyDGX en deploy.sh." \
+      "Could not read MyDGX dependency list from deploy.sh."
 }
 
 paths_to_packages() {
@@ -362,27 +392,33 @@ collect_kernel_cleanup() {
 
 print_kernel_plan() {
   local release marker kept
-  printf '\nKernels instalados (%d). Se conservan los dos más recientes' \
+  printf "$(pick $'\\nKernels instalados (%d). Se conservan los dos más recientes' \
+    $'\\nInstalled kernels (%d). Keeping the two most recent')" \
     "${#KERNEL_RELEASES[@]}"
-  printf ' y el kernel en ejecución:\n'
+  printf "$(pick $' y el kernel en ejecución:\\n' $' and the running kernel:\\n')"
   if ((${#KERNEL_RELEASES[@]} == 0)); then
-    printf '  no hay imágenes de kernel empaquetadas\n'
+    printf "$(pick '  no hay imágenes de kernel empaquetadas\n' \
+      '  no packaged kernel images\n')"
     return 0
   fi
   for release in "${KERNEL_RELEASES[@]}"; do
-    marker="se eliminará"
+    marker="$(pick "se eliminará" "will remove")"
     for kept in "${KERNEL_KEEP_RELEASES[@]}"; do
-      [[ "$release" == "$kept" ]] && marker="se conserva"
+      [[ "$release" == "$kept" ]] && marker="$(pick "se conserva" "kept")"
     done
-    [[ "$release" == "$(uname -r)" ]] && marker="$marker, en ejecución"
+    if [[ "$release" == "$(uname -r)" ]]; then
+      marker="${marker}$(pick ", en ejecución" ", running")"
+    fi
     printf '  %s (%s)\n' "$release" "$marker"
   done
   if ((${#KERNEL_REMOVE_PACKAGES[@]})); then
-    printf 'Paquetes de kernels antiguos y sus dependencias de esa versión (%d):\n' \
+    printf "$(pick 'Paquetes de kernels antiguos y sus dependencias de esa versión (%d):\n' \
+      'Old kernel packages and dependencies for that version (%d):\n')" \
       "${#KERNEL_REMOVE_PACKAGES[@]}"
     printf '  %s\n' "${KERNEL_REMOVE_PACKAGES[@]}"
   else
-    printf 'No hay kernels anteriores a los que se conservan.\n'
+    printf "$(pick 'No hay kernels anteriores a los que se conservan.\n' \
+      'No kernels older than those being kept.\n')"
   fi
 }
 
@@ -396,9 +432,10 @@ guard_kernel_plan() {
       [[ "$package" == "$candidate" ]] && allowed=1
     done
     if [[ "$allowed" == "0" ]]; then
-      printf 'APT intentaría retirar un paquete ajeno a los kernels antiguos: %s\n' \
+      printf "$(pick 'APT intentaría retirar un paquete ajeno a los kernels antiguos: %s\n' \
+        'APT would remove a package unrelated to old kernels: %s\n')" \
         "$package" >&2
-      fail "Plan de kernels rechazado."
+      fail "Plan de kernels rechazado." "Kernel plan rejected."
     fi
   done < <(planned_removals "$plan_file")
 }
@@ -420,14 +457,17 @@ verify_kept_kernels() {
   local release running
   running="$(uname -r)"
   [[ -d "/lib/modules/$running" ]] ||
-    fail "Faltan los módulos del kernel en ejecución."
+    fail "Faltan los módulos del kernel en ejecución." "Running kernel modules are missing."
   [[ -f "/boot/vmlinuz-$running" && -f "/boot/initrd.img-$running" ]] ||
-    fail "Faltan vmlinuz o initrd del kernel en ejecución."
+    fail "Faltan vmlinuz o initrd del kernel en ejecución." \
+      "Running kernel vmlinuz or initrd is missing."
   kernel_image_installed "$running" ||
-    fail "El paquete del kernel en ejecución ya no está instalado."
+    fail "El paquete del kernel en ejecución ya no está instalado." \
+      "The running kernel package is no longer installed."
   for release in "${KERNEL_KEEP_RELEASES[@]}"; do
     kernel_image_installed "$release" ||
-      fail "Se retiró un kernel que debía conservarse: $release"
+      fail "Se retiró un kernel que debía conservarse: $release" \
+        "A kernel that should have been kept was removed: $release"
   done
 }
 
@@ -561,8 +601,10 @@ guard_removal_only() {
   local plan_file="$1" changes
   changes="$(awk '/^(Inst|Conf) / {print "  " $2}' "$plan_file" | sort -u)"
   if [[ -n "$changes" ]]; then
-    printf 'APT intentaría instalar o actualizar paquetes:\n%s\n' "$changes" >&2
-    fail "Plan rechazado: la conversión solo puede retirar paquetes."
+    printf "$(pick 'APT intentaría instalar o actualizar paquetes:\n%s\n' \
+      'APT would install or upgrade packages:\n%s\n')" "$changes" >&2
+    fail "Plan rechazado: la conversión solo puede retirar paquetes." \
+      "Plan rejected: conversion may only remove packages."
   fi
 }
 
@@ -577,9 +619,11 @@ guard_plan() {
     is_protected_package "$package" && protected+=("$package")
   done < <(planned_removals "$plan_file")
   if ((${#protected[@]})); then
-    printf 'APT intentaría retirar paquetes protegidos:\n' >&2
+    printf "$(pick 'APT intentaría retirar paquetes protegidos:\n' \
+      'APT would remove protected packages:\n')" >&2
     printf '  %s\n' "${protected[@]}" >&2
-    fail "Plan rechazado para preservar la funcionalidad actual."
+    fail "Plan rechazado para preservar la funcionalidad actual." \
+      "Plan rejected to preserve current functionality."
   fi
 }
 
@@ -587,7 +631,8 @@ print_services() {
   local unit
   for unit in "${SERVICE_CANDIDATES[@]}"; do
     if systemctl cat "$unit" >/dev/null 2>&1; then
-      printf '  %-32s activo=%-8s habilitado=%s\n' \
+      printf "$(pick '  %-32s activo=%-8s habilitado=%s\n' \
+        '  %-32s active=%-8s enabled=%s\n')" \
         "$unit" \
         "$(systemctl is-active "$unit" 2>/dev/null || true)" \
         "$(systemctl is-enabled "$unit" 2>/dev/null || true)"
@@ -602,45 +647,54 @@ audit() {
   collect_user_app_packages
   collect_candidates
   collect_kernel_cleanup
-  printf 'Sistema: %s %s · arquitectura %s\n' \
-    "${PRETTY_NAME:-${ID:-desconocido}}" "${VERSION_ID:-}" "$(dpkg --print-architecture)"
-  printf 'Target de arranque: %s\n' "$(systemctl get-default 2>/dev/null || true)"
-  printf '\nServicios de escritorio detectados:\n'
+  printf "$(pick 'Sistema: %s %s · arquitectura %s\n' 'System: %s %s · architecture %s\n')" \
+    "${PRETTY_NAME:-${ID:-$(pick "desconocido" "unknown")}}" "${VERSION_ID:-}" \
+    "$(dpkg --print-architecture)"
+  printf "$(pick 'Target de arranque: %s\n' 'Boot target: %s\n')" \
+    "$(systemctl get-default 2>/dev/null || true)"
+  printf "$(pick $'\\nServicios de escritorio detectados:\\n' \
+    $'\\nDetected desktop services:\\n')"
   print_services
 
-  printf '\nPaquetes APT candidatos (%d):\n' "${#APT_CANDIDATES[@]}"
+  printf "$(pick $'\\nPaquetes APT candidatos (%d):\\n' $'\\nAPT candidate packages (%d):\\n')" \
+    "${#APT_CANDIDATES[@]}"
   if ((${#APT_CANDIDATES[@]})); then
     printf '  %s\n' "${APT_CANDIDATES[@]}"
   fi
 
-  printf '\nDependencias de MyDGX protegidas: %d (deploy.sh y servicios)\n' \
+  printf "$(pick $'\\nDependencias de MyDGX protegidas: %d (deploy.sh y servicios)\\n' \
+    $'\\nProtected MyDGX dependencies: %d (deploy.sh and services)\\n')" \
     "${#MYDGX_PACKAGES[@]}"
-  printf 'Paquetes usados por aplicaciones fuera de APT y --keep: %d\n' \
+  printf "$(pick 'Paquetes usados por aplicaciones fuera de APT y --keep: %d\n' \
+    'Packages used by apps outside APT and --keep: %d\n')" \
     "${#USER_APP_PACKAGES[@]}"
   if ((${#USER_APP_PACKAGES[@]})); then
     printf '%s\n' "${!USER_APP_PACKAGES[@]}" | sort | sed 's/^/  /'
   fi
   if [[ "$EUID" -ne 0 ]]; then
-    printf '  AVISO: sin sudo no se leen los homes de otros usuarios ni /root.\n'
+    printf "$(pick '  AVISO: sin sudo no se leen los homes de otros usuarios ni /root.\n' \
+      '  WARNING: without sudo, other users'\'' homes and /root are not scanned.\n')"
   fi
 
-  printf '\nSnaps de escritorio candidatos:\n'
+  printf "$(pick $'\\nSnaps de escritorio candidatos:\\n' $'\\nCandidate desktop snaps:\\n')"
   for snap_name in "${DESKTOP_SNAPS[@]}"; do
     if snap_is_installed "$snap_name"; then
       printf '  %s\n' "$snap_name"
       found=1
     fi
   done
-  [[ "$found" == "1" ]] || printf '  ninguno\n'
-  printf 'Bases y temas snap que quedarían sin uso:\n'
+  [[ "$found" == "1" ]] || printf "$(pick '  ninguno\n' '  none\n')"
+  printf "$(pick 'Bases y temas snap que quedarían sin uso:\n' \
+    'Snap bases and themes that would be unused:\n')"
   mapfile -t snap_dependencies < <(unused_snap_dependencies)
   if ((${#snap_dependencies[@]})); then
     printf '  %s\n' "${snap_dependencies[@]}"
   else
-    printf '  ninguno\n'
+    printf "$(pick '  ninguno\n' '  none\n')"
   fi
   if has_workload_snaps; then
-    printf '  AVISO: se conservarán snapd y los snaps no relacionados con el escritorio.\n'
+    printf "$(pick '  AVISO: se conservarán snapd y los snaps no relacionados con el escritorio.\n' \
+      '  WARNING: snapd and non-desktop snaps will be kept.\n')"
   fi
 
   print_kernel_plan
@@ -648,7 +702,8 @@ audit() {
     kernel_plan_file="$(mktemp)"
     simulate_kernel_plan "$kernel_plan_file"
     guard_kernel_plan "$kernel_plan_file"
-    printf '\nSimulación de kernels validada: %s paquetes quedarían retirados.\n' \
+    printf "$(pick $'\\nSimulación de kernels validada: %s paquetes quedarían retirados.\\n' \
+      $'\\nKernel simulation validated: %s packages would be removed.\\n')" \
       "$(planned_removals "$kernel_plan_file" | wc -l | tr -d ' ')"
   fi
 
@@ -657,13 +712,16 @@ audit() {
     simulate_removal_plan "$plan_file"
     guard_plan "$plan_file"
     guard_removal_only "$plan_file"
-    printf '\nSimulación APT validada: %s paquetes quedarían retirados.\n' \
+    printf "$(pick $'\\nSimulación APT validada: %s paquetes quedarían retirados.\\n' \
+      $'\\nAPT simulation validated: %s packages would be removed.\\n')" \
       "$(planned_removals "$plan_file" | wc -l | tr -d ' ')"
     grep -E '^(Remv|Purg) |After this operation|Se liberarán|The following packages' \
       "$plan_file" || true
   fi
-  printf '\nAUDITORÍA SOLAMENTE: no se ha modificado el sistema.\n'
-  printf 'Para aplicar en otro momento: sudo ./start.sh serverize --apply --confirm CONVERT-TO-HEADLESS-SERVER\n'
+  printf "$(pick $'\\nAUDITORÍA SOLAMENTE: no se ha modificado el sistema.\\n' \
+    $'\\nAUDIT ONLY: the system was not modified.\\n')"
+  printf "$(pick 'Para aplicar en otro momento: sudo ./start.sh serverize --apply --confirm CONVERT-TO-HEADLESS-SERVER\n' \
+    'To apply later: sudo ./start.sh serverize --apply --confirm CONVERT-TO-HEADLESS-SERVER\n')"
 }
 
 save_state() {
@@ -699,7 +757,9 @@ verify_mydgx_packages() {
   local package status
   for package in "${MYDGX_INSTALLED_BEFORE[@]}"; do
     status="$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null || true)"
-    [[ "$status" == ii* ]] || fail "Se retiró una dependencia de MyDGX o de una aplicación instalada: $package"
+    [[ "$status" == ii* ]] ||
+      fail "Se retiró una dependencia de MyDGX o de una aplicación instalada: $package" \
+        "A MyDGX or installed-app dependency was removed: $package"
   done
 }
 
@@ -716,13 +776,18 @@ verify_preserved_services() {
   while read -r unit; do
     [[ -n "$unit" ]] || continue
     systemctl is-active --quiet "$unit" ||
-      fail "El servicio que estaba activo dejó de funcionar: $unit"
+      fail "El servicio que estaba activo dejó de funcionar: $unit" \
+        "A service that was active stopped working: $unit"
   done <"$before_file"
   verify_mydgx_packages
-  command -v nvidia-smi >/dev/null 2>&1 || fail "nvidia-smi dejó de estar disponible."
-  nvidia-smi >/dev/null || fail "El driver NVIDIA no responde tras la limpieza."
+  command -v nvidia-smi >/dev/null 2>&1 ||
+    fail "nvidia-smi dejó de estar disponible." "nvidia-smi is no longer available."
+  nvidia-smi >/dev/null ||
+    fail "El driver NVIDIA no responde tras la limpieza." \
+      "The NVIDIA driver does not respond after cleanup."
   [[ "$(systemctl get-default)" == "multi-user.target" ]] ||
-    fail "El target de arranque no quedó en modo servidor."
+    fail "El target de arranque no quedó en modo servidor." \
+      "The boot target is not in server mode."
 }
 
 require_text_session() {
@@ -734,7 +799,8 @@ require_text_session() {
     type="$(loginctl show-session "$session" -p Type --value 2>/dev/null || true)"
   fi
   [[ "$type" == "tty" ]] ||
-    fail "Ejecuta esta operación desde SSH o una consola TTY, no desde el escritorio (sesión: ${type:-desconocida})."
+    fail "Ejecuta esta operación desde SSH o una consola TTY, no desde el escritorio (sesión: ${type:-desconocida})." \
+      "Run this operation from SSH or a TTY console, not from the desktop (session: ${type:-unknown})."
 }
 
 record_preserved_services() {
@@ -825,7 +891,9 @@ capture_after_metrics() {
 write_change_report() {
   local operation="$1" timestamp="$2" state_dir="$3"
   local report_file temporary
-  [[ ! -L "$REPORT_DIR" ]] || fail "El directorio de informes no puede ser un enlace simbólico."
+  [[ ! -L "$REPORT_DIR" ]] ||
+    fail "El directorio de informes no puede ser un enlace simbólico." \
+      "The reports directory cannot be a symbolic link."
   install -d -m 0755 "$REPORT_DIR"
   report_file="$REPORT_DIR/serverize-$timestamp-$operation.json"
   temporary="$(mktemp "$REPORT_DIR/.serverize-report.XXXXXX")"
@@ -941,6 +1009,7 @@ PY
 
 format_bytes() {
   python3 - "$1" <<'PY'
+import os
 import sys
 
 value = max(int(sys.argv[1]), 0)
@@ -954,7 +1023,10 @@ for unit in units:
 if unit == "B":
     print(f"{int(size)} {unit}")
 else:
-    print(f"{size:.2f} {unit}".replace(".", ","))
+    formatted = f"{size:.2f} {unit}"
+    if os.environ.get("MYDGX_LANGUAGE") == "es":
+        formatted = formatted.replace(".", ",")
+    print(formatted)
 PY
 }
 
@@ -964,15 +1036,18 @@ print_change_summary() {
   disk_released=$((BEFORE_DISK_USED - AFTER_DISK_USED))
   ((memory_released > 0)) || memory_released=0
   ((disk_released > 0)) || disk_released=0
-  printf 'Has liberado %s de memoria RAM y %s de espacio en disco.\n' \
+  printf "$(pick 'Has liberado %s de memoria RAM y %s de espacio en disco.\n' \
+    'You freed %s of RAM and %s of disk space.\n')" \
     "$(format_bytes "$memory_released")" \
     "$(format_bytes "$disk_released")"
 }
 
 disable_only() {
-  [[ "$EUID" -eq 0 ]] || fail "--disable requiere root; usa sudo."
+  [[ "$EUID" -eq 0 ]] ||
+    fail "--disable requiere root; usa sudo." "--disable requires root; use sudo."
   [[ "$CONFIRMATION" == "DISABLE-DESKTOP-SERVICES" ]] ||
-    fail "Falta la confirmación literal: --confirm DISABLE-DESKTOP-SERVICES"
+    fail "Falta la confirmación literal: --confirm DISABLE-DESKTOP-SERVICES" \
+      "Missing literal confirmation: --confirm DISABLE-DESKTOP-SERVICES"
   require_text_session
   collect_candidates
   collect_kernel_cleanup
@@ -991,26 +1066,34 @@ disable_only() {
   capture_after_metrics
   kernel_report_fields 0
   write_change_report "disable" "$timestamp" "$state_dir"
-  printf 'Escritorio y servicios seleccionados desactivados sin desinstalar paquetes.\n'
+  printf "$(pick 'Escritorio y servicios seleccionados desactivados sin desinstalar paquetes.\n' \
+    'Desktop and selected services disabled without uninstalling packages.\n')"
   print_change_summary
-  printf 'Estado previo guardado en %s\n' "$state_dir"
-  printf 'Cambios de disco y memoria guardados en %s\n' "$CHANGE_REPORT_FILE"
-  printf 'No es necesario reiniciar: la memoria de los servicios detenidos ya queda libre.\n'
+  printf "$(pick 'Estado previo guardado en %s\n' 'Prior state saved in %s\n')" "$state_dir"
+  printf "$(pick 'Cambios de disco y memoria guardados en %s\n' \
+    'Disk and memory changes saved in %s\n')" "$CHANGE_REPORT_FILE"
+  printf "$(pick 'No es necesario reiniciar: la memoria de los servicios detenidos ya queda libre.\n' \
+    'No reboot needed: memory from stopped services is already free.\n')"
 }
 
 apply_plan() {
-  [[ "$EUID" -eq 0 ]] || fail "--apply requiere root; usa sudo."
+  [[ "$EUID" -eq 0 ]] ||
+    fail "--apply requiere root; usa sudo." "--apply requires root; use sudo."
   [[ "$CONFIRMATION" == "CONVERT-TO-HEADLESS-SERVER" ]] ||
-    fail "Falta la confirmación literal: --confirm CONVERT-TO-HEADLESS-SERVER"
+    fail "Falta la confirmación literal: --confirm CONVERT-TO-HEADLESS-SERVER" \
+      "Missing literal confirmation: --confirm CONVERT-TO-HEADLESS-SERVER"
   require_text_session
-  [[ -z "$(dpkg --audit 2>/dev/null)" ]] || fail "dpkg informa de paquetes incompletos."
-  apt-get check >/dev/null || fail "APT no está en un estado consistente."
+  [[ -z "$(dpkg --audit 2>/dev/null)" ]] ||
+    fail "dpkg informa de paquetes incompletos." "dpkg reports broken packages."
+  apt-get check >/dev/null ||
+    fail "APT no está en un estado consistente." "APT is not in a consistent state."
 
   collect_user_app_packages
   collect_candidates
   collect_kernel_cleanup
   if ((${#APT_CANDIDATES[@]} == 0 && ${#KERNEL_REMOVE_PACKAGES[@]} == 0)); then
-    fail "No hay paquetes de escritorio ni kernels antiguos que retirar."
+    fail "No hay paquetes de escritorio ni kernels antiguos que retirar." \
+      "There are no desktop packages or old kernels to remove."
   fi
   capture_before_metrics
 
@@ -1057,7 +1140,8 @@ apply_plan() {
     for snap_name in "${snap_dependencies[@]}"; do
       if snap_is_installed "$snap_name"; then
         snap remove "$snap_name" ||
-          printf 'AVISO: snapd no permitió retirar %s; se conserva.\n' "$snap_name" >&2
+          printf "$(pick 'AVISO: snapd no permitió retirar %s; se conserva.\n' \
+            'WARNING: snapd could not remove %s; keeping it.\n')" "$snap_name" >&2
       fi
     done
     remove_orphan_snap_cache
@@ -1078,7 +1162,8 @@ apply_plan() {
   capture_after_metrics
   kernel_report_fields 1
   write_change_report "apply" "$timestamp" "$state_dir"
-  printf 'Conversión terminada. Estado previo guardado en %s\n' "$state_dir"
+  printf "$(pick 'Conversión terminada. Estado previo guardado en %s\n' \
+    'Conversion finished. Prior state saved in %s\n')" "$state_dir"
   print_change_summary
   if ((${#KERNEL_REMOVE_RELEASES[@]})); then
     local release release_list="" kept_list=""
@@ -1088,13 +1173,15 @@ apply_plan() {
     for release in "${KERNEL_KEEP_RELEASES[@]}"; do
       kept_list="${kept_list:+$kept_list, }$release"
     done
-    printf 'Kernels retirados: %s\n' "$release_list"
-    printf 'Se conservan: %s\n' "$kept_list"
+    printf "$(pick 'Kernels retirados: %s\n' 'Kernels removed: %s\n')" "$release_list"
+    printf "$(pick 'Se conservan: %s\n' 'Kept: %s\n')" "$kept_list"
   else
-    printf 'No se retiró ningún kernel.\n'
+    printf "$(pick 'No se retiró ningún kernel.\n' 'No kernel was removed.\n')"
   fi
-  printf 'Cambios de disco y memoria guardados en %s\n' "$CHANGE_REPORT_FILE"
-  printf 'Reinicia cuando decidas verificar el arranque HDMI en consola.\n'
+  printf "$(pick 'Cambios de disco y memoria guardados en %s\n' \
+    'Disk and memory changes saved in %s\n')" "$CHANGE_REPORT_FILE"
+  printf "$(pick 'Reinicia cuando decidas verificar el arranque HDMI en consola.\n' \
+    'Reboot when you want to verify HDMI boot on the console.\n')"
 }
 
 load_mydgx_packages

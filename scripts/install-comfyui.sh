@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=lib/language.sh
+if [[ -f "$(dirname "${BASH_SOURCE[0]}")/lib/language.sh" ]]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/language.sh"
+else
+  pick() { if [[ "${MYDGX_LANGUAGE:-en}" == "es" ]]; then printf '%s' "$1"; else printf '%s' "${2:-$1}"; fi; }
+  say() { pick "$@"; printf '\n'; }
+fi
+
 APP_ROOT="${1:-}"
 COMFYUI_REF="${2:-46659e65e95920e5d29cae011b43b02699c0bfd3}"
 INSTALL_MODELS="${3:-1}"
@@ -10,21 +18,21 @@ VENV="$ROOT/venv"
 ENV_FILE="$ROOT/comfyui.env"
 
 fail() {
-  printf 'ERROR: %s\n' "$*" >&2
+  printf 'ERROR: %s\n' "$(pick "$@")" >&2
   exit 1
 }
 
 [[ -n "$APP_ROOT" && "$APP_ROOT" == /* && -x "$APP_ROOT/.venv/bin/python" ]] ||
-  fail "La instalación principal de MyDGX no está preparada."
-[[ "$COMFYUI_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Revisión de ComfyUI inválida."
-[[ "$INSTALL_MODELS" =~ ^[01]$ ]] || fail "Estado de modelos ComfyUI inválido."
-command -v git >/dev/null 2>&1 || fail "git no está instalado."
-command -v python3 >/dev/null 2>&1 || fail "python3 no está instalado."
+  fail "La instalación principal de MyDGX no está preparada." "The main MyDGX installation is not ready."
+[[ "$COMFYUI_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Revisión de ComfyUI inválida." "Invalid ComfyUI revision."
+[[ "$INSTALL_MODELS" =~ ^[01]$ ]] || fail "Estado de modelos ComfyUI inválido." "Invalid ComfyUI models state."
+command -v git >/dev/null 2>&1 || fail "git no está instalado." "git is not installed."
+command -v python3 >/dev/null 2>&1 || fail "python3 no está instalado." "python3 is not installed."
 
 mkdir -p "$ROOT"
 chmod 0700 "$ROOT"
 force_install="${MYDGX_FORCE_INSTALL:-0}"
-[[ "$force_install" =~ ^[01]$ ]] || fail "MYDGX_FORCE_INSTALL debe valer 0 o 1."
+[[ "$force_install" =~ ^[01]$ ]] || fail "MYDGX_FORCE_INSTALL debe valer 0 o 1." "MYDGX_FORCE_INSTALL must be 0 or 1."
 prepared=0
 if [[ "$force_install" == "0" &&
       -d "$SOURCE/.git" &&
@@ -47,7 +55,7 @@ if [[ "$force_install" == "0" &&
   ) || prepared=0
 fi
 if [[ "$prepared" == "1" ]]; then
-  echo "ComfyUI, su revisión y modelos solicitados ya están preparados; se omiten fetch e instalación."
+  say "ComfyUI, su revisión y modelos solicitados ya están preparados; se omiten fetch e instalación." "ComfyUI, its revision, and requested models are already prepared; skipping fetch and install."
 else
 if [[ ! -d "$SOURCE/.git" ]]; then
   rm -rf -- "$SOURCE"
@@ -84,13 +92,19 @@ if [[ ! -x "$VENV/bin/python" ||
   (
     cd "$SOURCE"
     "$VENV.new/bin/python" - <<'PY'
+import os
+
 import aiohttp
 import comfy
 import torch
 import transformers
 
 if not torch.cuda.is_available():
-    raise SystemExit("PyTorch no detecta CUDA para ComfyUI")
+    raise SystemExit(
+        "PyTorch no detecta CUDA para ComfyUI"
+        if os.environ.get("MYDGX_LANGUAGE") == "es"
+        else "PyTorch does not detect CUDA for ComfyUI"
+    )
 print(f"PyTorch {torch.__version__}: {torch.cuda.get_device_name(0)}")
 PY
   )
@@ -162,7 +176,11 @@ for repo_id, filename, destination, expected in downloads:
         shutil.copy2(cached, temporary)
     if sha256(temporary) != expected:
         temporary.unlink(missing_ok=True)
-        raise SystemExit(f"Checksum inválido para {filename}")
+        raise SystemExit(
+            f"Checksum inválido para {filename}"
+            if os.environ.get("MYDGX_LANGUAGE") == "es"
+            else f"Invalid checksum for {filename}"
+        )
     temporary.replace(destination)
 PY
 fi
@@ -186,4 +204,4 @@ install -m 0600 \
   "$APP_ROOT/config/comfyui/MyDGX-Wan-Video.json" \
   "$workflow_dir/MyDGX - Video Wan.json"
 "$VENV/bin/python" -c 'import torch; raise SystemExit(not torch.cuda.is_available())'
-printf 'ComfyUI preparado en %s para CUDA y GB10.\n' "$ROOT"
+say "ComfyUI preparado en $ROOT para CUDA y GB10." "ComfyUI ready at $ROOT for CUDA and GB10."

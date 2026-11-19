@@ -9,6 +9,15 @@
 # - Los secretos del gateway, si hacen falta, se pasan mediante el entorno.
 set -Eeuo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/language.sh
+if [[ -f "$ROOT/scripts/lib/language.sh" ]]; then
+  source "$ROOT/scripts/lib/language.sh"
+else
+  pick() { if [[ "${MYDGX_LANGUAGE:-en}" == "es" ]]; then printf '%s' "$1"; else printf '%s' "${2:-$1}"; fi; }
+  say() { pick "$@"; printf '\n'; }
+fi
+
 NATIVE_INSTALLER_URL="https://claude.ai/install.sh"
 
 claude_version() {
@@ -16,7 +25,7 @@ claude_version() {
 }
 
 if command -v claude >/dev/null 2>&1; then
-  printf 'Claude Code ya está instalado: %s\n' "$(claude_version)"
+  printf "$(pick 'Claude Code ya está instalado: %s\n' 'Claude Code is already installed: %s\n')" "$(claude_version)"
   exit 0
 fi
 
@@ -37,7 +46,8 @@ install_native() {
     actual="$(shasum -a 256 "$installer" | cut -d' ' -f1)"
   fi
   if [[ "$actual" != "$expected" ]]; then
-    printf 'ERROR: el instalador nativo no coincide con MYDGX_CLAUDE_INSTALLER_SHA256.\n' >&2
+    say "ERROR: el instalador nativo no coincide con MYDGX_CLAUDE_INSTALLER_SHA256." \
+      "ERROR: native installer does not match MYDGX_CLAUDE_INSTALLER_SHA256." >&2
     return 1
   fi
   bash "$installer"
@@ -62,7 +72,8 @@ elif command -v npm >/dev/null 2>&1; then
 elif install_native; then
   :
 else
-  printf 'ERROR: no se pudo instalar Claude Code. Instala Homebrew o Node.js/npm, o fija MYDGX_CLAUDE_INSTALLER_SHA256.\n' >&2
+  say "ERROR: no se pudo instalar Claude Code. Instala Homebrew o Node.js/npm, o fija MYDGX_CLAUDE_INSTALLER_SHA256." \
+    "ERROR: could not install Claude Code. Install Homebrew or Node.js/npm, or set MYDGX_CLAUDE_INSTALLER_SHA256." >&2
   exit 1
 fi
 
@@ -73,7 +84,8 @@ case ":$PATH:" in
 esac
 hash -r || true
 command -v claude >/dev/null 2>&1 || {
-  printf 'ERROR: Claude Code no quedó disponible en PATH. Añade ~/.local/bin y abre una terminal nueva.\n' >&2
+  say "ERROR: Claude Code no quedó disponible en PATH. Añade ~/.local/bin y abre una terminal nueva." \
+    "ERROR: Claude Code is not available on PATH. Add ~/.local/bin and open a new terminal." >&2
   exit 1
 }
-printf 'Claude Code instalado: %s\n' "$(claude_version)"
+printf "$(pick 'Claude Code instalado: %s\n' 'Claude Code installed: %s\n')" "$(claude_version)"

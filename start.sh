@@ -29,11 +29,14 @@ DGX_DISCOVERY_SCRIPT="$ROOT/scripts/discover-dgx.py"
 DGX_TRAY_ADD_SCRIPT="$ROOT/scripts/add-dgx-to-tray.py"
 SERVERIZE_SCRIPT="$ROOT/scripts/serverize-os.sh"
 
+# shellcheck source=scripts/lib/language.sh
+source "$ROOT/scripts/lib/language.sh"
+
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
 deploy() {
   [[ -f "$ROOT/deploy.sh" ]] || {
-    echo "No se encontró deploy.sh." >&2
+    say "No se encontró deploy.sh." "deploy.sh not found." >&2
     exit 1
   }
   exec bash "$ROOT/deploy.sh" "$@"
@@ -46,7 +49,7 @@ is_running() {
 ensure_env() {
   if [[ ! -f "$ROOT/.env" ]]; then
     cp "$ROOT/.env.example" "$ROOT/.env"
-    echo "Creado .env. Revisa sus valores antes de exponer MyDGX en la red."
+    say "Creado .env. Revisa sus valores antes de exponer MyDGX en la red." "Created .env. Review its values before exposing MyDGX on the network."
   fi
 }
 
@@ -54,17 +57,24 @@ setup() {
   ensure_env
   local force_setup="${MYDGX_FORCE_SETUP:-0}"
   [[ "$force_setup" =~ ^[01]$ ]] || {
-    echo "MYDGX_FORCE_SETUP debe valer 0 o 1." >&2
+    say "MYDGX_FORCE_SETUP debe valer 0 o 1." "MYDGX_FORCE_SETUP must be 0 or 1." >&2
     exit 2
   }
   command -v python3 >/dev/null 2>&1 || {
-    echo "MyDGX necesita Python 3.10 o posterior." >&2
+    say "MyDGX necesita Python 3.10 o posterior." "MyDGX requires Python 3.10 or later." >&2
     exit 1
   }
   python3 - <<'PY'
+import os
 import sys
+
+es = os.environ.get("MYDGX_LANGUAGE") == "es"
 if sys.version_info < (3, 10):
-    raise SystemExit("MyDGX necesita Python 3.10 o posterior.")
+    raise SystemExit(
+        "MyDGX necesita Python 3.10 o posterior."
+        if es
+        else "MyDGX requires Python 3.10 or later."
+    )
 PY
   local frontend_fingerprint current_frontend_fingerprint frontend_rebuild
   frontend_fingerprint="$(
@@ -100,19 +110,20 @@ PY
   fi
   if [[ "${MYDGX_USE_PREBUILT_FRONTEND:-0}" == "1" ]]; then
     [[ -f "$ROOT/frontend/dist/index.html" ]] || {
-      echo "No se encontró el frontend precompilado en frontend/dist." >&2
+      say "No se encontró el frontend precompilado en frontend/dist." "Prebuilt frontend not found in frontend/dist." >&2
       exit 1
     }
-    echo "Usando frontend precompilado."
+    say "Usando frontend precompilado." "Using prebuilt frontend."
     frontend_rebuild=0
   elif [[ "$frontend_rebuild" == "1" ]]; then
     command -v npm >/dev/null 2>&1 || {
-      echo "MyDGX necesita Node.js 20 o posterior y npm." >&2
+      say "MyDGX necesita Node.js 20 o posterior y npm." "MyDGX requires Node.js 20 or later and npm." >&2
       exit 1
     }
     node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
     if ((node_major < 20)); then
-      echo "MyDGX necesita Node.js 20 o posterior; detectado $(node --version)." >&2
+      local node_ver; node_ver="$(node --version)"
+      say "MyDGX necesita Node.js 20 o posterior; detectado $node_ver." "MyDGX requires Node.js 20 or later; detected $node_ver." >&2
       exit 1
     fi
 
@@ -137,17 +148,17 @@ PY
     if [[ "$force_setup" == "1" ||
           ! -d "$ROOT/frontend/node_modules" ||
           "$dependency_fingerprint" != "$installed_dependency_fingerprint" ]]; then
-      echo "Dependencias frontend modificadas; ejecutando npm ci."
+      say "Dependencias frontend modificadas; ejecutando npm ci." "Frontend dependencies changed; running npm ci."
       npm --prefix "$ROOT/frontend" ci
       printf '%s\n' "$dependency_fingerprint" >"$ROOT/frontend/node_modules/.mydgx-fingerprint"
     else
-      echo "Dependencias frontend sin cambios; omitiendo npm ci."
+      say "Dependencias frontend sin cambios; omitiendo npm ci." "Frontend dependencies unchanged; skipping npm ci."
     fi
     rm -rf -- "$ROOT/frontend/dist.new"
     npm --prefix "$ROOT/frontend" run build -- --outDir dist.new
     printf '%s\n' "$frontend_fingerprint" >"$ROOT/frontend/dist.new/.mydgx-fingerprint"
   else
-    echo "Frontend sin cambios; se omiten npm ci y compilación."
+    say "Frontend sin cambios; se omiten npm ci y compilación." "Frontend unchanged; skipping npm ci and build."
   fi
 
   local fingerprint current_fingerprint candidate previous rebuild
@@ -176,7 +187,7 @@ PY
 
   if [[ "$rebuild" == "1" ]]; then
     [[ ! -L "$VENV" && "$VENV" == "$ROOT/.venv" ]] || {
-      echo "No se reemplazará un entorno virtual enlazado o externo." >&2
+      say "No se reemplazará un entorno virtual enlazado o externo." "Will not replace a linked or external virtual environment." >&2
       exit 1
     }
     candidate="$ROOT/.venv.new"
@@ -229,8 +240,8 @@ PY
   [[ -z "${previous:-}" ]] || rm -rf -- "$previous"
   [[ -x "$VENV/bin/litellm" ]] &&
     "$PYTHON" -c 'import litellm' ||
-    { echo "No se pudo verificar el adaptador LiteLLM." >&2; exit 1; }
-  echo "MyDGX preparado."
+    { say "No se pudo verificar el adaptador LiteLLM." "Could not verify the LiteLLM adapter." >&2; exit 1; }
+  say "MyDGX preparado." "MyDGX ready."
 }
 
 runtime_value() {
@@ -253,7 +264,7 @@ PY
 serve() {
   ensure_env
   [[ -x "$PYTHON" && -f "$ROOT/frontend/dist/index.html" ]] || {
-    echo "MyDGX no está preparado. Ejecuta ./start.sh setup." >&2
+    say "MyDGX no está preparado. Ejecuta ./start.sh setup." "MyDGX is not set up. Run ./start.sh setup." >&2
     exit 1
   }
   local host port
@@ -266,11 +277,11 @@ serve() {
 serve_gateway() {
   ensure_env
   [[ -x "$PYTHON" ]] || {
-    echo "MyDGX no está preparado. Ejecuta ./start.sh setup." >&2
+    say "MyDGX no está preparado. Ejecuta ./start.sh setup." "MyDGX is not set up. Run ./start.sh setup." >&2
     exit 1
   }
   if [[ "$(cd "$ROOT" && gateway_value enabled)" != "True" ]]; then
-    echo "Gateway OpenAI desactivado."
+    say "Gateway OpenAI desactivado." "OpenAI Gateway disabled."
     return
   fi
   local gateway_host gateway_port
@@ -285,7 +296,7 @@ serve_comfyui() {
   local env_file="$root/comfyui.env"
   local python="$root/venv/bin/python"
   [[ -x "$python" && -f "$env_file" && -f "$root/enabled" ]] || {
-    echo "ComfyUI no está instalado." >&2
+    say "ComfyUI no está instalado." "ComfyUI is not installed." >&2
     exit 1
   }
   set -a
@@ -304,11 +315,13 @@ wait_ready() {
   host="$(cd "$ROOT" && runtime_value host)"
   port="$(cd "$ROOT" && runtime_value port)"
   "$PYTHON" - "$host" "$port" <<'PY'
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 
+es = os.environ.get("MYDGX_LANGUAGE") == "es"
 host = sys.argv[1]
 if host == "0.0.0.0":
     host = "127.0.0.1"
@@ -324,7 +337,11 @@ for _ in range(600):
                 raise SystemExit(0)
     except (OSError, urllib.error.URLError):
         time.sleep(1)
-raise SystemExit("MyDGX no respondió durante el arranque.")
+raise SystemExit(
+    "MyDGX no respondió durante el arranque."
+    if es
+    else "MyDGX did not respond during startup."
+)
 PY
 }
 
@@ -351,7 +368,7 @@ systemd_action() {
   for unit in "${units[@]}"; do
     if [[ "$action" != "stop" && "$unit" != mydgx && "$unit" != mydgx-gateway ]] &&
        ! systemctl is-enabled --quiet "$unit.service"; then
-      echo "$unit está desactivado; se deja detenido."
+      say "$unit está desactivado; se deja detenido." "$unit is disabled; leaving stopped."
       continue
     fi
     sudo -n systemctl "$action" "$unit"
@@ -362,7 +379,7 @@ start_searxng() {
   if [[ ! -x "$SEARXNG_RUNNER" ||
         ! -f "$SEARXNG_ROOT/enabled" ||
         ! -f "$SEARXNG_ROOT/settings.yml" ]]; then
-    echo "SearXNG no está instalado."
+    say "SearXNG no está instalado." "SearXNG is not installed."
     return
   fi
   "$SEARXNG_RUNNER" start "$SEARXNG_ROOT"
@@ -372,18 +389,19 @@ start_searxng() {
     fi
     sleep 1
   done
-  echo "SearXNG no respondió en el puerto 8888." >&2
+  say "SearXNG no respondió en el puerto 8888." "SearXNG did not respond on port 8888." >&2
   exit 1
 }
 
 start_gateway() {
   if [[ "$(cd "$ROOT" && gateway_value enabled)" != "True" ]]; then
     stop_process "$GATEWAY_PID" "Gateway OpenAI"
-    echo "Gateway OpenAI desactivado."
+    say "Gateway OpenAI desactivado." "OpenAI Gateway disabled."
     return
   fi
   if is_running "$GATEWAY_PID"; then
-    echo "Gateway OpenAI ya está ejecutándose (PID $(cat "$GATEWAY_PID"))."
+    local gw_pid; gw_pid="$(cat "$GATEWAY_PID")"
+    say "Gateway OpenAI ya está ejecutándose (PID $gw_pid)." "OpenAI Gateway is already running (PID $gw_pid)."
     return
   fi
   local gateway_host gateway_port
@@ -396,9 +414,9 @@ start_gateway() {
   )
   sleep 1
   if is_running "$GATEWAY_PID"; then
-    echo "Gateway OpenAI iniciado en http://$gateway_host:$gateway_port/v1"
+    say "Gateway OpenAI iniciado en http://$gateway_host:$gateway_port/v1" "OpenAI Gateway started at http://$gateway_host:$gateway_port/v1"
   else
-    echo "El gateway OpenAI no pudo arrancar. Consulta $GATEWAY_LOG_FILE" >&2
+    say "El gateway OpenAI no pudo arrancar. Consulta $GATEWAY_LOG_FILE" "OpenAI Gateway failed to start. See $GATEWAY_LOG_FILE" >&2
     exit 1
   fi
 }
@@ -409,11 +427,12 @@ start_openwebui() {
   local env_file="$root/open-webui.env"
   if [[ ! -x "$executable" || ! -f "$env_file" ]]; then
     stop_process "$OPENWEBUI_PID" "Open WebUI"
-    echo "Open WebUI no está instalado."
+    say "Open WebUI no está instalado." "Open WebUI is not installed."
     return
   fi
   if is_running "$OPENWEBUI_PID"; then
-    echo "Open WebUI ya está ejecutándose (PID $(cat "$OPENWEBUI_PID"))."
+    local ow_pid; ow_pid="$(cat "$OPENWEBUI_PID")"
+    say "Open WebUI ya está ejecutándose (PID $ow_pid)." "Open WebUI is already running (PID $ow_pid)."
     return
   fi
   (
@@ -427,9 +446,9 @@ start_openwebui() {
   )
   sleep 1
   if is_running "$OPENWEBUI_PID"; then
-    echo "Open WebUI iniciado en http://127.0.0.1:3000"
+    say "Open WebUI iniciado en http://127.0.0.1:3000" "Open WebUI started at http://127.0.0.1:3000"
   else
-    echo "Open WebUI no pudo arrancar. Consulta $OPENWEBUI_LOG_FILE" >&2
+    say "Open WebUI no pudo arrancar. Consulta $OPENWEBUI_LOG_FILE" "Open WebUI failed to start. See $OPENWEBUI_LOG_FILE" >&2
     exit 1
   fi
 }
@@ -440,15 +459,16 @@ start_comfyui() {
         ! -f "$root/comfyui.env" ||
         ! -f "$root/enabled" ]]; then
     stop_process "$COMFYUI_PID" "ComfyUI"
-    echo "ComfyUI no está instalado."
+    say "ComfyUI no está instalado." "ComfyUI is not installed."
     return
   fi
   if curl -fsS http://127.0.0.1:8188/system_stats >/dev/null 2>&1; then
-    echo "ComfyUI ya está disponible en http://127.0.0.1:8188"
+    say "ComfyUI ya está disponible en http://127.0.0.1:8188" "ComfyUI is already available at http://127.0.0.1:8188"
     return
   fi
   if is_running "$COMFYUI_PID"; then
-    echo "ComfyUI ya está ejecutándose (PID $(cat "$COMFYUI_PID"))."
+    local cf_pid; cf_pid="$(cat "$COMFYUI_PID")"
+    say "ComfyUI ya está ejecutándose (PID $cf_pid)." "ComfyUI is already running (PID $cf_pid)."
     return
   fi
   (
@@ -458,27 +478,28 @@ start_comfyui() {
   )
   for _ in {1..180}; do
     curl -fsS http://127.0.0.1:8188/system_stats >/dev/null 2>&1 && {
-      echo "ComfyUI iniciado en http://127.0.0.1:8188"
+      say "ComfyUI iniciado en http://127.0.0.1:8188" "ComfyUI started at http://127.0.0.1:8188"
       return
     }
     sleep 1
   done
-  echo "ComfyUI no pudo arrancar. Consulta $COMFYUI_LOG_FILE" >&2
+  say "ComfyUI no pudo arrancar. Consulta $COMFYUI_LOG_FILE" "ComfyUI failed to start. See $COMFYUI_LOG_FILE" >&2
   exit 1
 }
 
 start_ollama() {
   command -v ollama >/dev/null 2>&1 || {
     stop_process "$OLLAMA_PID" "Ollama"
-    echo "Ollama no está instalado."
+    say "Ollama no está instalado." "Ollama is not installed."
     return
   }
   if curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
-    echo "Ollama ya está disponible en http://127.0.0.1:11434"
+    say "Ollama ya está disponible en http://127.0.0.1:11434" "Ollama is already available at http://127.0.0.1:11434"
     return
   fi
   if is_running "$OLLAMA_PID"; then
-    echo "Ollama ya está ejecutándose (PID $(cat "$OLLAMA_PID"))."
+    local ol_pid; ol_pid="$(cat "$OLLAMA_PID")"
+    say "Ollama ya está ejecutándose (PID $ol_pid)." "Ollama is already running (PID $ol_pid)."
     return
   fi
   (
@@ -488,9 +509,9 @@ start_ollama() {
   )
   sleep 2
   if curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
-    echo "Ollama iniciado en http://127.0.0.1:11434"
+    say "Ollama iniciado en http://127.0.0.1:11434" "Ollama started at http://127.0.0.1:11434"
   else
-    echo "Ollama no pudo arrancar. Consulta $OLLAMA_LOG_FILE" >&2
+    say "Ollama no pudo arrancar. Consulta $OLLAMA_LOG_FILE" "Ollama failed to start. See $OLLAMA_LOG_FILE" >&2
     exit 1
   fi
 }
@@ -502,11 +523,12 @@ start_whisper() {
   local env_file="$root/whisper.env"
   if [[ ! -x "$executable" || ! -f "$env_file" || ! -f "$root/server.py" ]]; then
     stop_process "$WHISPER_PID" "Whisper"
-    echo "Whisper nativo no está instalado."
+    say "Whisper nativo no está instalado." "Native Whisper is not installed."
     return
   fi
   if is_running "$WHISPER_PID"; then
-    echo "Whisper ya está ejecutándose (PID $(cat "$WHISPER_PID"))."
+    local wh_pid; wh_pid="$(cat "$WHISPER_PID")"
+    say "Whisper ya está ejecutándose (PID $wh_pid)." "Whisper is already running (PID $wh_pid)."
     return
   fi
   (
@@ -519,9 +541,9 @@ start_whisper() {
   )
   sleep 2
   if is_running "$WHISPER_PID"; then
-    echo "Whisper iniciado en http://127.0.0.1:9000"
+    say "Whisper iniciado en http://127.0.0.1:9000" "Whisper started at http://127.0.0.1:9000"
   else
-    echo "Whisper no pudo arrancar. Consulta $WHISPER_LOG_FILE" >&2
+    say "Whisper no pudo arrancar. Consulta $WHISPER_LOG_FILE" "Whisper failed to start. See $WHISPER_LOG_FILE" >&2
     exit 1
   fi
 }
@@ -529,11 +551,11 @@ start_whisper() {
 engine_action() {
   local engine="${1:-}" action="${2:-}"
   [[ "$engine" == "comfyui" || "$engine" == "whisper" || "$engine" == "searxng" ]] || {
-    echo "Motor opcional no gestionable: $engine" >&2
+    say "Motor opcional no gestionable: $engine" "Unmanageable optional engine: $engine" >&2
     exit 2
   }
   [[ "$action" == "start" || "$action" == "stop" ]] || {
-    echo "Acción de motor no permitida: $action" >&2
+    say "Acción de motor no permitida: $action" "Engine action not allowed: $action" >&2
     exit 2
   }
   local unit=""
@@ -566,7 +588,8 @@ start() {
     npm --prefix "$ROOT/frontend" run build
   fi
   if is_running "$PID_FILE"; then
-    echo "MyDGX ya está ejecutándose (PID $(cat "$PID_FILE"))."
+    local mydgx_pid; mydgx_pid="$(cat "$PID_FILE")"
+    say "MyDGX ya está ejecutándose (PID $mydgx_pid)." "MyDGX is already running (PID $mydgx_pid)."
     start_ollama
     start_gateway
     start_searxng
@@ -585,7 +608,7 @@ start() {
   )
   sleep 1
   if is_running "$PID_FILE"; then
-    echo "MyDGX iniciado en http://$host:$port"
+    say "MyDGX iniciado en http://$host:$port" "MyDGX started at http://$host:$port"
     start_ollama
     start_gateway
     start_searxng
@@ -593,7 +616,7 @@ start() {
     start_openwebui
     start_whisper
   else
-    echo "MyDGX no pudo arrancar. Consulta $LOG_FILE" >&2
+    say "MyDGX no pudo arrancar. Consulta $LOG_FILE" "MyDGX failed to start. See $LOG_FILE" >&2
     exit 1
   fi
 }
@@ -604,7 +627,7 @@ dev() {
     setup
   fi
   if is_running "$PID_FILE" || is_running "$DEV_WEB_PID"; then
-    echo "Ya hay un proceso MyDGX activo. Ejecuta ./start.sh stop." >&2
+    say "Ya hay un proceso MyDGX activo. Ejecuta ./start.sh stop." "A MyDGX process is already active. Run ./start.sh stop." >&2
     exit 1
   fi
   (
@@ -615,7 +638,7 @@ dev() {
     echo $! >"$DEV_WEB_PID"
   )
   start_gateway
-  echo "Desarrollo: http://127.0.0.1:5173"
+  say "Desarrollo: http://127.0.0.1:5173" "Development: http://127.0.0.1:5173"
 }
 
 stop_process() {
@@ -629,7 +652,7 @@ stop_process() {
       sleep 0.2
     done
     kill -9 "$pid" 2>/dev/null || true
-    echo "$label detenido."
+    say "$label detenido." "$label stopped."
   fi
   rm -f "$file"
 }
@@ -655,87 +678,113 @@ system_identity() {
 import os
 from backend.main import device_identity, os_information
 
+es = os.environ.get("MYDGX_LANGUAGE") == "es"
 device = device_identity()
 system = os_information()
-platform = (
-    f"DGX Spark / GB10 — {device['device_model']}"
-    if device["is_dgx_spark"]
-    else f"No detectado como DGX Spark — {device['device_model']}"
-)
+if device["is_dgx_spark"]:
+    platform = f"DGX Spark / GB10 — {device['device_model']}"
+else:
+    platform = (
+        f"No detectado como DGX Spark — {device['device_model']}"
+        if es
+        else f"Not detected as DGX Spark — {device['device_model']}"
+    )
 os_label = "NVIDIA DGX OS" if system["is_dgx_os"] else system["os_family"]
-print(f"Plataforma: {platform}")
-print(f"Sistema operativo: {os_label} — {system['os_name']}")
-print(f"Kernel/arquitectura: {system['kernel']} / {os.uname().machine}")
+if es:
+    print(f"Plataforma: {platform}")
+    print(f"Sistema operativo: {os_label} — {system['os_name']}")
+    print(f"Kernel/arquitectura: {system['kernel']} / {os.uname().machine}")
+else:
+    print(f"Platform: {platform}")
+    print(f"Operating system: {os_label} — {system['os_name']}")
+    print(f"Kernel/architecture: {system['kernel']} / {os.uname().machine}")
 PY
     )
   else
-    echo "Plataforma: no disponible (MyDGX todavía no está instalado)."
-    echo "Sistema operativo: $(uname -s) — kernel $(uname -r) / $(uname -m)"
+    say "Plataforma: no disponible (MyDGX todavía no está instalado)." "Platform: unavailable (MyDGX is not installed yet)."
+    local uname_s uname_r uname_m
+    uname_s="$(uname -s)"
+    uname_r="$(uname -r)"
+    uname_m="$(uname -m)"
+    say "Sistema operativo: $uname_s — kernel $uname_r / $uname_m" "Operating system: $uname_s — kernel $uname_r / $uname_m"
   fi
 }
 
 status() {
+  local state pid
   system_identity
   if systemd_installed; then
-    echo "Servicio MyDGX: $(systemctl is-active mydgx.service 2>/dev/null || true) · $(systemctl is-enabled mydgx.service 2>/dev/null || true)"
-    echo "Servicio Gateway: $(systemctl is-active mydgx-gateway.service 2>/dev/null || true) · $(systemctl is-enabled mydgx-gateway.service 2>/dev/null || true)"
+    state="$(systemctl is-active mydgx.service 2>/dev/null || true) · $(systemctl is-enabled mydgx.service 2>/dev/null || true)"
+    say "Servicio MyDGX: $state" "MyDGX service: $state"
+    state="$(systemctl is-active mydgx-gateway.service 2>/dev/null || true) · $(systemctl is-enabled mydgx-gateway.service 2>/dev/null || true)"
+    say "Servicio Gateway: $state" "Gateway service: $state"
     if [[ -f /etc/systemd/system/open-webui.service ]]; then
-      echo "Servicio Open WebUI: $(systemctl is-active open-webui.service 2>/dev/null || true) · $(systemctl is-enabled open-webui.service 2>/dev/null || true)"
+      state="$(systemctl is-active open-webui.service 2>/dev/null || true) · $(systemctl is-enabled open-webui.service 2>/dev/null || true)"
+      say "Servicio Open WebUI: $state" "Open WebUI service: $state"
     fi
     if [[ -f /etc/systemd/system/mydgx-searxng.service ]]; then
-      echo "Servicio SearXNG: $(systemctl is-active mydgx-searxng.service 2>/dev/null || true) · $(systemctl is-enabled mydgx-searxng.service 2>/dev/null || true)"
+      state="$(systemctl is-active mydgx-searxng.service 2>/dev/null || true) · $(systemctl is-enabled mydgx-searxng.service 2>/dev/null || true)"
+      say "Servicio SearXNG: $state" "SearXNG service: $state"
     fi
     if [[ -f /etc/systemd/system/mydgx-comfyui.service ]]; then
-      echo "Servicio ComfyUI: $(systemctl is-active mydgx-comfyui.service 2>/dev/null || true) · $(systemctl is-enabled mydgx-comfyui.service 2>/dev/null || true)"
+      state="$(systemctl is-active mydgx-comfyui.service 2>/dev/null || true) · $(systemctl is-enabled mydgx-comfyui.service 2>/dev/null || true)"
+      say "Servicio ComfyUI: $state" "ComfyUI service: $state"
     fi
     if [[ -f /etc/systemd/system/mydgx-whisper.service ]]; then
-      echo "Servicio Whisper: $(systemctl is-active mydgx-whisper.service 2>/dev/null || true) · $(systemctl is-enabled mydgx-whisper.service 2>/dev/null || true)"
+      state="$(systemctl is-active mydgx-whisper.service 2>/dev/null || true) · $(systemctl is-enabled mydgx-whisper.service 2>/dev/null || true)"
+      say "Servicio Whisper: $state" "Whisper service: $state"
     fi
-    echo "Integridad de arranque: $(systemctl is-active mydgx-repair.service 2>/dev/null || true)"
+    state="$(systemctl is-active mydgx-repair.service 2>/dev/null || true)"
+    say "Integridad de arranque: $state" "Boot integrity: $state"
     return
   fi
   if is_running "$PID_FILE"; then
-    echo "MyDGX activo (PID $(cat "$PID_FILE"))."
+    pid="$(cat "$PID_FILE")"
+    say "MyDGX activo (PID $pid)." "MyDGX running (PID $pid)."
   else
-    echo "MyDGX detenido."
+    say "MyDGX detenido." "MyDGX stopped."
     rm -f "$PID_FILE"
   fi
   if is_running "$DEV_WEB_PID"; then
-    echo "Frontend de desarrollo activo (PID $(cat "$DEV_WEB_PID"))."
+    pid="$(cat "$DEV_WEB_PID")"
+    say "Frontend de desarrollo activo (PID $pid)." "Development frontend running (PID $pid)."
   fi
   if is_running "$GATEWAY_PID"; then
-    echo "Gateway OpenAI activo (PID $(cat "$GATEWAY_PID"))."
+    pid="$(cat "$GATEWAY_PID")"
+    say "Gateway OpenAI activo (PID $pid)." "OpenAI Gateway running (PID $pid)."
   else
-    echo "Gateway OpenAI detenido."
+    say "Gateway OpenAI detenido." "OpenAI Gateway stopped."
     rm -f "$GATEWAY_PID"
   fi
   if is_running "$OPENWEBUI_PID"; then
-    echo "Open WebUI activo (PID $(cat "$OPENWEBUI_PID"))."
+    pid="$(cat "$OPENWEBUI_PID")"
+    say "Open WebUI activo (PID $pid)." "Open WebUI running (PID $pid)."
   else
-    echo "Open WebUI detenido."
+    say "Open WebUI detenido." "Open WebUI stopped."
     rm -f "$OPENWEBUI_PID"
   fi
   if curl -fsS "http://127.0.0.1:8888/search?q=DGX&format=json" >/dev/null 2>&1; then
-    echo "SearXNG disponible."
+    say "SearXNG disponible." "SearXNG available."
   else
-    echo "SearXNG detenido."
+    say "SearXNG detenido." "SearXNG stopped."
   fi
   if curl -fsS http://127.0.0.1:8188/system_stats >/dev/null 2>&1; then
-    echo "ComfyUI disponible."
+    say "ComfyUI disponible." "ComfyUI available."
   else
-    echo "ComfyUI detenido."
+    say "ComfyUI detenido." "ComfyUI stopped."
     rm -f "$COMFYUI_PID"
   fi
   if is_running "$WHISPER_PID"; then
-    echo "Whisper activo (PID $(cat "$WHISPER_PID"))."
+    pid="$(cat "$WHISPER_PID")"
+    say "Whisper activo (PID $pid)." "Whisper running (PID $pid)."
   else
-    echo "Whisper detenido."
+    say "Whisper detenido." "Whisper stopped."
     rm -f "$WHISPER_PID"
   fi
   if curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
-    echo "Ollama disponible."
+    say "Ollama disponible." "Ollama available."
   else
-    echo "Ollama detenido."
+    say "Ollama detenido." "Ollama stopped."
     rm -f "$OLLAMA_PID"
   fi
 }
@@ -756,19 +805,19 @@ logs() {
 autodiscover_health_config() {
   local config="$1" discovered host port identity="" known_hosts private pub fingerprint
   [[ -f "$DGX_DISCOVERY_SCRIPT" ]] || {
-    echo "No se encontró el descubridor DGX: $DGX_DISCOVERY_SCRIPT" >&2
+    say "No se encontró el descubridor DGX: $DGX_DISCOVERY_SCRIPT" "DGX discovery tool not found: $DGX_DISCOVERY_SCRIPT" >&2
     return 1
   }
   discovered="$(python3 "$DGX_DISCOVERY_SCRIPT")" || return
   IFS=$'\t' read -r host port <<<"$discovered"
   [[ "$host" =~ ^[A-Za-z0-9._:-]+$ && "$port" =~ ^[0-9]+$ ]] || {
-    echo "El descubrimiento devolvió un destino no válido." >&2
+    say "El descubrimiento devolvió un destino no válido." "Discovery returned an invalid target." >&2
     return 1
   }
 
   if [[ ! -f "$config" ]]; then
     [[ -f "$DGX_TEST_CONFIG_EXAMPLE" ]] || {
-      echo "No se encontró la plantilla: $DGX_TEST_CONFIG_EXAMPLE" >&2
+      say "No se encontró la plantilla: $DGX_TEST_CONFIG_EXAMPLE" "Template not found: $DGX_TEST_CONFIG_EXAMPLE" >&2
       return 1
     }
     umask 077
@@ -776,7 +825,7 @@ autodiscover_health_config() {
     cp "$DGX_TEST_CONFIG_EXAMPLE" "$config"
   fi
   [[ ! -L "$config" && -f "$config" ]] || {
-    echo "La configuración debe ser un archivo regular, no un enlace simbólico." >&2
+    say "La configuración debe ser un archivo regular, no un enlace simbólico." "Configuration must be a regular file, not a symbolic link." >&2
     return 1
   }
 
@@ -846,24 +895,24 @@ temporary.chmod(0o600)
 os.replace(temporary, path)
 PY
   chmod 600 "$config"
-  printf 'DGX encontrado: %s:%s\n' "$host" "$port"
-  [[ -z "${fingerprint:-}" ]] || printf 'Huella SSH observada: %s\n' "$fingerprint"
+  say "DGX encontrado: $host:$port" "DGX found: $host:$port"
+  [[ -z "${fingerprint:-}" ]] || say "Huella SSH observada: $fingerprint" "SSH fingerprint observed: $fingerprint"
   if [[ -n "$identity" ]]; then
-    printf 'Clave SSH verificada y configurada: %s\n' "$identity"
+    say "Clave SSH verificada y configurada: $identity" "SSH key verified and configured: $identity"
   else
-    printf '%s\n' "No se encontró una clave SSH autorizada; usa --interactive o configura DGX_IDENTITY."
+    say "No se encontró una clave SSH autorizada; usa --interactive o configura DGX_IDENTITY." "No authorized SSH key found; use --interactive or set DGX_IDENTITY."
   fi
-  printf 'Configuración actualizada: %s\n' "$config"
+  say "Configuración actualizada: $config" "Configuration updated: $config"
 }
 
 add_health_config_to_tray() {
   local config="$1" connection host port identity result status alias
   [[ "$(uname -s)" == "Darwin" ]] || {
-    echo "--add-to-tray solo está disponible en macOS." >&2
+    say "--add-to-tray solo está disponible en macOS." "--add-to-tray is only available on macOS." >&2
     return 2
   }
   [[ -f "$DGX_TRAY_ADD_SCRIPT" ]] || {
-    echo "No se encontró el configurador del Tray: $DGX_TRAY_ADD_SCRIPT" >&2
+    say "No se encontró el configurador del Tray: $DGX_TRAY_ADD_SCRIPT" "Tray configurator not found: $DGX_TRAY_ADD_SCRIPT" >&2
     return 1
   }
   connection="$(
@@ -888,36 +937,36 @@ PY
   )"
   IFS=$'\t' read -r host port identity <<<"$connection"
   [[ -n "$host" && "$port" =~ ^[0-9]+$ ]] || {
-    echo "La configuración descubierta no contiene un destino SSH válido." >&2
+    say "La configuración descubierta no contiene un destino SSH válido." "Discovered configuration does not contain a valid SSH target." >&2
     return 1
   }
   [[ -n "$identity" ]] || {
-    echo "No se añade al Tray: ninguna clave SSH existente pudo autenticar el equipo." >&2
+    say "No se añade al Tray: ninguna clave SSH existente pudo autenticar el equipo." "Not adding to Tray: no existing SSH key could authenticate to the host." >&2
     return 1
   }
 
   result="$(python3 "$DGX_TRAY_ADD_SCRIPT" "$host" "$port" "$identity" "$ROOT")" || return
   IFS=$'\t' read -r status alias _ <<<"$result"
   if [[ "$status" == "existing" ]]; then
-    printf 'El equipo ya existe en MyDGX Tray: %s\n' "$alias"
+    say "El equipo ya existe en MyDGX Tray: $alias" "Host already exists in MyDGX Tray: $alias"
     return
   fi
   [[ "$status" == "added" ]] || {
-    echo "El configurador del Tray devolvió un resultado inesperado." >&2
+    say "El configurador del Tray devolvió un resultado inesperado." "Tray configurator returned an unexpected result." >&2
     return 1
   }
-  printf 'Equipo añadido a MyDGX Tray: %s\n' "$alias"
+  say "Equipo añadido a MyDGX Tray: $alias" "Host added to MyDGX Tray: $alias"
   if command -v open >/dev/null 2>&1; then
     pkill -x MyDGXTray >/dev/null 2>&1 || true
     sleep 1
     open -a MyDGXTray >/dev/null 2>&1 ||
-      echo "Perfil guardado; abre MyDGXTray manualmente para cargarlo." >&2
+      say "Perfil guardado; abre MyDGXTray manualmente para cargarlo." "Profile saved; open MyDGXTray manually to load it." >&2
   fi
 }
 
 health_test() {
   [[ -x "$DGX_TEST_SCRIPT" ]] || {
-    echo "No se encontró el health check ejecutable: $DGX_TEST_SCRIPT" >&2
+    say "No se encontró el health check ejecutable: $DGX_TEST_SCRIPT" "Health check executable not found: $DGX_TEST_SCRIPT" >&2
     exit 1
   }
 
@@ -930,7 +979,7 @@ health_test() {
     user="${target%%@*}"
     host="${target#*@}"
     [[ -n "$user" && -n "$host" && "$host" != "$target" ]] || {
-      echo "Destino inválido. Usa USUARIO@HOST, por ejemplo root@192.168.1.100." >&2
+      say "Destino inválido. Usa USUARIO@HOST, por ejemplo root@192.168.1.100." "Invalid target. Use USER@HOST, for example root@192.168.1.100." >&2
       exit 2
     }
     translated+=(--user "$user" --host "$host")
@@ -941,7 +990,7 @@ health_test() {
     case "$1" in
       -p)
         [[ $# -ge 2 ]] || {
-          echo "-p necesita un puerto." >&2
+          say "-p necesita un puerto." "-p requires a port." >&2
           exit 2
         }
         translated+=(--port "$2")
@@ -993,11 +1042,11 @@ health_test() {
     config_path="${config_path:-${MYDGX_DGX_TEST_CONFIG:-$DGX_TEST_CONFIG}}"
     autodiscover_health_config "$config_path"
     [[ "$add_to_tray" == "0" ]] || add_health_config_to_tray "$config_path"
-    echo "Ejecuta ahora: ./start.sh test --config \"$config_path\""
+    say "Ejecuta ahora: ./start.sh test --config \"$config_path\"" "Run now: ./start.sh test --config \"$config_path\""
     exit 0
   fi
   if [[ "$add_to_tray" == "1" ]]; then
-    echo "--add-to-tray requiere --autodiscover." >&2
+    say "--add-to-tray requiere --autodiscover." "--add-to-tray requires --autodiscover." >&2
     exit 2
   fi
 
@@ -1012,23 +1061,23 @@ health_test() {
   local config="${MYDGX_DGX_TEST_CONFIG:-$DGX_TEST_CONFIG}"
   if [[ ! -f "$config" ]]; then
     if [[ -n "${MYDGX_DGX_TEST_CONFIG:-}" ]]; then
-      echo "No se encontró MYDGX_DGX_TEST_CONFIG: $config" >&2
+      say "No se encontró MYDGX_DGX_TEST_CONFIG: $config" "MYDGX_DGX_TEST_CONFIG not found: $config" >&2
       exit 2
     fi
     if [[ "$shorthand" == "1" ]]; then
       exec "$DGX_TEST_SCRIPT" "${translated[@]}"
     fi
     [[ -f "$DGX_TEST_CONFIG_EXAMPLE" ]] || {
-      echo "No se encontró la plantilla: $DGX_TEST_CONFIG_EXAMPLE" >&2
+      say "No se encontró la plantilla: $DGX_TEST_CONFIG_EXAMPLE" "Template not found: $DGX_TEST_CONFIG_EXAMPLE" >&2
       exit 1
     }
     umask 077
     mkdir -p "$DGX_TEST_CONFIG_DIR"
     cp "$DGX_TEST_CONFIG_EXAMPLE" "$config"
     chmod 600 "$config"
-    echo "Configuración creada en $config"
-    echo "Edita DGX_HOST y verifica la huella SSH antes de ejecutar de nuevo:"
-    echo "  ./start.sh test"
+    say "Configuración creada en $config" "Configuration created at $config"
+    say "Edita DGX_HOST y verifica la huella SSH antes de ejecutar de nuevo:" "Edit DGX_HOST and verify the SSH fingerprint before running again:"
+    say "  ./start.sh test" "  ./start.sh test"
     exit 2
   fi
 
@@ -1057,7 +1106,7 @@ case "${1:-start}" in
   serverize)
     shift
     [[ -f "$SERVERIZE_SCRIPT" && ! -L "$SERVERIZE_SCRIPT" ]] || {
-      echo "No se encontró el script seguro de conversión a servidor." >&2
+      say "No se encontró el script seguro de conversión a servidor." "Secure server conversion script not found." >&2
       exit 1
     }
     exec bash "$SERVERIZE_SCRIPT" "$@"
@@ -1065,7 +1114,7 @@ case "${1:-start}" in
   build) npm --prefix "$ROOT/frontend" run build ;;
   deploy) shift; deploy "$@" ;;
   *)
-    echo "Uso: $0 {setup|start|dev|stop|restart|status|logs|test [--autodiscover] [USUARIO@HOST [-pPUERTO] | OPCIONES]|--autodiscover [--add-to-tray] [--config [RUTA]]|serverize [--audit|--disable --confirm DISABLE-DESKTOP-SERVICES|--apply --confirm CONVERT-TO-HEADLESS-SERVER] [--keep PAQUETE]|build|deploy [--database RUTA] [--duckdns]|install-opencode [NOMBRE]|opencode [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]|install-claude-code|claude [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]}" >&2
+    say "Uso: $0 {setup|start|dev|stop|restart|status|logs|test [--autodiscover] [USUARIO@HOST [-pPUERTO] | OPCIONES]|--autodiscover [--add-to-tray] [--config [RUTA]]|serverize [--audit|--disable --confirm DISABLE-DESKTOP-SERVICES|--apply --confirm CONVERT-TO-HEADLESS-SERVER] [--keep PAQUETE]|build|deploy [--database RUTA] [--duckdns]|install-opencode [NOMBRE]|opencode [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]|install-claude-code|claude [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]}" "Usage: $0 {setup|start|dev|stop|restart|status|logs|test [--autodiscover] [USER@HOST [-pPORT] | OPTIONS]|--autodiscover [--add-to-tray] [--config [PATH]]|serverize [--audit|--disable --confirm DISABLE-DESKTOP-SERVICES|--apply --confirm CONVERT-TO-HEADLESS-SERVER] [--keep PACKAGE]|build|deploy [--database PATH] [--duckdns]|install-opencode [NAME]|opencode [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]|install-claude-code|claude [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]}" >&2
     exit 2
     ;;
 esac

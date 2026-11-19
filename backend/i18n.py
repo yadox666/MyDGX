@@ -24,7 +24,7 @@ UNTRANSLATED_KEYS = frozenset({
     "path", "paths", "url", "file", "filename", "model", "model_id", "model_repo", "repo", "engine",
     "task", "command", "quantization", "architecture", "hash", "artifact_hash", "token", "content",
     "messages", "prompt", "system_prompt", "response", "output", "text", "stdout", "stderr", "lines",
-    "entries", "logs", "detail_json", "config", "env",
+    "entries", "logs", "log", "target", "detail_json", "config", "env",
 })
 # Profile editors send these fields back unchanged, so translating them would
 # persist the translation.
@@ -34,7 +34,7 @@ PLACEHOLDER = re.compile(r"\{(\d+)\}")
 TEMPLATE_MIN_LITERAL_SHARE = 0.4
 
 
-def request_language(headers: Any) -> str:
+def request_language(headers: Any, default: str = DEFAULT_LANGUAGE) -> str:
     explicit = (headers.get("x-mydgx-language") or "").strip().lower()
     if explicit in SUPPORTED_LANGUAGES:
         return explicit
@@ -42,7 +42,7 @@ def request_language(headers: Any) -> str:
         base = part.split(";")[0].strip().lower().split("-")[0]
         if base in SUPPORTED_LANGUAGES:
             return base
-    return DEFAULT_LANGUAGE
+    return default
 
 
 class Catalog:

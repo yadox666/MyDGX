@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${1:?Uso: install-whisper.sh APP_ROOT [BASE_IMAGE] [MODELO] [HF_HUB_DIR]}"
+# shellcheck source=lib/language.sh
+if [[ -f "$(dirname "${BASH_SOURCE[0]}")/lib/language.sh" ]]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/language.sh"
+else
+  pick() { if [[ "${MYDGX_LANGUAGE:-en}" == "es" ]]; then printf '%s' "$1"; else printf '%s' "${2:-$1}"; fi; }
+  say() { pick "$@"; printf '\n'; }
+fi
+
+ROOT="${1:?$(pick "Uso: install-whisper.sh APP_ROOT [BASE_IMAGE] [MODELO] [HF_HUB_DIR]" "Usage: install-whisper.sh APP_ROOT [BASE_IMAGE] [MODEL] [HF_HUB_DIR]")}"
 BASE_IMAGE="${2:-nvcr.io/nvidia/pytorch:25.09-py3}"
 DEFAULT_MODEL="${3:-turbo}"
 HF_HUB_DIR="${4:-$(cd "$ROOT" && ./.venv/bin/python -c 'from backend.main import huggingface_cache_dir; print(huggingface_cache_dir().resolve())' 2>/dev/null || true)}"
@@ -9,31 +17,31 @@ IMAGE="mydgx-whisper:20250625"
 UNIT="/etc/systemd/system/mydgx-whisper.service"
 
 [[ -d "$ROOT/services/whisper" && -f "$ROOT/services/whisper/Dockerfile" ]] ||
-  { echo "No se encontró el servicio Whisper de MyDGX." >&2; exit 1; }
+  { say "No se encontró el servicio Whisper de MyDGX." "The MyDGX Whisper service was not found." >&2; exit 1; }
 [[ "$BASE_IMAGE" =~ ^[A-Za-z0-9._/:@+-]+$ ]] ||
-  { echo "La imagen base de Whisper no es válida." >&2; exit 1; }
+  { say "La imagen base de Whisper no es válida." "The Whisper base image is not valid." >&2; exit 1; }
 [[ "$DEFAULT_MODEL" =~ ^[A-Za-z0-9._/-]+$ ]] ||
-  { echo "El modelo Whisper no es válido." >&2; exit 1; }
+  { say "El modelo Whisper no es válido." "The Whisper model is not valid." >&2; exit 1; }
 case "$DEFAULT_MODEL" in
   tiny|tiny.en|base|base.en|small|small.en|medium|medium.en|large|large-v1|large-v2|large-v3|turbo) ;;
-  *) echo "Modelo Whisper no soportado: $DEFAULT_MODEL" >&2; exit 1 ;;
+  *) say "Modelo Whisper no soportado: $DEFAULT_MODEL" "Unsupported Whisper model: $DEFAULT_MODEL" >&2; exit 1 ;;
 esac
 hf_mount=""
 if [[ -n "$HF_HUB_DIR" ]]; then
   [[ "$HF_HUB_DIR" =~ ^/[A-Za-z0-9._/-]+$ && -d "$HF_HUB_DIR" ]] ||
-    { echo "La caché de Hugging Face no es válida: $HF_HUB_DIR" >&2; exit 1; }
+    { say "La caché de Hugging Face no es válida: $HF_HUB_DIR" "The Hugging Face cache is not valid: $HF_HUB_DIR" >&2; exit 1; }
   hf_mount="-v $HF_HUB_DIR:/hf/hub:ro -e WHISPER_HF_HUB=/hf/hub -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e HF_HUB_DISABLE_TELEMETRY=1"
 fi
 command -v docker >/dev/null 2>&1 ||
-  { echo "Whisper necesita Docker." >&2; exit 1; }
+  { say "Whisper necesita Docker." "Whisper requires Docker." >&2; exit 1; }
 command -v systemctl >/dev/null 2>&1 ||
-  { echo "Whisper necesita systemd." >&2; exit 1; }
+  { say "Whisper necesita systemd." "Whisper requires systemd." >&2; exit 1; }
 sudo -n docker info >/dev/null 2>&1 ||
-  { echo "El daemon Docker no está disponible." >&2; exit 1; }
+  { say "El daemon Docker no está disponible." "The Docker daemon is not available." >&2; exit 1; }
 
 force_install="${MYDGX_FORCE_INSTALL:-0}"
 [[ "$force_install" =~ ^[01]$ ]] ||
-  { echo "MYDGX_FORCE_INSTALL debe valer 0 o 1." >&2; exit 1; }
+  { say "MYDGX_FORCE_INSTALL debe valer 0 o 1." "MYDGX_FORCE_INSTALL must be 0 or 1." >&2; exit 1; }
 fingerprint="$(
   {
     printf 'base=%s\n' "$BASE_IMAGE"
@@ -47,7 +55,7 @@ installed_fingerprint="$(
     "$IMAGE" 2>/dev/null || true
 )"
 if [[ "$force_install" == "1" || "$fingerprint" != "$installed_fingerprint" ]]; then
-  echo "Construyendo Whisper sobre la imagen oficial NVIDIA PyTorch $BASE_IMAGE..."
+  say "Construyendo Whisper sobre la imagen oficial NVIDIA PyTorch $BASE_IMAGE..." "Building Whisper on the official NVIDIA PyTorch image $BASE_IMAGE..."
   sudo -n docker build \
     --build-arg "BASE_IMAGE=$BASE_IMAGE" \
     --label "org.mydgx.component=whisper" \
@@ -56,7 +64,7 @@ if [[ "$force_install" == "1" || "$fingerprint" != "$installed_fingerprint" ]]; 
     -t "$IMAGE" \
     "$ROOT/services/whisper"
 else
-  echo "Imagen Whisper sin cambios; se omite docker build."
+  say "Imagen Whisper sin cambios; se omite docker build." "Whisper image unchanged; skipping docker build."
 fi
 
 docker_path="$(command -v docker)"
@@ -98,8 +106,8 @@ for _ in {1..180}; do
 done
 if [[ "$ready" != "1" ]]; then
   sudo -n journalctl -u mydgx-whisper.service -n 30 --no-pager >&2 || true
-  echo "Whisper no confirmó acceso CUDA en el puerto local 9000." >&2
+  say "Whisper no confirmó acceso CUDA en el puerto local 9000." "Whisper did not confirm CUDA access on local port 9000." >&2
   exit 1
 fi
 
-echo "Whisper disponible en http://127.0.0.1:9000 con CUDA."
+say "Whisper disponible en http://127.0.0.1:9000 con CUDA." "Whisper available at http://127.0.0.1:9000 with CUDA."

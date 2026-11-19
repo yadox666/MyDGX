@@ -41,6 +41,7 @@ import {
   Sparkles,
   Square,
   Star,
+  Languages,
   Sun,
   Terminal,
   Thermometer,
@@ -55,6 +56,7 @@ import {
 } from "lucide-react";
 import { CSSProperties, FocusEvent, FormEvent, ReactNode, createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MarkdownMessage from "./MarkdownMessage";
+import { language, languageHeader, locale, setLanguagePreference, storedLanguagePreference, t, type LanguagePreference } from "./i18n";
 import {
   Area,
   AreaChart,
@@ -248,7 +250,7 @@ function GatewayModelList({ gateway, empty }: { gateway: GatewayConfig | null; e
         <code>model: "{model.alias}"</code>
         {model.engine && <em>{model.engine}</em>}
         {model.task && model.task !== "chat" && <em>{model.task}</em>}
-        {model.context_length ? <em>{Math.round(model.context_length / 1024)}k ctx</em> : null}
+        {model.context_length ? <em>{Math.round(model.context_length / 1024)}{t("k ctx")}</em> : null}
       </span>
     </li>)}
   </ul>;
@@ -389,7 +391,7 @@ function searchStateClass(text: string, resultCount: number | null) {
 
 function searchCountLabel(text: string, resultCount: number | null) {
   if (!text.trim() || resultCount === null) return undefined;
-  return `${resultCount} ${resultCount === 1 ? "resultado" : "resultados"}`;
+  return t(resultCount === 1 ? "{count} resultado" : "{count} resultados", { count: resultCount });
 }
 
 const HF_RECENT_SEARCHES_KEY = "mydgx-hf-recent-searches";
@@ -409,7 +411,7 @@ const UNCENSORED_PATTERN = /uncensored|abliterat|\bablit|heretic|derestrict|unre
 
 function UncensoredBadge({ name, flagged = false }: { name: string; flagged?: boolean }) {
   if (!flagged && !UNCENSORED_PATTERN.test(name)) return null;
-  return <span className="badge uncensored" title="Modelo sin filtros de seguridad (uncensored, abliterated o similar), según su nombre o las etiquetas y el modelo base de su ficha">Uncensored</span>;
+  return <span className="badge uncensored" title={t("Modelo sin filtros de seguridad (uncensored, abliterated o similar), según su nombre o las etiquetas y el modelo base de su ficha")}>{t("Uncensored")}</span>;
 }
 
 type ModelGlossaryEntry = {
@@ -421,61 +423,61 @@ type ModelGlossaryEntry = {
 };
 
 const MODEL_GLOSSARY: ModelGlossaryEntry[] = [
-  { id: "parameters", term: "7B, 32B, 120B · Parámetros", summary: "Tamaño aproximado del cerebro del modelo. Más parámetros suelen requerir más memoria; no garantizan que sea mejor.", category: "Tamaño y precisión", patterns: [/\b\d+(?:\.\d+)?b\b/i, /parameter/i] },
-  { id: "q2-q3", term: "Q2 / Q3", summary: "Cuantización muy comprimida. Ocupa poco y suele ser rápida, pero pierde más calidad.", category: "Tamaño y precisión", patterns: [/\bq[23](?:_[a-z0-9]+)?\b/i, /\biq[23](?:_[a-z0-9]+)?\b/i] },
-  { id: "q4-q5", term: "Q4 / Q5", summary: "Equilibrio habitual entre calidad, memoria y velocidad. Q4_K_M suele ser un buen punto de partida.", category: "Tamaño y precisión", patterns: [/\bq[45](?:_[a-z0-9]+)?\b/i, /\biq4(?:_[a-z0-9]+)?\b/i] },
-  { id: "q6-q8", term: "Q6 / Q8", summary: "Más fidelidad y mayor consumo. Q8 conserva mucha calidad, pero no siempre mejora lo suficiente para justificar su tamaño.", category: "Tamaño y precisión", patterns: [/\bq[678](?:_[a-z0-9]+)?\b/i, /\bint8\b/i] },
-  { id: "k-variants", term: "K_S / K_M / K_L", summary: "Variantes de una cuantización GGUF. S prioriza tamaño, M equilibrio y L algo más de calidad.", category: "Tamaño y precisión", patterns: [/\bq\d+_k_[sml]\b/i, /\bk_[sml]\b/i] },
-  { id: "iq", term: "IQ", summary: "Cuantización inteligente de llama.cpp. Busca conservar más calidad con muy pocos bits.", category: "Tamaño y precisión", patterns: [/\biq\d/i] },
-  { id: "bpw", term: "BPW · bits por peso", summary: "Promedio de bits usados por cada peso. Menos BPW reduce memoria y descarga, pero puede degradar la calidad.", category: "Tamaño y precisión", patterns: [/\bbpw\b/i, /bits?.per.weight/i, /bits?.por.peso/i] },
-  { id: "imatrix", term: "Importance matrix · imatrix", summary: "Muestra de activaciones usada para decidir qué pesos necesitan más precisión durante la cuantización.", category: "Tamaño y precisión", patterns: [/\bimatrix\b/i, /importance.matrix/i] },
-  { id: "fp-bf", term: "FP16 / BF16 / FP32", summary: "Pesos con alta precisión. Son fieles, pero ocupan bastante más memoria que una cuantización.", category: "Tamaño y precisión", patterns: [/\bfp(?:16|32)\b/i, /\bbf16\b/i, /float(?:16|32)/i] },
-  { id: "fp8-mxfp4", term: "FP8 / MXFP4 / INT4", summary: "Formatos compactos usados por motores GPU. MXFP4 es especialmente interesante para GPT-OSS en el Spark.", category: "Tamaño y precisión", patterns: [/\bfp8\b/i, /\bmxfp4\b/i, /\bint4\b/i] },
-  { id: "dense", term: "Dense · Denso", summary: "Activa casi todos sus parámetros en cada token. Es sencillo, pero los modelos grandes pueden ser lentos por el ancho de banda.", category: "Arquitectura y velocidad", patterns: [/\bdense\b/i, /\bdenso\b/i] },
-  { id: "moe", term: "MoE · Mixture of Experts", summary: "Tiene muchos parámetros totales, pero usa solo algunos expertos por token. Suele encajar muy bien con DGX Spark.", category: "Arquitectura y velocidad", patterns: [/\bmoe\b/i, /mixture.of.experts/i, /\bexperts?\b/i] },
-  { id: "active-parameters", term: "Parámetros activos", summary: "Parte del modelo MoE utilizada para cada token. Explica por qué un modelo enorme puede responder con rapidez.", category: "Arquitectura y velocidad", patterns: [/active.parameters/i, /parámetros activos/i, /\b\d+(?:\.\d+)?b activos\b/i] },
-  { id: "expert-pruning", term: "Expert pruning · poda de expertos", summary: "Elimina expertos de un MoE para reducir memoria. Puede conservar bien una especialidad y perder calidad en otros usos.", category: "Arquitectura y velocidad", patterns: [/expert.prun/i, /pruned.expert/i, /poda.de.expert/i] },
-  { id: "reap", term: "REAP", summary: "Método que puntúa y poda expertos según su contribución. Reduce mucho el modelo, pero la calidad depende de los datos usados para calibrarlo.", category: "Arquitectura y velocidad", patterns: [/\breap(?:\d+)?\b/i] },
-  { id: "gsq-rco", term: "GSQ / RCO", summary: "Técnicas de cuantización y selección de expertos. GSQ comprime pesos; RCO elige qué expertos conservar bajo un límite exacto.", category: "Arquitectura y velocidad", patterns: [/\bgsq\b/i, /\brco\b/i] },
-  { id: "engram", term: "Engram", summary: "Grandes tablas de memoria consultadas por token. Pueden permanecer en un NVMe rápido mediante mmap y no ocupar toda la RAM.", category: "Arquitectura y velocidad", patterns: [/\bengram\b/i, /\.v41rows\b/i] },
-  { id: "mtp", term: "MTP", summary: "Predice varios tokens futuros para acelerar la generación. Necesita soporte del modelo y del motor.", category: "Arquitectura y velocidad", patterns: [/\bmtp\b/i, /multi.token prediction/i] },
-  { id: "speculative", term: "Speculative decoding", summary: "Un modelo pequeño propone tokens y el principal los valida. Puede aumentar bastante la velocidad.", category: "Arquitectura y velocidad", patterns: [/speculative/i, /\bdraft model\b/i, /\bdspark\b/i, /\bdflash\b/i] },
-  { id: "gqa", term: "GQA / MQA", summary: "Reduce el coste de atención y de la caché KV. Ayuda especialmente con contextos largos.", category: "Arquitectura y velocidad", patterns: [/\bgqa\b/i, /\bmqa\b/i, /grouped.query/i] },
-  { id: "flash-attention", term: "Flash Attention", summary: "Implementación de atención más rápida y eficiente en memoria cuando el runtime y la GPU la soportan.", category: "Arquitectura y velocidad", patterns: [/flash.?attention/i, /\bfa2\b/i, /\bfa3\b/i] },
-  { id: "kv-cache", term: "KV cache", summary: "Memoria de la conversación ya procesada. Crece con el contexto, los slots y el tamaño del modelo.", category: "Arquitectura y velocidad", patterns: [/\bkv(?:.|_)?cache\b/i] },
-  { id: "context", term: "Contexto · 8K / 32K / 128K", summary: "Cantidad máxima de texto que el modelo puede recordar de una petición. Más contexto consume más memoria.", category: "Uso", patterns: [/\bcontext\b/i, /\bcontexto\b/i, /\b\d+k\b/i] },
-  { id: "slots", term: "Slots / concurrencia", summary: "Peticiones que el servidor puede atender a la vez. Cada slot añade caché y consumo de memoria.", category: "Uso", patterns: [/\bslots?\b/i, /concurren/i, /parallel/i] },
-  { id: "instruct-base", term: "Base / Instruct / Chat", summary: "Base es el modelo sin adaptar; Instruct o Chat está preparado para seguir órdenes y conversar.", category: "Uso", patterns: [/\bbase\b/i, /\binstruct\b/i, /-it\b/i, /\bchat\b/i] },
-  { id: "reasoning", term: "Reasoning / Thinking", summary: "Optimizado para resolver problemas paso a paso. Puede ser más capaz, pero también más lento y verboso.", category: "Uso", patterns: [/reasoning/i, /thinking/i, /\breasoner\b/i] },
-  { id: "rag", term: "RAG", summary: "Busca información en tus documentos y la añade al prompt antes de responder. No reentrena el modelo.", category: "Uso", patterns: [/\brag\b/i, /retrieval.augmented/i] },
-  { id: "agents-tools", term: "Agentes / tool calling", summary: "El modelo puede elegir y llamar herramientas, APIs o funciones. Requiere una plantilla y un runtime compatibles.", category: "Uso", patterns: [/\bagents?\b/i, /tool.call/i, /function.call/i, /computer.use/i] },
-  { id: "embeddings-reranker", term: "Embeddings / Reranker", summary: "Embeddings convierten texto en vectores; un reranker reordena resultados. No son modelos de chat.", category: "Uso", patterns: [/embedding/i, /rerank/i] },
-  { id: "asr-tts", term: "ASR / STT / TTS", summary: "ASR o STT transcribe voz a texto. TTS convierte texto en voz.", category: "Uso", patterns: [/\basr\b/i, /\bstt\b/i, /\btts\b/i, /whisper/i, /text.to.speech/i, /speech.to.text/i] },
-  { id: "voice-cloning", term: "Voice cloning / speaker embedding", summary: "Imita una voz usando una muestra o una representación del hablante. Usa solo voces con permiso.", category: "Uso", patterns: [/voice.clon/i, /speaker.embedding/i, /reference.audio/i, /zero.shot.voice/i] },
-  { id: "vocoder-codec", term: "Vocoder / audio codec", summary: "Un vocoder convierte representaciones acústicas en audio. Un codec comprime audio en tokens que otro modelo puede procesar.", category: "Uso", patterns: [/\bvocoder\b/i, /\bvocos\b/i, /audio.codec/i, /codec.model/i] },
-  { id: "vad-diarization", term: "VAD / diarización", summary: "VAD detecta cuándo hay voz; la diarización separa quién habla en una grabación.", category: "Uso", patterns: [/\bvad\b/i, /diari[sz]/i, /speaker.separation/i] },
-  { id: "vision-mmproj", term: "Vision / mmproj", summary: "mmproj es el proyector que permite a ciertos GGUF entender imágenes. Debe descargarse junto al modelo.", category: "Uso", patterns: [/mmproj/i, /vision/i, /image.text/i, /multimodal/i] },
-  { id: "diffusion", term: "Diffusion / checkpoint", summary: "Familia habitual para generar imagen o vídeo. ComfyUI carga sus checkpoints; no funciona como un chat GGUF.", category: "Uso", patterns: [/diffusion/i, /checkpoint/i, /\bflux\b/i, /wan(?:2|\b)/i] },
-  { id: "vae-clip", term: "VAE / CLIP / text encoder", summary: "CLIP o el text encoder entiende el prompt; el VAE transforma entre imagen y espacio latente. Suelen acompañar al checkpoint.", category: "Uso", patterns: [/\bvae\b/i, /\bclip\b/i, /text.encoder/i] },
-  { id: "controlnet-upscaler", term: "ControlNet / Upscaler", summary: "ControlNet guía composición, pose o bordes. Un upscaler aumenta resolución y detalle después de generar.", category: "Uso", patterns: [/\bcontrolnet\b/i, /\bupscal/i, /\bsuper.resolution\b/i] },
-  { id: "t2v-i2v", term: "T2V / I2V / V2V", summary: "Texto a vídeo, imagen a vídeo o vídeo a vídeo. Más duración, resolución y FPS requieren mucha más memoria y tiempo.", category: "Uso", patterns: [/\bt2v\b/i, /\bi2v\b/i, /\bv2v\b/i, /text.to.video/i, /image.to.video/i] },
-  { id: "fps-frames", term: "FPS / frames", summary: "Fotogramas por segundo y número total de imágenes del vídeo. Duplicarlos suele acercarse a duplicar el trabajo.", category: "Uso", patterns: [/\bfps\b/i, /\bframes?\b/i, /fotogram/i] },
-  { id: "gguf", term: "GGUF", summary: "Formato preparado para llama.cpp. Es la opción más directa para ejecutar LLM cuantizados localmente.", category: "Formato y runtime", patterns: [/\bgguf\b/i] },
-  { id: "safetensors", term: "Safetensors", summary: "Formato seguro de pesos, habitual en Hugging Face. Necesita un runtime compatible como vLLM, ComfyUI o Transformers.", category: "Formato y runtime", patterns: [/safetensors/i] },
-  { id: "shards", term: "Shards · partes 00001-of-00004", summary: "Un modelo dividido en varios archivos. Hay que descargar todas las partes de la misma cuantización.", category: "Formato y runtime", patterns: [/shard/i, /\d{5}-of-\d{5}/i] },
-  { id: "lora", term: "LoRA / Adapter", summary: "Adaptación pequeña aplicada sobre un modelo base. Puede cambiar estilo, voz o capacidad, pero normalmente no incluye el modelo completo.", category: "Formato y runtime", patterns: [/\blora\b/i, /\badapter\b/i, /\bpeft\b/i] },
-  { id: "mlx", term: "MLX", summary: "Runtime y formato optimizados para Apple Silicon. No es la opción nativa para un DGX Spark con CUDA.", category: "Formato y runtime", patterns: [/\bmlx\b/i, /mlx.community/i] },
-  { id: "pytorch-transformers", term: "PyTorch / Transformers", summary: "Ecosistema general para cargar modelos originales y safetensors. Flexible, aunque suele consumir más recursos que un runtime optimizado.", category: "Formato y runtime", patterns: [/\bpytorch\b/i, /\btransformers\b/i, /\btorch\b/i] },
-  { id: "onnx", term: "ONNX", summary: "Formato portable para inferencia. Necesita ONNX Runtime, TensorRT u otro motor compatible.", category: "Formato y runtime", patterns: [/\bonnx\b/i] },
-  { id: "awq-gptq", term: "AWQ / GPTQ / EXL2 / EXL3", summary: "Cuantizaciones para runtimes GPU específicos. No son GGUF y requieren un motor compatible.", category: "Formato y runtime", patterns: [/\bawq\b/i, /\bgptq\b/i, /\bexl[23]\b/i] },
-  { id: "mmap-offload", term: "mmap / offload", summary: "mmap lee pesos desde disco bajo demanda; offload reparte trabajo entre GPU, RAM o NVMe. Ahorra memoria, pero puede ser más lento.", category: "Formato y runtime", patterns: [/\bmmap\b/i, /\boffload/i, /lazy.mode/i] },
-  { id: "runtimes", term: "llama.cpp / Ollama / vLLM / SGLang / TensorRT-LLM", summary: "Son motores que cargan y sirven el modelo. El formato correcto depende del motor elegido.", category: "Formato y runtime", patterns: [/llama\.?cpp/i, /\bollama\b/i, /\bvllm\b/i, /\bsglang\b/i, /tensorrt/i] },
-  { id: "comfyui", term: "ComfyUI / workflow / node", summary: "Interfaz por nodos para encadenar modelos de imagen, vídeo y audio. Un workflow define el proceso completo.", category: "Formato y runtime", patterns: [/\bcomfyui\b/i, /\bworkflow\b/i, /custom.node/i] },
-  { id: "uncensored", term: "Uncensored · Sin censura", summary: "Versión comunitaria ajustada para rechazar menos peticiones. No significa que sea oficial, exacta ni libre de límites.", category: "Alineación y acceso", patterns: [/uncensored/i, /uncensor/i, /sin censura/i] },
-  { id: "abliterated", term: "Abliterated", summary: "Modelo modificado para reducir mecanismos de rechazo. Puede cambiar su calidad o comportamiento respecto al original.", category: "Alineación y acceso", patterns: [/abliterat/i, /\bablit\b/i] },
-  { id: "heretic", term: "Heretic", summary: "Nombre usado por algunas variantes comunitarias con menos rechazos. Revisa siempre autor, pruebas y modelo base.", category: "Alineación y acceso", patterns: [/\bheretic\b/i] },
-  { id: "derestricted", term: "Derestricted / No-refusal", summary: "Otra etiqueta para modelos modificados con menos restricciones. No garantiza cero rechazos.", category: "Alineación y acceso", patterns: [/derestrict/i, /no.?refusal/i, /unrestrict/i, /unfiltered/i] },
-  { id: "gated", term: "Gated / Restricted", summary: "Hugging Face exige iniciar sesión, aceptar condiciones o pedir acceso antes de descargar.", category: "Alineación y acceso", patterns: [/\bgated\b/i, /\brestricted\b/i] },
+  { id: "parameters", term: t("7B, 32B, 120B · Parámetros"), summary: t("Tamaño aproximado del cerebro del modelo. Más parámetros suelen requerir más memoria; no garantizan que sea mejor."), category: "Tamaño y precisión", patterns: [/\b\d+(?:\.\d+)?b\b/i, /parameter/i] },
+  { id: "q2-q3", term: "Q2 / Q3", summary: t("Cuantización muy comprimida. Ocupa poco y suele ser rápida, pero pierde más calidad."), category: "Tamaño y precisión", patterns: [/\bq[23](?:_[a-z0-9]+)?\b/i, /\biq[23](?:_[a-z0-9]+)?\b/i] },
+  { id: "q4-q5", term: "Q4 / Q5", summary: t("Equilibrio habitual entre calidad, memoria y velocidad. Q4_K_M suele ser un buen punto de partida."), category: "Tamaño y precisión", patterns: [/\bq[45](?:_[a-z0-9]+)?\b/i, /\biq4(?:_[a-z0-9]+)?\b/i] },
+  { id: "q6-q8", term: "Q6 / Q8", summary: t("Más fidelidad y mayor consumo. Q8 conserva mucha calidad, pero no siempre mejora lo suficiente para justificar su tamaño."), category: "Tamaño y precisión", patterns: [/\bq[678](?:_[a-z0-9]+)?\b/i, /\bint8\b/i] },
+  { id: "k-variants", term: "K_S / K_M / K_L", summary: t("Variantes de una cuantización GGUF. S prioriza tamaño, M equilibrio y L algo más de calidad."), category: "Tamaño y precisión", patterns: [/\bq\d+_k_[sml]\b/i, /\bk_[sml]\b/i] },
+  { id: "iq", term: "IQ", summary: t("Cuantización inteligente de llama.cpp. Busca conservar más calidad con muy pocos bits."), category: "Tamaño y precisión", patterns: [/\biq\d/i] },
+  { id: "bpw", term: t("BPW · bits por peso"), summary: t("Promedio de bits usados por cada peso. Menos BPW reduce memoria y descarga, pero puede degradar la calidad."), category: "Tamaño y precisión", patterns: [/\bbpw\b/i, /bits?.per.weight/i, /bits?.por.peso/i] },
+  { id: "imatrix", term: t("Importance matrix · imatrix"), summary: t("Muestra de activaciones usada para decidir qué pesos necesitan más precisión durante la cuantización."), category: "Tamaño y precisión", patterns: [/\bimatrix\b/i, /importance.matrix/i] },
+  { id: "fp-bf", term: "FP16 / BF16 / FP32", summary: t("Pesos con alta precisión. Son fieles, pero ocupan bastante más memoria que una cuantización."), category: "Tamaño y precisión", patterns: [/\bfp(?:16|32)\b/i, /\bbf16\b/i, /float(?:16|32)/i] },
+  { id: "fp8-mxfp4", term: "FP8 / MXFP4 / INT4", summary: t("Formatos compactos usados por motores GPU. MXFP4 es especialmente interesante para GPT-OSS en el Spark."), category: "Tamaño y precisión", patterns: [/\bfp8\b/i, /\bmxfp4\b/i, /\bint4\b/i] },
+  { id: "dense", term: t("Dense · Denso"), summary: t("Activa casi todos sus parámetros en cada token. Es sencillo, pero los modelos grandes pueden ser lentos por el ancho de banda."), category: "Arquitectura y velocidad", patterns: [/\bdense\b/i, /\bdenso\b/i] },
+  { id: "moe", term: "MoE · Mixture of Experts", summary: t("Tiene muchos parámetros totales, pero usa solo algunos expertos por token. Suele encajar muy bien con DGX Spark."), category: "Arquitectura y velocidad", patterns: [/\bmoe\b/i, /mixture.of.experts/i, /\bexperts?\b/i] },
+  { id: "active-parameters", term: t("Parámetros activos"), summary: t("Parte del modelo MoE utilizada para cada token. Explica por qué un modelo enorme puede responder con rapidez."), category: "Arquitectura y velocidad", patterns: [/active.parameters/i, /parámetros activos/i, /\b\d+(?:\.\d+)?b activos\b/i] },
+  { id: "expert-pruning", term: t("Expert pruning · poda de expertos"), summary: t("Elimina expertos de un MoE para reducir memoria. Puede conservar bien una especialidad y perder calidad en otros usos."), category: "Arquitectura y velocidad", patterns: [/expert.prun/i, /pruned.expert/i, /poda.de.expert/i] },
+  { id: "reap", term: "REAP", summary: t("Método que puntúa y poda expertos según su contribución. Reduce mucho el modelo, pero la calidad depende de los datos usados para calibrarlo."), category: "Arquitectura y velocidad", patterns: [/\breap(?:\d+)?\b/i] },
+  { id: "gsq-rco", term: "GSQ / RCO", summary: t("Técnicas de cuantización y selección de expertos. GSQ comprime pesos; RCO elige qué expertos conservar bajo un límite exacto."), category: "Arquitectura y velocidad", patterns: [/\bgsq\b/i, /\brco\b/i] },
+  { id: "engram", term: t("Engram"), summary: t("Grandes tablas de memoria consultadas por token. Pueden permanecer en un NVMe rápido mediante mmap y no ocupar toda la RAM."), category: "Arquitectura y velocidad", patterns: [/\bengram\b/i, /\.v41rows\b/i] },
+  { id: "mtp", term: "MTP", summary: t("Predice varios tokens futuros para acelerar la generación. Necesita soporte del modelo y del motor."), category: "Arquitectura y velocidad", patterns: [/\bmtp\b/i, /multi.token prediction/i] },
+  { id: "speculative", term: t("Speculative decoding"), summary: t("Un modelo pequeño propone tokens y el principal los valida. Puede aumentar bastante la velocidad."), category: "Arquitectura y velocidad", patterns: [/speculative/i, /\bdraft model\b/i, /\bdspark\b/i, /\bdflash\b/i] },
+  { id: "gqa", term: "GQA / MQA", summary: t("Reduce el coste de atención y de la caché KV. Ayuda especialmente con contextos largos."), category: "Arquitectura y velocidad", patterns: [/\bgqa\b/i, /\bmqa\b/i, /grouped.query/i] },
+  { id: "flash-attention", term: t("Flash Attention"), summary: t("Implementación de atención más rápida y eficiente en memoria cuando el runtime y la GPU la soportan."), category: "Arquitectura y velocidad", patterns: [/flash.?attention/i, /\bfa2\b/i, /\bfa3\b/i] },
+  { id: "kv-cache", term: "KV cache", summary: t("Memoria de la conversación ya procesada. Crece con el contexto, los slots y el tamaño del modelo."), category: "Arquitectura y velocidad", patterns: [/\bkv(?:.|_)?cache\b/i] },
+  { id: "context", term: t("Contexto · 8K / 32K / 128K"), summary: t("Cantidad máxima de texto que el modelo puede recordar de una petición. Más contexto consume más memoria."), category: "Uso", patterns: [/\bcontext\b/i, /\bcontexto\b/i, /\b\d+k\b/i] },
+  { id: "slots", term: t("Slots / concurrencia"), summary: t("Peticiones que el servidor puede atender a la vez. Cada slot añade caché y consumo de memoria."), category: "Uso", patterns: [/\bslots?\b/i, /concurren/i, /parallel/i] },
+  { id: "instruct-base", term: t("Base / Instruct / Chat"), summary: t("Base es el modelo sin adaptar; Instruct o Chat está preparado para seguir órdenes y conversar."), category: "Uso", patterns: [/\bbase\b/i, /\binstruct\b/i, /-it\b/i, /\bchat\b/i] },
+  { id: "reasoning", term: t("Reasoning / Thinking"), summary: t("Optimizado para resolver problemas paso a paso. Puede ser más capaz, pero también más lento y verboso."), category: "Uso", patterns: [/reasoning/i, /thinking/i, /\breasoner\b/i] },
+  { id: "rag", term: "RAG", summary: t("Busca información en tus documentos y la añade al prompt antes de responder. No reentrena el modelo."), category: "Uso", patterns: [/\brag\b/i, /retrieval.augmented/i] },
+  { id: "agents-tools", term: t("Agentes / tool calling"), summary: t("El modelo puede elegir y llamar herramientas, APIs o funciones. Requiere una plantilla y un runtime compatibles."), category: "Uso", patterns: [/\bagents?\b/i, /tool.call/i, /function.call/i, /computer.use/i] },
+  { id: "embeddings-reranker", term: t("Embeddings / Reranker"), summary: t("Embeddings convierten texto en vectores; un reranker reordena resultados. No son modelos de chat."), category: "Uso", patterns: [/embedding/i, /rerank/i] },
+  { id: "asr-tts", term: "ASR / STT / TTS", summary: t("ASR o STT transcribe voz a texto. TTS convierte texto en voz."), category: "Uso", patterns: [/\basr\b/i, /\bstt\b/i, /\btts\b/i, /whisper/i, /text.to.speech/i, /speech.to.text/i] },
+  { id: "voice-cloning", term: t("Voice cloning / speaker embedding"), summary: t("Imita una voz usando una muestra o una representación del hablante. Usa solo voces con permiso."), category: "Uso", patterns: [/voice.clon/i, /speaker.embedding/i, /reference.audio/i, /zero.shot.voice/i] },
+  { id: "vocoder-codec", term: t("Vocoder / audio codec"), summary: t("Un vocoder convierte representaciones acústicas en audio. Un codec comprime audio en tokens que otro modelo puede procesar."), category: "Uso", patterns: [/\bvocoder\b/i, /\bvocos\b/i, /audio.codec/i, /codec.model/i] },
+  { id: "vad-diarization", term: t("VAD / diarización"), summary: t("VAD detecta cuándo hay voz; la diarización separa quién habla en una grabación."), category: "Uso", patterns: [/\bvad\b/i, /diari[sz]/i, /speaker.separation/i] },
+  { id: "vision-mmproj", term: t("Vision / mmproj"), summary: t("mmproj es el proyector que permite a ciertos GGUF entender imágenes. Debe descargarse junto al modelo."), category: "Uso", patterns: [/mmproj/i, /vision/i, /image.text/i, /multimodal/i] },
+  { id: "diffusion", term: t("Diffusion / checkpoint"), summary: t("Familia habitual para generar imagen o vídeo. ComfyUI carga sus checkpoints; no funciona como un chat GGUF."), category: "Uso", patterns: [/diffusion/i, /checkpoint/i, /\bflux\b/i, /wan(?:2|\b)/i] },
+  { id: "vae-clip", term: "VAE / CLIP / text encoder", summary: t("CLIP o el text encoder entiende el prompt; el VAE transforma entre imagen y espacio latente. Suelen acompañar al checkpoint."), category: "Uso", patterns: [/\bvae\b/i, /\bclip\b/i, /text.encoder/i] },
+  { id: "controlnet-upscaler", term: "ControlNet / Upscaler", summary: t("ControlNet guía composición, pose o bordes. Un upscaler aumenta resolución y detalle después de generar."), category: "Uso", patterns: [/\bcontrolnet\b/i, /\bupscal/i, /\bsuper.resolution\b/i] },
+  { id: "t2v-i2v", term: "T2V / I2V / V2V", summary: t("Texto a vídeo, imagen a vídeo o vídeo a vídeo. Más duración, resolución y FPS requieren mucha más memoria y tiempo."), category: "Uso", patterns: [/\bt2v\b/i, /\bi2v\b/i, /\bv2v\b/i, /text.to.video/i, /image.to.video/i] },
+  { id: "fps-frames", term: "FPS / frames", summary: t("Fotogramas por segundo y número total de imágenes del vídeo. Duplicarlos suele acercarse a duplicar el trabajo."), category: "Uso", patterns: [/\bfps\b/i, /\bframes?\b/i, /fotogram/i] },
+  { id: "gguf", term: "GGUF", summary: t("Formato preparado para llama.cpp. Es la opción más directa para ejecutar LLM cuantizados localmente."), category: "Formato y runtime", patterns: [/\bgguf\b/i] },
+  { id: "safetensors", term: t("Safetensors"), summary: t("Formato seguro de pesos, habitual en Hugging Face. Necesita un runtime compatible como vLLM, ComfyUI o Transformers."), category: "Formato y runtime", patterns: [/safetensors/i] },
+  { id: "shards", term: t("Shards · partes 00001-of-00004"), summary: t("Un modelo dividido en varios archivos. Hay que descargar todas las partes de la misma cuantización."), category: "Formato y runtime", patterns: [/shard/i, /\d{5}-of-\d{5}/i] },
+  { id: "lora", term: "LoRA / Adapter", summary: t("Adaptación pequeña aplicada sobre un modelo base. Puede cambiar estilo, voz o capacidad, pero normalmente no incluye el modelo completo."), category: "Formato y runtime", patterns: [/\blora\b/i, /\badapter\b/i, /\bpeft\b/i] },
+  { id: "mlx", term: "MLX", summary: t("Runtime y formato optimizados para Apple Silicon. No es la opción nativa para un DGX Spark con CUDA."), category: "Formato y runtime", patterns: [/\bmlx\b/i, /mlx.community/i] },
+  { id: "pytorch-transformers", term: "PyTorch / Transformers", summary: t("Ecosistema general para cargar modelos originales y safetensors. Flexible, aunque suele consumir más recursos que un runtime optimizado."), category: "Formato y runtime", patterns: [/\bpytorch\b/i, /\btransformers\b/i, /\btorch\b/i] },
+  { id: "onnx", term: "ONNX", summary: t("Formato portable para inferencia. Necesita ONNX Runtime, TensorRT u otro motor compatible."), category: "Formato y runtime", patterns: [/\bonnx\b/i] },
+  { id: "awq-gptq", term: "AWQ / GPTQ / EXL2 / EXL3", summary: t("Cuantizaciones para runtimes GPU específicos. No son GGUF y requieren un motor compatible."), category: "Formato y runtime", patterns: [/\bawq\b/i, /\bgptq\b/i, /\bexl[23]\b/i] },
+  { id: "mmap-offload", term: "mmap / offload", summary: t("mmap lee pesos desde disco bajo demanda; offload reparte trabajo entre GPU, RAM o NVMe. Ahorra memoria, pero puede ser más lento."), category: "Formato y runtime", patterns: [/\bmmap\b/i, /\boffload/i, /lazy.mode/i] },
+  { id: "runtimes", term: "llama.cpp / Ollama / vLLM / SGLang / TensorRT-LLM", summary: t("Son motores que cargan y sirven el modelo. El formato correcto depende del motor elegido."), category: "Formato y runtime", patterns: [/llama\.?cpp/i, /\bollama\b/i, /\bvllm\b/i, /\bsglang\b/i, /tensorrt/i] },
+  { id: "comfyui", term: "ComfyUI / workflow / node", summary: t("Interfaz por nodos para encadenar modelos de imagen, vídeo y audio. Un workflow define el proceso completo."), category: "Formato y runtime", patterns: [/\bcomfyui\b/i, /\bworkflow\b/i, /custom.node/i] },
+  { id: "uncensored", term: t("Uncensored · Sin censura"), summary: t("Versión comunitaria ajustada para rechazar menos peticiones. No significa que sea oficial, exacta ni libre de límites."), category: "Alineación y acceso", patterns: [/uncensored/i, /uncensor/i, /sin censura/i] },
+  { id: "abliterated", term: t("Abliterated"), summary: t("Modelo modificado para reducir mecanismos de rechazo. Puede cambiar su calidad o comportamiento respecto al original."), category: "Alineación y acceso", patterns: [/abliterat/i, /\bablit\b/i] },
+  { id: "heretic", term: t("Heretic"), summary: t("Nombre usado por algunas variantes comunitarias con menos rechazos. Revisa siempre autor, pruebas y modelo base."), category: "Alineación y acceso", patterns: [/\bheretic\b/i] },
+  { id: "derestricted", term: t("Derestricted / No-refusal"), summary: t("Otra etiqueta para modelos modificados con menos restricciones. No garantiza cero rechazos."), category: "Alineación y acceso", patterns: [/derestrict/i, /no.?refusal/i, /unrestrict/i, /unfiltered/i] },
+  { id: "gated", term: t("Gated / Restricted"), summary: t("Hugging Face exige iniciar sesión, aceptar condiciones o pedir acceso antes de descargar."), category: "Alineación y acceso", patterns: [/\bgated\b/i, /\brestricted\b/i] },
 ];
 
 function glossaryTermsIn(text: string) {
@@ -489,8 +491,8 @@ function ModelTermsButton({ text, label, onOpen }: { text: string; label: string
   return <button
     className="model-term-help"
     type="button"
-    title={terms.length ? `Explicar: ${terms.map((term) => term.term).join(", ")}` : "Abrir ayuda de términos de modelos"}
-    aria-label={`Explicar términos de ${label}`}
+    title={terms.length ? t("Explicar: {terms}", { terms: terms.map((term) => term.term).join(", ") }) : t("Abrir ayuda de términos de modelos")}
+    aria-label={t("Explicar términos de {label}", { label: label })}
     onClick={(event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -511,12 +513,12 @@ function ModelGlossaryDialog({ request, onClose }: { request: GlossaryRequest; o
     };
   }, [onClose]);
   const categories = [...new Set(request.terms.map((term) => term.category))];
-  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label="Ayuda rápida de modelos" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={t("Ayuda rápida de modelos")} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <Card className="model-help-dialog">
-      <SectionHeading eyebrow={request.parsed ? "TÉRMINOS DETECTADOS" : "GUÍA RÁPIDA · TL;DR"} title={request.title} action={<button className="icon-button" onClick={onClose} aria-label="Cerrar ayuda"><X size={16} /></button>} />
-      <div className="model-help-tldr"><Sparkles size={17} /><p><strong>Regla rápida:</strong> elige un modelo que quepa con margen. Para chat GGUF empieza por Q4_K_M o Q5; usa Q8 si priorizas fidelidad. MoE suele ser rápido en Spark. “Uncensored”, “Heretic” o “Abliterated” describen modificaciones comunitarias, no una garantía de calidad.</p></div>
+      <SectionHeading eyebrow={request.parsed ? t("TÉRMINOS DETECTADOS") : t("GUÍA RÁPIDA · TL;DR")} title={request.title} action={<button className="icon-button" onClick={onClose} aria-label={t("Cerrar ayuda")}><X size={16} /></button>} />
+      <div className="model-help-tldr"><Sparkles size={17} /><p><strong>{t("Regla rápida:")}</strong>{" "}{t("elige un modelo que quepa con margen. Para chat GGUF empieza por Q4_K_M o Q5; usa Q8 si priorizas fidelidad. MoE suele ser rápido en Spark. “Uncensored”, “Heretic” o “Abliterated” describen modificaciones comunitarias, no una garantía de calidad.")}</p></div>
       {categories.map((category) => <section className="model-help-category" key={category}>
-        <h4>{category}</h4>
+        <h4>{t(category)}</h4>
         <div>{request.terms.filter((term) => term.category === category).map((term) => <article key={term.id}><strong>{term.term}</strong><p>{term.summary}</p></article>)}</div>
       </section>)}
     </Card>
@@ -528,17 +530,17 @@ const SPEC_LABELS: Record<string, string> = {
   "draft-dspark": "DSpark",
   "draft-dflash": "DFlash",
   "draft-eagle3": "EAGLE-3",
-  "draft-simple": "Drafter",
+  "draft-simple": t("Drafter"),
 };
 
-const ROLE_LABELS: Record<string, string> = { main: "Modelo principal", mmproj: "Proyector visual" };
+const ROLE_LABELS: Record<string, string> = { main: t("Modelo principal"), mmproj: t("Proyector visual") };
 
 function shortContext(value?: number) {
   return value ? `${Math.round(value / 1024)}K` : "—";
 }
 
 function roleLabel(role: string) {
-  return ROLE_LABELS[role] ?? `Drafter ${SPEC_LABELS[role] ?? role}`;
+  return ROLE_LABELS[role] ?? t("Drafter {value}", { value: SPEC_LABELS[role] ?? role });
 }
 
 function useDialogEscape(onClose: () => void) {
@@ -598,44 +600,44 @@ function DownloadPreflightDialog({ pending, onCancel, onConfirm }: {
 }) {
   useDialogEscape(onCancel);
   const report = pending.report;
-  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={`Comprobación previa de ${pending.repoId}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={t("Comprobación previa de {repoId}", { repoId: pending.repoId })} onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
     <Card className="model-help-dialog preflight-dialog">
-      <SectionHeading eyebrow="COMPROBACIÓN PREVIA" title={pending.repoId} action={<button className="icon-button" onClick={onCancel} aria-label="Cerrar comprobación"><X size={16} /></button>} />
-      {pending.error && <div className="profile-warning"><TriangleAlert size={15} />No se pudieron leer las cabeceras: {pending.error}. Puedes descargar igualmente; MyDGX lo verificará después en Benchmarks.</div>}
+      <SectionHeading eyebrow={t("COMPROBACIÓN PREVIA")} title={pending.repoId} action={<button className="icon-button" onClick={onCancel} aria-label={t("Cerrar comprobación")}><X size={16} /></button>} />
+      {pending.error && <div className="profile-warning"><TriangleAlert size={15} />{t("No se pudieron leer las cabeceras: {error}. Puedes descargar igualmente; MyDGX lo verificará después en Benchmarks.", { error: pending.error })}</div>}
       {report && <>
         <p className="preflight-intro">
-          {bytes(report.total_bytes)} en {pending.files.length} archivo(s). Los datos de abajo salen de la cabecera GGUF de cada archivo, leída sin descargar los pesos.
+          {t("{size} en {count} archivo(s). Los datos de abajo salen de la cabecera GGUF de cada archivo, leída sin descargar los pesos.", { size: bytes(report.total_bytes), count: pending.files.length })}
         </p>
         <div className="preflight-files">
           {report.files.map((file) => <div className={`preflight-file ${file.role === "main" ? "main" : ""}`} key={file.filename}>
             <span className="badge">{roleLabel(file.role)}</span>
             <span className="preflight-name"><strong>{file.filename}</strong><small>
               {[
-                file.architecture || (file.header_read ? "" : "cabecera no leída"),
+                file.architecture || (file.header_read ? "" : t("cabecera no leída")),
                 file.quantization,
                 file.shards > 1 || file.expected_shards > 1 ? `${file.shards}/${file.expected_shards} shards` : "",
                 bytes(file.size),
-                file.native_context ? `contexto nativo ${shortContext(file.native_context)}` : "",
-                file.embedded_mtp ? "MTP integrado" : "",
+                file.native_context ? t("contexto nativo {ctx}", { ctx: shortContext(file.native_context) }) : "",
+                file.embedded_mtp ? t("MTP integrado") : "",
               ].filter(Boolean).join(" · ")}
             </small></span>
             <span className="preflight-checks">
-              {file.runtime_supported === true && <span className="badge completed">llama.cpp la reconoce</span>}
-              {file.runtime_supported === false && <span className="badge failed">llama.cpp no la reconoce</span>}
-              {file.memory_mb ? <span className={`badge ${file.memory_mb > report.capacity_mb ? "failed" : ""}`}>~{Math.ceil(file.memory_mb / 1024)} GB con {shortContext(file.memory_context)}</span> : null}
+              {file.runtime_supported === true && <span className="badge completed">{t("llama.cpp la reconoce")}</span>}
+              {file.runtime_supported === false && <span className="badge failed">{t("llama.cpp no la reconoce")}</span>}
+              {file.memory_mb ? <span className={`badge ${file.memory_mb > report.capacity_mb ? "failed" : ""}`}>~{Math.ceil(file.memory_mb / 1024)}{" "}{t("GB con")}{" "}{shortContext(file.memory_context)}</span> : null}
             </span>
           </div>)}
           {report.mmproj.map((name) => <div className="preflight-file" key={name}><span className="badge">{roleLabel("mmproj")}</span><span className="preflight-name"><strong>{name}</strong></span></div>)}
         </div>
         {report.warnings.length > 0
           ? <ul className="preflight-warnings">{report.warnings.map((warning) => <li key={warning}><TriangleAlert size={13} /> {warning}</li>)}</ul>
-          : <div className="preflight-ok"><CheckCircle2 size={15} /> Sin problemas detectados.</div>}
-        <small className="preflight-note">Al terminar, Benchmarks comprueba automáticamente que arranca y responde, y compara la memoria real con la estimada y la aceptación del drafter.</small>
+          : <div className="preflight-ok"><CheckCircle2 size={15} />{" "}{t("Sin problemas detectados.")}</div>}
+        <small className="preflight-note">{t("Al terminar, Benchmarks comprueba automáticamente que arranca y responde, y compara la memoria real con la estimada y la aceptación del drafter.")}</small>
       </>}
       <div className="preflight-actions">
-        <button className="button secondary" onClick={onCancel}>Cancelar</button>
-        {report?.suggested_draft.length ? <button className="button secondary" onClick={() => onConfirm(report.suggested_draft)}><Plus size={14} /> Añadir drafter y descargar</button> : null}
-        <button className="button primary" onClick={() => onConfirm([])}><Download size={14} /> Descargar</button>
+        <button className="button secondary" onClick={onCancel}>{t("Cancelar")}</button>
+        {report?.suggested_draft.length ? <button className="button secondary" onClick={() => onConfirm(report.suggested_draft)}><Plus size={14} />{" "}{t("Añadir drafter y descargar")}</button> : null}
+        <button className="button primary" onClick={() => onConfirm([])}><Download size={14} />{" "}{t("Descargar")}</button>
       </div>
     </Card>
   </div>;
@@ -664,20 +666,20 @@ type ModelSettingsReport = {
 };
 
 const ORIGIN_LABELS: Record<string, string> = {
-  ficha: "ficha del autor",
-  GGUF: "cabecera GGUF",
-  manual: "manual",
-  MyDGX: "por defecto",
-  archivo: "drafter detectado",
+  ficha: t("ficha del autor"),
+  GGUF: t("cabecera GGUF"),
+  manual: t("manual"),
+  MyDGX: t("por defecto"),
+  archivo: t("drafter detectado"),
 };
 
 const SAMPLING_FIELDS: { key: string; label: string; step: string }[] = [
-  { key: "temperature", label: "Temperatura", step: "0.05" },
-  { key: "top_p", label: "Top P", step: "0.01" },
-  { key: "top_k", label: "Top K", step: "1" },
-  { key: "min_p", label: "Min P", step: "0.01" },
-  { key: "repeat_penalty", label: "Repeat penalty", step: "0.01" },
-  { key: "presence_penalty", label: "Presence penalty", step: "0.05" },
+  { key: "temperature", label: t("Temperatura"), step: "0.05" },
+  { key: "top_p", label: t("Top P"), step: "0.01" },
+  { key: "top_k", label: t("Top K"), step: "1" },
+  { key: "min_p", label: t("Min P"), step: "0.01" },
+  { key: "repeat_penalty", label: t("Repeat penalty"), step: "0.01" },
+  { key: "presence_penalty", label: t("Presence penalty"), step: "0.05" },
 ];
 
 function originLabel(origin: string) {
@@ -740,7 +742,7 @@ function ModelSettingsDialog({ modelId, notify, onClose, onSaved }: {
     setBusy(true);
     try {
       load(await api<ModelSettingsReport>("/api/models/settings", { method: "PUT", body: JSON.stringify(body) }));
-      notify(reset ? "Ajustes restablecidos a los valores automáticos" : "Ajustes guardados; se aplican la próxima vez que se encienda");
+      notify(reset ? t("Ajustes restablecidos a los valores automáticos") : t("Ajustes guardados; se aplican la próxima vez que se encienda"));
       onSaved();
     } catch (error) {
       notify((error as Error).message, true);
@@ -750,76 +752,76 @@ function ModelSettingsDialog({ modelId, notify, onClose, onSaved }: {
   }
 
   const spec = report?.speculative;
-  const current = spec?.spec_type ? `${SPEC_LABELS[spec.spec_type] ?? spec.spec_type} · ${spec.draft_filename || "MTP integrado en el GGUF"}` : "Sin especulativa";
-  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={`Ajustes de ${modelId}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  const current = spec?.spec_type ? `${SPEC_LABELS[spec.spec_type] ?? spec.spec_type} · ${spec.draft_filename || t("MTP integrado en el GGUF")}` : t("Sin especulativa");
+  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={t("Ajustes de {modelId}", { modelId: modelId })} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <Card className="model-help-dialog model-settings-dialog">
-      <SectionHeading eyebrow="AJUSTES DE ARRANQUE" title={modelId} action={<button className="icon-button" onClick={onClose} aria-label="Cerrar ajustes"><X size={16} /></button>} />
-      {!report ? <p className="preflight-intro"><RefreshCw className="spin" size={14} /> Leyendo cabeceras y ficha…</p> : <>
-        <p className="preflight-intro">Cada campo vacío usa el valor automático (entre paréntesis, con su origen). Lo que escribas aquí manda sobre la ficha y la cabecera GGUF. Se aplica la próxima vez que se encienda el modelo; si está en Default, también ahí.</p>
+      <SectionHeading eyebrow={t("AJUSTES DE ARRANQUE")} title={modelId} action={<button className="icon-button" onClick={onClose} aria-label={t("Cerrar ajustes")}><X size={16} /></button>} />
+      {!report ? <p className="preflight-intro"><RefreshCw className="spin" size={14} />{" "}{t("Leyendo cabeceras y ficha…")}</p> : <>
+        <p className="preflight-intro">{t("Cada campo vacío usa el valor automático (entre paréntesis, con su origen). Lo que escribas aquí manda sobre la ficha y la cabecera GGUF. Se aplica la próxima vez que se encienda el modelo; si está en Default, también ahí.")}</p>
         <section className="model-settings-section">
-          <h4>Archivos</h4>
-          <label>Cuantización principal
+          <h4>{t("Archivos")}</h4>
+          <label>{t("Cuantización principal")}
             <select value={draft.model_filename ?? ""} onChange={(event) => set("model_filename", event.target.value)}>
-              <option value="">Automático ({report.files.find((file) => file.selected)?.quantization ?? "—"})</option>
+              <option value="">{t("Automático (")}{report.files.find((file) => file.selected)?.quantization ?? "—"})</option>
               {report.files.map((file) => <option key={file.filename} value={file.filename}>
-                {file.quantization} · {bytes(file.size)} · {file.architecture || "?"}{file.runtime_supported === false ? " · llama.cpp no la reconoce" : ""}
+                {file.quantization} · {bytes(file.size)} · {file.architecture || "?"}{file.runtime_supported === false ? t(" · llama.cpp no la reconoce") : ""}
               </option>)}
             </select>
           </label>
-          {report.mmproj.length > 0 && <label>Proyector visual (mmproj)
+          {report.mmproj.length > 0 && <label>{t("Proyector visual (mmproj)")}
             <select value={draft.mmproj ?? ""} onChange={(event) => set("mmproj", event.target.value)}>
-              <option value="">Automático ({report.mmproj_filename || "ninguno"})</option>
-              <option value="none">Sin visión (permite la especulativa)</option>
+              <option value="">{t("Automático (")}{report.mmproj_filename || t("ninguno")})</option>
+              <option value="none">{t("Sin visión (permite la especulativa)")}</option>
               {report.mmproj.map((name) => <option key={name} value={name}>{name}</option>)}
             </select>
           </label>}
         </section>
         <section className="model-settings-section">
-          <h4>Contexto <small>rango {shortContext(report.context.minimum)}–{shortContext(report.context.maximum)} · nativo {shortContext(report.context.native)}{report.context.card ? ` · ficha ${shortContext(report.context.card)}` : ""} · origen {originLabel(report.context.origin)}</small></h4>
-          <label>Por defecto al encender (K)
+          <h4>{t("Contexto")}{" "}<small>{t("rango {min}–{max}", { min: shortContext(report.context.minimum), max: shortContext(report.context.maximum) })}{" "}{t("· nativo")}{" "}{shortContext(report.context.native)}{report.context.card ? t(" · ficha {card}", { card: shortContext(report.context.card) }) : ""}{" "}{t("· origen")}{" "}{originLabel(report.context.origin)}</small></h4>
+          <label>{t("Por defecto al encender (K)")}
             <input type="number" min={1} step={1} placeholder={`${Math.round(report.context.default / 1024)}`} value={draft.context_size ?? ""} onChange={(event) => set("context_size", event.target.value)} />
           </label>
-          <label>Máximo del slider (K)
+          <label>{t("Máximo del slider (K)")}
             <input type="number" min={1} step={1} placeholder={`${Math.round(report.context.maximum / 1024)}`} value={draft.context_max ?? ""} onChange={(event) => set("context_max", event.target.value)} />
           </label>
         </section>
         <section className="model-settings-section">
-          <h4>Decodificación especulativa <small>ahora: {current}{spec?.origin ? ` · origen ${originLabel(spec.origin)}` : ""}</small></h4>
-          {spec?.runtime_supported === false && <div className="profile-warning"><TriangleAlert size={14} />El llama.cpp instalado no admite <code>--spec-type</code>.</div>}
-          {spec?.blocked_by_mmproj && <small className="preflight-note">Con el mmproj activo llama.cpp no usa la especulativa. Elige «Sin visión» si prefieres velocidad a imágenes.</small>}
-          <label>Drafter
+          <h4>{t("Decodificación especulativa")}{" "}<small>{t("ahora:")} {current}{spec?.origin ? t(" · origen {origin}", { origin: originLabel(spec.origin) }) : ""}</small></h4>
+          {spec?.runtime_supported === false && <div className="profile-warning"><TriangleAlert size={14} />{t("El llama.cpp instalado no admite")}{" "}<code>--spec-type</code>.</div>}
+          {spec?.blocked_by_mmproj && <small className="preflight-note">{t("Con el mmproj activo llama.cpp no usa la especulativa. Elige «Sin visión» si prefieres velocidad a imágenes.")}</small>}
+          <label>{t("Drafter")}
             <select value={draft.spec ?? ""} onChange={(event) => set("spec", event.target.value)}>
-              <option value="">Automático</option>
-              <option value="off">Desactivada</option>
+              <option value="">{t("Automático")}</option>
+              <option value="off">{t("Desactivada")}</option>
               {spec?.candidates.map((item) => <option key={`${item.spec_type}|${item.draft_filename}`} value={`${item.spec_type}|${item.draft_filename}`}>
-                {SPEC_LABELS[item.spec_type] ?? item.spec_type} · {item.embedded ? "integrado en el GGUF" : `${item.draft_filename} · ${bytes(item.size)}`}
+                {SPEC_LABELS[item.spec_type] ?? item.spec_type} · {item.embedded ? t("integrado en el GGUF") : `${item.draft_filename} · ${bytes(item.size)}`}
               </option>)}
             </select>
           </label>
-          <label>Tokens por borrador
+          <label>{t("Tokens por borrador")}
             <input type="number" min={1} max={16} placeholder={spec?.spec_draft_n_max ? String(spec.spec_draft_n_max) : "llama.cpp"} value={draft.spec_draft_n_max ?? ""} onChange={(event) => set("spec_draft_n_max", event.target.value)} />
           </label>
-          {spec && !spec.candidates.length && <small className="preflight-note">No hay drafters descargados para este modelo.</small>}
+          {spec && !spec.candidates.length && <small className="preflight-note">{t("No hay drafters descargados para este modelo.")}</small>}
         </section>
         <section className="model-settings-section">
-          <h4>Muestreo y caché</h4>
+          <h4>{t("Muestreo y caché")}</h4>
           {SAMPLING_FIELDS.map((field) => {
             const info = report.fields[field.key];
             return <label key={field.key}>{field.label}
               <input type="number" step={field.step} min={0} placeholder={info?.auto != null ? `${info.auto} (${originLabel(info.origin === "manual" ? "MyDGX" : info.origin)})` : "llama.cpp"} value={draft[field.key] ?? ""} onChange={(event) => set(field.key, event.target.value)} />
             </label>;
           })}
-          {(["cache_type_k", "cache_type_v"] as const).map((key) => <label key={key}>{key === "cache_type_k" ? "Caché K" : "Caché V"}
+          {(["cache_type_k", "cache_type_v"] as const).map((key) => <label key={key}>{key === "cache_type_k" ? t("Caché K") : t("Caché V")}
             <select value={draft[key] ?? ""} onChange={(event) => set(key, event.target.value)}>
-              <option value="">Automático ({report.fields[key]?.auto || "f16"})</option>
+              <option value="">{t("Automático (")}{report.fields[key]?.auto || "f16"})</option>
               {["f16", "q8_0", "q4_0"].map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>)}
         </section>
         <div className="preflight-actions">
-          <small className="preflight-note">Memoria estimada con los valores actuales: ~{Math.ceil(report.estimated_memory_mb / 1024)} GB</small>
-          <button className="button secondary" disabled={busy || !Object.keys(report.overrides).length} onClick={() => void save(true)}><RefreshCw size={14} /> Restablecer automático</button>
-          <button className="button primary" disabled={busy} onClick={() => void save()}><CheckCircle2 size={14} /> Guardar</button>
+          <small className="preflight-note">{t("Memoria estimada con los valores actuales: ~{gb} GB", { gb: Math.ceil(report.estimated_memory_mb / 1024) })}</small>
+          <button className="button secondary" disabled={busy || !Object.keys(report.overrides).length} onClick={() => void save(true)}><RefreshCw size={14} />{" "}{t("Restablecer automático")}</button>
+          <button className="button primary" disabled={busy} onClick={() => void save()}><CheckCircle2 size={14} />{" "}{t("Guardar")}</button>
         </div>
       </>}
     </Card>
@@ -829,14 +831,14 @@ function ModelSettingsDialog({ modelId, notify, onClose, onSaved }: {
 function StopAllModelsButton({ notify, onDone }: { notify: (message: string, error?: boolean) => void; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   async function stopAll() {
-    if (!window.confirm("¿Parar todos los modelos? Se apagan todos los perfiles cargados (también Quick) y los modelos que Ollama tenga en memoria. Se mantienen el modelo del chat, el perfil Default y los servicios ComfyUI, TTS y Whisper.")) return;
+    if (!window.confirm(t("¿Parar todos los modelos? Se apagan todos los perfiles cargados (también Quick) y los modelos que Ollama tenga en memoria. Se mantienen el modelo del chat, el perfil Default y los servicios ComfyUI, TTS y Whisper."))) return;
     setBusy(true);
     try {
       const result = await api<{ stopped_profiles: string[]; released_ollama: string[]; kept_profiles: string[] }>("/api/models/stop-all", { method: "POST" });
       const stopped = [...result.stopped_profiles, ...result.released_ollama];
       notify(stopped.length
-        ? `Parados: ${stopped.join(", ")}${result.kept_profiles.length ? ` · siguen: ${result.kept_profiles.join(", ")}` : ""}`
-        : "No había modelos que parar; solo quedan el chat, Default y los servicios básicos");
+        ? t("Parados: {stopped}{kept}", { stopped: stopped.join(", "), kept: result.kept_profiles.length ? t(" · siguen: {names}", { names: result.kept_profiles.join(", ") }) : "" })
+        : t("No había modelos que parar; solo quedan el chat, Default y los servicios básicos"));
       onDone();
     } catch (error) {
       notify((error as Error).message, true);
@@ -848,9 +850,9 @@ function StopAllModelsButton({ notify, onDone }: { notify: (message: string, err
     className="stop-all-button"
     disabled={busy}
     onClick={() => void stopAll()}
-    title="Parar todos los modelos: apaga los perfiles cargados, incluido Quick, y descarga los modelos de Ollama. Se mantienen el modelo del chat, el perfil Default y lo que usan ComfyUI, TTS y Whisper."
+    title={t("Parar todos los modelos: apaga los perfiles cargados, incluido Quick, y descarga los modelos de Ollama. Se mantienen el modelo del chat, el perfil Default y lo que usan ComfyUI, TTS y Whisper.")}
   >
-    <Square size={13} /> {busy ? "Parando…" : "Parar modelos"}
+    <Square size={13} /> {busy ? t("Parando…") : t("Parar modelos")}
   </button>;
 }
 
@@ -873,9 +875,9 @@ function hfFileGroups(files: HfRemoteFile[]): HfFileGroup[] {
       /(?:^|[._/-])((?:UD-)?Q[2-8](?:_[A-Z0-9]+)*|IQ[1-4](?:_[A-Z0-9]+)*|MXFP4|BF16|F16|FP16)(?=[._/-]|$)/i,
     )?.[1]?.toUpperCase();
     const label = kind === "auxiliary"
-      ? "Archivos auxiliares"
+      ? t("Archivos auxiliares")
       : kind === "mmproj"
-        ? `Visión · ${detectedQuantization || file.quantization || fallback}`
+        ? t("Visión · {value}", { value: detectedQuantization || file.quantization || fallback })
         : detectedQuantization || file.quantization || fallback;
     const group = groups.get(id) ?? {
       id,
@@ -925,28 +927,28 @@ function hfFileGroups(files: HfRemoteFile[]): HfFileGroup[] {
 function quantizationHint(label: string) {
   const upper = label.toUpperCase();
   const quality = upper.includes("BF16") || upper.includes("F16")
-    ? "Precisión completa · enorme"
+    ? t("Precisión completa · enorme")
     : upper.includes("Q8")
-      ? "Máxima fidelidad · grande"
+      ? t("Máxima fidelidad · grande")
       : upper.includes("Q6")
-        ? "Calidad muy alta"
+        ? t("Calidad muy alta")
         : upper.includes("Q5")
-          ? "Alta calidad"
+          ? t("Alta calidad")
           : upper.includes("Q4") || upper.includes("IQ4")
-            ? "Equilibrio recomendado"
+            ? t("Equilibrio recomendado")
             : upper.includes("Q3") || upper.includes("IQ3")
-              ? "Compacta"
+              ? t("Compacta")
               : upper.includes("Q2") || upper.includes("IQ2")
-                ? "Muy compacta"
+                ? t("Muy compacta")
                 : upper.includes("IQ1")
-                  ? "Mínimo tamaño · menor calidad"
-                  : "Variante del modelo";
+                  ? t("Mínimo tamaño · menor calidad")
+                  : t("Variante del modelo");
   const variant = /_(?:S|XS|XXS)(?:$|[_.-])/.test(upper)
-    ? "prioriza tamaño"
+    ? t("prioriza tamaño")
     : /_(?:M)(?:$|[_.-])/.test(upper)
-      ? "equilibrada"
+      ? t("equilibrada")
       : /_(?:L|XL|NL)(?:$|[_.-])/.test(upper)
-        ? "prioriza calidad"
+        ? t("prioriza calidad")
         : "";
   return `${quality}${variant ? ` · ${variant}` : ""}`;
 }
@@ -1012,9 +1014,9 @@ function AddToProfileDialog({ request, notify, onClose }: {
         }),
       });
       notify(
-        `${request.modelId} añadido a ${profile.name}`
-        + (result.context_size ? ` con ${contextLabel(result.context_size)}` : "")
-        + (result.running ? " · se cargará al reiniciar el perfil" : " · se cargará al arrancar el perfil"),
+        t("{modelId} añadido a {name}", { modelId: request.modelId, name: profile.name })
+        + (result.context_size ? t(" con {context}", { context: contextLabel(result.context_size) }) : "")
+        + (result.running ? t(" · se cargará al reiniciar el perfil") : t(" · se cargará al arrancar el perfil")),
       );
       onClose();
     } catch (error) {
@@ -1024,37 +1026,37 @@ function AddToProfileDialog({ request, notify, onClose }: {
     }
   }
 
-  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={`Añadir ${request.modelId} a un perfil`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={t("Añadir {modelId} a un perfil", { modelId: request.modelId })} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <Card className="model-help-dialog add-to-profile-dialog">
-      <SectionHeading eyebrow="AÑADIR A PERFIL" title={request.modelId} action={<button className="icon-button" onClick={onClose} aria-label="Cerrar"><X size={16} /></button>} />
-      <p className="preflight-intro">Se añade con la misma configuración que usaría <strong>Encender</strong> (cuantización, drafter, muestreo y tus ajustes manuales) y un puerto libre propio. Default y Quick se gestionan desde esta página y no aparecen aquí.</p>
+      <SectionHeading eyebrow={t("AÑADIR A PERFIL")} title={request.modelId} action={<button className="icon-button" onClick={onClose} aria-label={t("Cerrar")}><X size={16} /></button>} />
+      <p className="preflight-intro">{t("Se añade con la misma configuración que usaría")}{" "}<strong>{t("Encender")}</strong>{" "}{t("(cuantización, drafter, muestreo y tus ajustes manuales) y un puerto libre propio. Default y Quick se gestionan desde esta página y no aparecen aquí.")}</p>
       {profiles === null
-        ? <p className="preflight-intro"><RefreshCw className="spin" size={14} /> Cargando perfiles…</p>
+        ? <p className="preflight-intro"><RefreshCw className="spin" size={14} />{" "}{t("Cargando perfiles…")}</p>
         : profiles.length === 0
-          ? <div className="profile-warning"><TriangleAlert size={15} />No hay perfiles editables. Crea uno en Perfiles.</div>
-          : <div className="add-to-profile-list" role="radiogroup" aria-label="Perfil de destino">
+          ? <div className="profile-warning"><TriangleAlert size={15} />{t("No hay perfiles editables. Crea uno en Perfiles.")}</div>
+          : <div className="add-to-profile-list" role="radiogroup" aria-label={t("Perfil de destino")}>
             {profiles.map((profile) => {
               const already = contains(profile);
               return <label key={profile.id} className={`${selected === profile.id ? "selected" : ""} ${already ? "disabled" : ""}`}>
                 <input type="radio" name="add-to-profile" value={profile.id} checked={selected === profile.id} disabled={already} onChange={() => setSelected(profile.id)} />
                 <span>
                   <strong>{profile.name}</strong>
-                  <small>{already ? "Ya contiene este modelo" : `${profile.models.length} modelo${profile.models.length === 1 ? "" : "s"} · ${profile.engine}${profile.active ? " · predeterminado" : ""}`}</small>
+                  <small>{already ? t("Ya contiene este modelo") : t(profile.models.length === 1 ? "{count} modelo · {engine}{suffix}" : "{count} modelos · {engine}{suffix}", { count: profile.models.length, engine: profile.engine, suffix: profile.active ? t(" · predeterminado") : "" })}</small>
                 </span>
               </label>;
             })}
           </div>}
       {range && <div className="add-to-profile-context">
-        <span>Contexto</span>
-        <label className="quick-context-slider" title="Va del mínimo de los agentes de código al máximo del autor o del GGUF">
-          <input type="range" min={range.context_min} max={range.context_max} step={1024} value={context} disabled={busy} onChange={(event) => setContext(Number(event.target.value))} aria-label={`Contexto de ${request.modelId} en el perfil`} />
-          <span>{contextLabel(context).replace(" tokens", "")}{memoryAt(context) ? <small>~{(memoryAt(context) / 1024).toFixed(0)} GB</small> : null}</span>
+        <span>{t("Contexto")}</span>
+        <label className="quick-context-slider" title={t("Va del mínimo de los agentes de código al máximo del autor o del GGUF")}>
+          <input type="range" min={range.context_min} max={range.context_max} step={1024} value={context} disabled={busy} onChange={(event) => setContext(Number(event.target.value))} aria-label={t("Contexto de {modelId} en el perfil", { modelId: request.modelId })} />
+          <span>{contextLabel(context).replace(t(" tokens"), "")}{memoryAt(context) ? <small>~{(memoryAt(context) / 1024).toFixed(0)} GB</small> : null}</span>
         </label>
       </div>}
       <div className="add-to-profile-actions">
-        <button className="button secondary" onClick={onClose}>Cancelar</button>
+        <button className="button secondary" onClick={onClose}>{t("Cancelar")}</button>
         <button className="button primary" disabled={busy || !selected || Boolean(profiles?.find((item) => item.id === selected && contains(item)))} onClick={() => void submit()}>
-          <Plus size={14} /> {busy ? "Añadiendo…" : "Añadir al perfil"}
+          <Plus size={14} /> {busy ? t("Añadiendo…") : t("Añadir al perfil")}
         </button>
       </div>
     </Card>
@@ -1084,10 +1086,10 @@ function recommendedHfFiles(inspection: HfInspection) {
 }
 
 function unsupportedQuickStartReason(category: string) {
-  if (category === "Voz / audio") return "Modelo de voz: lo cargan el servicio TTS, Whisper o el Laboratorio IA cuando lo usan; no se enciende como modelo de chat";
-  if (category === "Imagen" || category === "Vídeo") return "Modelo de imagen o vídeo: ComfyUI lo carga al generar y desde aquí puedes liberarlo; no se enciende como modelo de chat";
-  if (category === "Embeddings") return "Modelo de embeddings: lo cargan los servicios que lo usan; no se enciende como modelo de chat";
-  return "Solo tiene pesos safetensors o PyTorch: Encender usa llama.cpp y necesita un GGUF. Descarga una versión GGUF o crea un perfil con un motor compatible";
+  if (category === t("Voz / audio")) return t("Modelo de voz: lo cargan el servicio TTS, Whisper o el Laboratorio IA cuando lo usan; no se enciende como modelo de chat");
+  if (category === t("Imagen") || category === t("Vídeo")) return t("Modelo de imagen o vídeo: ComfyUI lo carga al generar y desde aquí puedes liberarlo; no se enciende como modelo de chat");
+  if (category === t("Embeddings")) return t("Modelo de embeddings: lo cargan los servicios que lo usan; no se enciende como modelo de chat");
+  return t("Solo tiene pesos safetensors o PyTorch: Encender usa llama.cpp y necesita un GGUF. Descarga una versión GGUF o crea un perfil con un motor compatible");
 }
 
 function QuickStartButton({ label, availability, defaultContext, busy, pending, title, onStart, onContextChange, unsupportedReason }: {
@@ -1105,7 +1107,7 @@ function QuickStartButton({ label, availability, defaultContext, busy, pending, 
   const initial = range ? Math.min(range.context_max, Math.max(range.context_min, defaultContext || range.context_min)) : 0;
   const [chosen, setChosen] = useState<number | null>(null);
   if (unsupportedReason || (availability && !availability.supported)) {
-    return <button className="button secondary compact no-fit" disabled title={unsupportedReason || availability?.reason || "Este modelo no se puede encender desde aquí"} aria-label={`${label} no se puede encender aquí`}><Play size={13} /> No disponible</button>;
+    return <button className="button secondary compact no-fit" disabled title={unsupportedReason || availability?.reason || t("Este modelo no se puede encender desde aquí")} aria-label={t("{label} no se puede encender aquí", { label: label })}><Play size={13} />{" "}{t("No disponible")}</button>;
   }
   const context = chosen ?? initial;
   const memoryAt = (tokens: number) => range && range.memory_min_mb && range.memory_max_mb
@@ -1114,7 +1116,7 @@ function QuickStartButton({ label, availability, defaultContext, busy, pending, 
   const delta = range ? memoryAt(context) - memoryAt(initial) : 0;
   const memoryLimited = availability?.spare_mb != null && (availability.fits || availability.spare_mb < 0);
   const fits = !availability || (memoryLimited ? (availability.spare_mb ?? 0) - delta >= 0 : availability.fits);
-  const slider = range && <label className="quick-context-slider" title={`Contexto al encender: ${context.toLocaleString()} tokens${memoryAt(context) ? ` · ~${(memoryAt(context) / 1024).toFixed(1)} GB` : ""}. Va del mínimo de los agentes de código al máximo del autor o del GGUF`}>
+  const slider = range && <label className="quick-context-slider" title={t("Contexto al encender: {context} tokens{memory}. Va del mínimo de los agentes de código al máximo del autor o del GGUF", { context: context.toLocaleString(locale), memory: memoryAt(context) ? t(" · ~{gb} GB", { gb: (memoryAt(context) / 1024).toFixed(1) }) : "" })}>
     <input
       type="range"
       min={range.context_min}
@@ -1127,17 +1129,17 @@ function QuickStartButton({ label, availability, defaultContext, busy, pending, 
         setChosen(value);
         onContextChange?.(value !== initial ? value : undefined);
       }}
-      aria-label={`Contexto al encender ${label}`}
+      aria-label={t("Contexto al encender {label}", { label: label })}
     />
-    <span>{contextLabel(context).replace(" tokens", "")}{memoryAt(context) ? <small>~{(memoryAt(context) / 1024).toFixed(0)} GB</small> : null}</span>
+    <span>{contextLabel(context).replace(t(" tokens"), "")}{memoryAt(context) ? <small>~{(memoryAt(context) / 1024).toFixed(0)} GB</small> : null}</span>
   </label>;
   if (!fits) {
-    const reason = memoryLimited && availability?.fits ? "Con este contexto no cabe junto a lo que ya está cargado" : availability?.reason;
-    return <>{slider}<button className="button secondary compact no-fit" disabled title={reason || "No cabe junto a lo que ya está cargado"} aria-label={`${label} no cabe ahora`}><Play size={13} /> No cabe ahora</button></>;
+    const reason = memoryLimited && availability?.fits ? t("Con este contexto no cabe junto a lo que ya está cargado") : availability?.reason;
+    return <>{slider}<button className="button secondary compact no-fit" disabled title={reason || t("No cabe junto a lo que ya está cargado")} aria-label={t("{label} no cabe ahora", { label: label })}><Play size={13} />{" "}{t("No cabe ahora")}</button></>;
   }
   const incremental = (availability?.incremental_mb ?? 0) + delta;
-  const extra = incremental > 0 ? ` · ocupará unos ${(incremental / 1024).toFixed(1)} GB` : "";
-  return <>{slider}<button className="button primary compact" disabled={busy} onClick={() => onStart(chosen != null && chosen !== initial ? chosen : undefined)} title={`${title}${extra}`} aria-label={`Encender ${label}`}><Play className={pending ? "spin" : ""} size={13} /> {pending ? "Encendiendo…" : "Encender"}</button></>;
+  const extra = incremental > 0 ? t(" · ocupará unos {toFixed} GB", { toFixed: (incremental / 1024).toFixed(1) }) : "";
+  return <>{slider}<button className="button primary compact" disabled={busy} onClick={() => onStart(chosen != null && chosen !== initial ? chosen : undefined)} title={`${title}${extra}`} aria-label={t("Encender {label}", { label: label })}><Play className={pending ? "spin" : ""} size={13} /> {pending ? t("Encendiendo…") : t("Encender")}</button></>;
 }
 
 type Job = {
@@ -1452,30 +1454,30 @@ const activeJobStatuses = new Set(["queued", "running", "cancelling"]);
 
 function jobLabel(kind: string): string {
   return ({
-    "profile.prepare-start": "Preparando perfil",
-    "profile.download": "Descargando modelo del perfil",
-    "ollama.pull": "Descargando modelo Ollama",
-    "ollama.update": "Actualizando modelo Ollama",
-    "huggingface.download": "Descargando repositorio Hugging Face",
-    "huggingface.files.download": "Descargando archivos Hugging Face",
-    "huggingface.integrity": "Verificando modelo Hugging Face",
-    "multimodal.video": "Generando vídeo",
-    "benchmark.run": "Ejecutando benchmark",
-    "benchmark.suite": "Suite de benchmarks",
-    "benchmark.import": "Importando benchmark",
-    "system.update": "Actualizando el sistema",
-    "system.repair": "Verificando y reparando el sistema",
+    "profile.prepare-start": t("Preparando perfil"),
+    "profile.download": t("Descargando modelo del perfil"),
+    "ollama.pull": t("Descargando modelo Ollama"),
+    "ollama.update": t("Actualizando modelo Ollama"),
+    "huggingface.download": t("Descargando repositorio Hugging Face"),
+    "huggingface.files.download": t("Descargando archivos Hugging Face"),
+    "huggingface.integrity": t("Verificando modelo Hugging Face"),
+    "multimodal.video": t("Generando vídeo"),
+    "benchmark.run": t("Ejecutando benchmark"),
+    "benchmark.suite": t("Suite de benchmarks"),
+    "benchmark.import": t("Importando benchmark"),
+    "system.update": t("Actualizando el sistema"),
+    "system.repair": t("Verificando y reparando el sistema"),
   } as Record<string, string>)[kind] || kind.replaceAll(".", " · ");
 }
 
 function jobStatusLabel(status: string): string {
   return ({
-    queued: "En cola",
-    running: "En curso",
-    cancelling: "Cancelando",
-    cancelled: "Cancelada",
-    completed: "Completada",
-    failed: "Fallida",
+    queued: t("En cola"),
+    running: t("En curso"),
+    cancelling: t("Cancelando"),
+    cancelled: t("Cancelada"),
+    completed: t("Completada"),
+    failed: t("Fallida"),
   } as Record<string, string>)[status] || status;
 }
 
@@ -1485,35 +1487,35 @@ function jobTarget(job: Job): string {
 }
 
 function jobNextStep(job: Job): string {
-  if (job.status === "queued") return "A continuación: MyDGX iniciará la operación.";
+  if (job.status === "queued") return t("A continuación: MyDGX iniciará la operación.");
   if (job.kind === "profile.prepare-start") {
     const message = job.message.toLocaleLowerCase();
-    if (message.includes("arrancando")) return "Ahora espera que cada modelo responda correctamente.";
-    if (message.includes("comprobando archivos")) return "A continuación activará el perfil y arrancará sus modelos.";
-    if (message.includes("preparando") || message.includes("descarg")) return "Después verificará archivos, memoria y puertos antes de arrancar.";
-    return "MyDGX seguirá preparando los modelos habilitados del perfil.";
+    if (/arrancando|starting/.test(message)) return t("Ahora espera que cada modelo responda correctamente.");
+    if (/comprobando archivos|checking files/.test(message)) return t("A continuación activará el perfil y arrancará sus modelos.");
+    if (/preparando|descarg|preparing|download/.test(message)) return t("Después verificará archivos, memoria y puertos antes de arrancar.");
+    return t("MyDGX seguirá preparando los modelos habilitados del perfil.");
   }
   if (job.kind === "benchmark.suite") {
-    if (job.message.toLocaleLowerCase().includes("restaur")) {
-      return "MyDGX volverá a cargar los perfiles y residentes capturados al inicio.";
+    if (/restaur|restor/.test(job.message.toLocaleLowerCase())) {
+      return t("MyDGX volverá a cargar los perfiles y residentes capturados al inicio.");
     }
-    return "Después liberará la memoria y continuará con el siguiente modelo pendiente.";
+    return t("Después liberará la memoria y continuará con el siguiente modelo pendiente.");
   }
   if (job.kind.startsWith("huggingface") || job.kind.startsWith("ollama")) {
-    return "Al terminar, MyDGX verificará que el modelo haya quedado disponible.";
+    return t("Al terminar, MyDGX verificará que el modelo haya quedado disponible.");
   }
   if (job.kind === "system.update" || job.kind === "system.repair") {
-    return "Después comprobará la integridad de paquetes, kernel y runtimes.";
+    return t("Después comprobará la integridad de paquetes, kernel y runtimes.");
   }
-  return "MyDGX continuará con la siguiente etapa y registrará aquí el resultado.";
+  return t("MyDGX continuará con la siguiente etapa y registrará aquí el resultado.");
 }
 
 function SidebarOperations({ jobs }: { jobs: Job[] }) {
   const active = jobs.filter((job) => activeJobStatuses.has(job.status)).slice(0, 2);
   if (!active.length) return null;
   return (
-    <section className="sidebar-operations" aria-label="Operaciones en curso">
-      <div className="sidebar-operations-title"><Activity size={12} /><span>EN CURSO</span><strong>{active.length}</strong></div>
+    <section className="sidebar-operations" aria-label={t("Operaciones en curso")}>
+      <div className="sidebar-operations-title"><Activity size={12} /><span>{t("EN CURSO")}</span><strong>{active.length}</strong></div>
       {active.map((job) => (
         <div className={`sidebar-operation ${job.kind === "benchmark.suite" ? "benchmark-suite-operation" : ""}`} key={job.id}>
           <div>
@@ -1548,10 +1550,10 @@ function ActivitySummary({ jobs }: { jobs: Job[] }) {
     <Card className="activity-summary">
       <div className="activity-summary-head">
         <div>
-          <span className="card-kicker"><Terminal size={15} /> Registro de actividad</span>
-          <small>Operaciones principales realizadas por MyDGX y su estado actual.</small>
+          <span className="card-kicker"><Terminal size={15} />{" "}{t("Registro de actividad")}</span>
+          <small>{t("Operaciones principales realizadas por MyDGX y su estado actual.")}</small>
         </div>
-        <span className={`activity-count ${active.length ? "live" : ""}`}>{active.length ? `${active.length} en curso` : "En reposo"}</span>
+        <span className={`activity-count ${active.length ? "live" : ""}`}>{active.length ? t("{length} en curso", { length: active.length }) : t("En reposo")}</span>
       </div>
       {active.length > 0 && <div className="activity-current">
         {active.slice(0, 3).map((job) => <div key={job.id}>
@@ -1579,7 +1581,7 @@ function ActivitySummary({ jobs }: { jobs: Job[] }) {
             </div>
           </div>;
         })}
-      </div> : <div className="activity-log-empty"><Activity size={18} /><span>Todavía no hay operaciones registradas.</span></div>}
+      </div> : <div className="activity-log-empty"><Activity size={18} /><span>{t("Todavía no hay operaciones registradas.")}</span></div>}
     </Card>
   );
 }
@@ -1838,10 +1840,10 @@ type WebApp = {
 function WebAppButton({ app }: { app: WebApp }) {
   const ready = app.state === "running" && app.reachable;
   const title = ready
-    ? `${app.name} en 127.0.0.1:${app.port}`
+    ? t("{name} en 127.0.0.1:{port}", { name: app.name, port: app.port })
     : app.state === "running"
-      ? `${app.name} está en marcha pero no responde en el puerto ${app.port}`
-      : `${app.name} se está preparando`;
+      ? t("{name} está en marcha pero no responde en el puerto {port}", { name: app.name, port: app.port })
+      : t("{name} se está preparando", { name: app.name });
   return (
     <a className={`button secondary web-app-link ${ready ? "" : "pending"}`} href={webAppHref(app)} target="_blank" rel="noreferrer" title={title}>
       {app.alias} <small>:{app.port}</small> <Rocket size={15} />
@@ -1861,39 +1863,39 @@ type ProfileAppState = {
 };
 
 const profileAppStateLabels: Record<ProfileAppState["state"], string> = {
-  starting: "Arrancando",
-  running: "En marcha",
-  stopping: "Deteniendo",
-  stopped: "Parada",
-  error: "Error",
+  starting: t("Arrancando"),
+  running: t("En marcha"),
+  stopping: t("Deteniendo"),
+  stopped: t("Parada"),
+  error: t("Error"),
 };
 
 const QUICK_PROFILE_ID = "mydgx-quick";
 const MANAGED_PROFILE_IDS = new Set(["mydgx-default", QUICK_PROFILE_ID]);
 
 const navItems: Array<{ id: View; label: string; icon: typeof Gauge }> = [
-  { id: "dashboard", label: "Resumen", icon: Gauge },
-  { id: "chat", label: "Chat", icon: MessageSquare },
-  { id: "models", label: "Modelos", icon: Boxes },
-  { id: "profiles", label: "Perfiles", icon: SlidersHorizontal },
-  { id: "benchmarks", label: "Benchmarks", icon: Activity },
-  { id: "storage", label: "Almacenamiento", icon: HardDrive },
-  { id: "engines", label: "Motores", icon: Cpu },
-  { id: "multimodal", label: "Laboratorio IA", icon: Sparkles },
-  { id: "settings", label: "Configuración", icon: Settings },
-  { id: "system", label: "Sistema", icon: Server },
-  { id: "logs", label: "Logs", icon: Terminal },
+  { id: "dashboard", label: t("Resumen"), icon: Gauge },
+  { id: "chat", label: t("Chat"), icon: MessageSquare },
+  { id: "models", label: t("Modelos"), icon: Boxes },
+  { id: "profiles", label: t("Perfiles"), icon: SlidersHorizontal },
+  { id: "benchmarks", label: t("Benchmarks"), icon: Activity },
+  { id: "storage", label: t("Almacenamiento"), icon: HardDrive },
+  { id: "engines", label: t("Motores"), icon: Cpu },
+  { id: "multimodal", label: t("Laboratorio IA"), icon: Sparkles },
+  { id: "settings", label: t("Configuración"), icon: Settings },
+  { id: "system", label: t("Sistema"), icon: Server },
+  { id: "logs", label: t("Logs"), icon: Terminal },
 ];
 
 const taskOptions: Array<{ id: ModelTask; label: string; input: InputModality[]; output: OutputModality[] }> = [
-  { id: "chat", label: "Chat / texto", input: ["text"], output: ["text"] },
-  { id: "vision", label: "Visión", input: ["text", "image"], output: ["text"] },
-  { id: "embeddings", label: "Embeddings", input: ["text"], output: ["embedding"] },
-  { id: "image-generation", label: "Generación de imagen", input: ["text"], output: ["image"] },
-  { id: "asr", label: "Audio a texto (ASR)", input: ["audio"], output: ["text"] },
-  { id: "tts", label: "Texto a audio (TTS)", input: ["text"], output: ["audio"] },
-  { id: "video-generation", label: "Generación de vídeo", input: ["text"], output: ["video"] },
-  { id: "reranking", label: "Reranking", input: ["text"], output: ["scores"] },
+  { id: "chat", label: t("Chat / texto"), input: ["text"], output: ["text"] },
+  { id: "vision", label: t("Visión"), input: ["text", "image"], output: ["text"] },
+  { id: "embeddings", label: t("Embeddings"), input: ["text"], output: ["embedding"] },
+  { id: "image-generation", label: t("Generación de imagen"), input: ["text"], output: ["image"] },
+  { id: "asr", label: t("Audio a texto (ASR)"), input: ["audio"], output: ["text"] },
+  { id: "tts", label: t("Texto a audio (TTS)"), input: ["text"], output: ["audio"] },
+  { id: "video-generation", label: t("Generación de vídeo"), input: ["text"], output: ["video"] },
+  { id: "reranking", label: t("Reranking"), input: ["text"], output: ["scores"] },
 ];
 
 const engineOptions: ModelConfig["engine"][] = [
@@ -1923,6 +1925,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...languageHeader,
       ...(key ? { "X-MyDGX-Key": key } : {}),
       ...options.headers,
     },
@@ -1940,7 +1943,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 async function apiBlob(path: string): Promise<Blob> {
   const key = getApiKey();
   const response = await fetch(path, {
-    headers: key ? { "X-MyDGX-Key": key } : {},
+    headers: { ...languageHeader, ...(key ? { "X-MyDGX-Key": key } : {}) },
   });
   if (!response.ok) {
     if (response.status === 401 && response.headers.get("X-MyDGX-Auth-Required") === "password") {
@@ -1987,28 +1990,28 @@ function localModelCategoryHint(source: "ollama" | "huggingface", model: Record<
 
 function localModelCategory(searchable: string): { label: string; icon: typeof Gauge; color: string } {
   const text = searchable.toLowerCase();
-  if (/(audio|voice|speech|whisper|tts|asr|wav2vec|bark|vocos|vocoder|snac|encodec|chatterbox|kokoro|xtts|parler|\d+khz)/.test(text)) return { label: "Voz / audio", icon: Mic, color: "#3e8fdc" };
-  if (/(wan2|wan_2|ltx|video|text-to-video|image-to-video)/.test(text)) return { label: "Vídeo", icon: Film, color: "#9b66db" };
-  if (/(flux|diffusion|sdxl|sd3|hidream|image-gen|qwen-image|text-to-image)/.test(text)) return { label: "Imagen", icon: ImageIcon, color: "#c05bd6" };
-  if (/(vision|llava|[-_.]vl\b|[-_.]vl[-_.]|clip|siglip|mmproj)/.test(text)) return { label: "Visión", icon: Eye, color: "#e09a2b" };
-  if (/(embed|rerank|bge|e5-|gte-|sentence-transformers|minilm|mpnet)/.test(text)) return { label: "Embeddings", icon: Layers, color: "#2fb3a3" };
-  if (/(coder|code)/.test(text)) return { label: "Código", icon: Terminal, color: "#68b929" };
-  return { label: "Texto", icon: MessageSquare, color: "#68b929" };
+  if (/(audio|voice|speech|whisper|tts|asr|wav2vec|bark|vocos|vocoder|snac|encodec|chatterbox|kokoro|xtts|parler|\d+khz)/.test(text)) return { label: t("Voz / audio"), icon: Mic, color: "#3e8fdc" };
+  if (/(wan2|wan_2|ltx|video|text-to-video|image-to-video)/.test(text)) return { label: t("Vídeo"), icon: Film, color: "#9b66db" };
+  if (/(flux|diffusion|sdxl|sd3|hidream|image-gen|qwen-image|text-to-image)/.test(text)) return { label: t("Imagen"), icon: ImageIcon, color: "#c05bd6" };
+  if (/(vision|llava|[-_.]vl\b|[-_.]vl[-_.]|clip|siglip|mmproj)/.test(text)) return { label: t("Visión"), icon: Eye, color: "#e09a2b" };
+  if (/(embed|rerank|bge|e5-|gte-|sentence-transformers|minilm|mpnet)/.test(text)) return { label: t("Embeddings"), icon: Layers, color: "#2fb3a3" };
+  if (/(coder|code)/.test(text)) return { label: t("Código"), icon: Terminal, color: "#68b929" };
+  return { label: t("Texto"), icon: MessageSquare, color: "#68b929" };
 }
 
 const LOCAL_MODEL_SECTIONS = [
-  { key: "text", sourceLabel: "Texto", title: "Chat y texto", managed: false },
-  { key: "code", sourceLabel: "Código", title: "Código", managed: false },
-  { key: "vision", sourceLabel: "Visión", title: "Chat con visión", managed: false },
-  { key: "embeddings", sourceLabel: "Embeddings", title: "Embeddings y reranking", managed: false },
-  { key: "image", sourceLabel: "Imagen", title: "Generación de imagen", managed: true },
-  { key: "video", sourceLabel: "Vídeo", title: "Generación de vídeo", managed: true },
-  { key: "audio", sourceLabel: "Voz / audio", title: "Voz y audio", managed: true },
+  { key: "text", sourceLabel: t("Texto"), title: t("Chat y texto"), managed: false },
+  { key: "code", sourceLabel: t("Código"), title: t("Código"), managed: false },
+  { key: "vision", sourceLabel: t("Visión"), title: t("Chat con visión"), managed: false },
+  { key: "embeddings", sourceLabel: t("Embeddings"), title: t("Embeddings y reranking"), managed: false },
+  { key: "image", sourceLabel: t("Imagen"), title: t("Generación de imagen"), managed: true },
+  { key: "video", sourceLabel: t("Vídeo"), title: t("Generación de vídeo"), managed: true },
+  { key: "audio", sourceLabel: t("Voz / audio"), title: t("Voz y audio"), managed: true },
 ] as const;
 
 function parametersFromName(name: string): string {
   const moe = name.match(/(\d+(?:\.\d+)?)B[-_ ]A(\d+(?:\.\d+)?)B/i);
-  if (moe) return `${moe[1]}B · ${moe[2]}B activos`;
+  if (moe) return t("{total}B · {active}B activos", { total: moe[1], active: moe[2] });
   const dense = name.match(/(?:^|[-_ :.])(\d+(?:\.\d+)?)([BM])(?=$|[-_ .])/i);
   return dense ? `${dense[1]}${dense[2].toUpperCase()}` : "";
 }
@@ -2016,11 +2019,11 @@ function parametersFromName(name: string): string {
 function contextLabel(value: unknown): string {
   const tokens = Number(value);
   if (!Number.isFinite(tokens) || tokens <= 0) return "";
-  return tokens >= 1024 ? `${Math.round(tokens / 1024)}K tokens` : `${tokens} tokens`;
+  return tokens >= 1024 ? t("{n}K tokens", { n: Math.round(tokens / 1024) }) : t("{tokens} tokens", { tokens });
 }
 
 function HuggingFaceIcon({ size = 26 }: { size?: number }) {
-  return <svg className="hf-logo" width={size} height={size} viewBox="0 0 64 64" role="img" aria-label="Hugging Face">
+  return <svg className="hf-logo" width={size} height={size} viewBox="0 0 64 64" role="img" aria-label={t("Hugging Face")}>
     <circle cx="32" cy="29" r="24" fill="#FFD21E" />
     <circle cx="32" cy="29" r="24" fill="none" stroke="#FF9D0B" strokeWidth="2.5" />
     <path d="M20.5 24.5q3.5-4.5 7 0M36.5 24.5q3.5-4.5 7 0" fill="none" stroke="#3A3B45" strokeWidth="3" strokeLinecap="round" />
@@ -2064,13 +2067,13 @@ function LocalModelCard({
       <div className="lc-title">
         <div className="lc-name-row">
           <strong title={path || name}>{name}</strong>
-          <span className={`badge ${loaded ? "live" : "local"}`}>{loaded ? "Cargado" : "En disco"}</span>
+          <span className={`badge ${loaded ? "live" : "local"}`}>{loaded ? t("Cargado") : t("En disco")}</span>
           {badges}
         </div>
         {path && path !== name && <small className="lc-path" title={path}>{path}</small>}
         <div className="lc-tags">
           <span className="lc-tag category"><CategoryIcon size={11} /> {category.label}</span>
-          <span className="lc-tag">{source === "huggingface" ? "Hugging Face" : source === "ollama" ? "Ollama" : "Runtime"}</span>
+          <span className="lc-tag">{source === "huggingface" ? t("Hugging Face") : source === "ollama" ? t("Ollama") : t("Runtime")}</span>
           {meta && <span className="lc-meta">{meta}</span>}
         </div>
       </div>
@@ -2079,10 +2082,10 @@ function LocalModelCard({
           size={memory.memory_mb * 1024 * 1024}
           total={total}
           estimated
-          label={loaded ? "Memoria" : "Memoria al encender"}
-          detail={[`${bytes(size)} en disco`, memory.context_size ? `${Math.round(memory.context_size / 1024)}K contexto` : "", memory.cache_type ? `KV ${memory.cache_type}` : ""].filter(Boolean).join(" · ")}
+          label={loaded ? t("Memoria") : t("Memoria al encender")}
+          detail={[t("{size} en disco", { size: bytes(size) }), memory.context_size ? t("{n}K contexto", { n: Math.round(memory.context_size / 1024) }) : "", memory.cache_type ? `KV ${memory.cache_type}` : ""].filter(Boolean).join(" · ")}
         />
-        : <ModelSizeGauge size={size} total={total} estimated={estimated} label={source === "runtime" ? "Memoria" : "Tamaño"} />}
+        : <ModelSizeGauge size={size} total={total} estimated={estimated} label={source === "runtime" ? t("Memoria") : t("Tamaño")} />}
     </div>
     {visible.length > 0 && <dl className="lc-specs">
       {visible.map((spec) => <span key={spec.label}><dt>{spec.label}</dt><dd title={spec.title || String(spec.value)}>{spec.value}</dd></span>)}
@@ -2096,7 +2099,7 @@ function ModelSizeGauge({
   size,
   total,
   estimated = false,
-  label = "Tamaño",
+  label = t("Tamaño"),
   detail,
 }: {
   size: number;
@@ -2108,7 +2111,7 @@ function ModelSizeGauge({
   const ratio = total > 0 ? size / total : 0;
   const level = ratio >= 0.85 ? "critical" : ratio >= 0.7 ? "high" : ratio >= 0.5 ? "medium" : "comfortable";
   const percentage = Math.max(0, Math.min(100, ratio * 100));
-  const comparison = `${estimated ? "~" : ""}${bytes(size)} de ${bytes(total)}`;
+  const comparison = t("{prefix}{size} de {total}", { prefix: estimated ? "~" : "", size: bytes(size), total: bytes(total) });
 
   return (
     <div className="model-size">
@@ -2117,9 +2120,9 @@ function ModelSizeGauge({
       {total > 0 && (
         <div
           className={`model-size-gauge ${level}`}
-          title={`${comparison} (${Math.round(ratio * 100)}% de la RAM total)`}
+          title={t("{comparison} ({round}% de la RAM total)", { comparison: comparison, round: Math.round(ratio * 100) })}
           role="meter"
-          aria-label={`${label}: ${comparison}`}
+          aria-label={t("{label}: {comparison}", { label, comparison })}
           aria-valuemin={0}
           aria-valuemax={total}
           aria-valuenow={Math.min(size, total)}
@@ -2128,7 +2131,7 @@ function ModelSizeGauge({
           <span className="model-size-gauge-label">{comparison}</span>
         </div>
       )}
-      {detail && <small className="model-size-detail" title="Pesos y mmproj, caché KV según la cabecera del GGUF y buffers de cálculo">{detail}</small>}
+      {detail && <small className="model-size-detail" title={t("Pesos y mmproj, caché KV según la cabecera del GGUF y buffers de cálculo")}>{detail}</small>}
     </div>
   );
 }
@@ -2142,21 +2145,21 @@ type UnifiedMemorySegment = {
 };
 
 const MEMORY_SEGMENT_DESCRIPTIONS = {
-  system: "Kernel, tablas de páginas y procesos que no son runtimes de IA: servicios del sistema, Docker, el propio MyDGX.",
-  driver: "Memoria reservada por el driver de NVIDIA para CUDA: KV cache, buffers de cómputo y contextos. En el GB10 no figura en ningún proceso, así que no se puede atribuir con certeza; casi siempre pertenece a los modelos cargados. Se libera al detenerlos.",
-  cache: "Copias en RAM de ficheros leídos hace poco (pesos de modelos, descargas). Cuenta como disponible: el kernel la cede al cargar modelos y MyDGX la vacía cuando un modelo no cabe en la memoria libre.",
-  available: "Memoria sin ningún uso, utilizable al instante.",
+  system: t("Kernel, tablas de páginas y procesos que no son runtimes de IA: servicios del sistema, Docker, el propio MyDGX."),
+  driver: t("Memoria reservada por el driver de NVIDIA para CUDA: KV cache, buffers de cómputo y contextos. En el GB10 no figura en ningún proceso, así que no se puede atribuir con certeza; casi siempre pertenece a los modelos cargados. Se libera al detenerlos."),
+  cache: t("Copias en RAM de ficheros leídos hace poco (pesos de modelos, descargas). Cuenta como disponible: el kernel la cede al cargar modelos y MyDGX la vacía cuando un modelo no cabe en la memoria libre."),
+  available: t("Memoria sin ningún uso, utilizable al instante."),
 } as const;
 
 const MEMORY_RUNTIME_LABELS: Record<string, string> = {
-  "llama-server": "Servidor llama.cpp",
-  ollama: "Servidor Ollama",
-  comfyui: "Motor ComfyUI de imagen y vídeo",
-  whisper: "Servicio Whisper de transcripción",
-  tts: "Runtime TTS CUDA",
-  "open-webui": "Interfaz Open WebUI",
-  gateway: "Gateway API OpenAI compatible",
-  searxng: "Buscador SearXNG",
+  "llama-server": t("Servidor llama.cpp"),
+  ollama: t("Servidor Ollama"),
+  comfyui: t("Motor ComfyUI de imagen y vídeo"),
+  whisper: t("Servicio Whisper de transcripción"),
+  tts: t("Runtime TTS CUDA"),
+  "open-webui": t("Interfaz Open WebUI"),
+  gateway: t("Gateway API OpenAI compatible"),
+  searxng: t("Buscador SearXNG"),
 };
 
 function measuredMemorySegments(
@@ -2170,9 +2173,9 @@ function measuredMemorySegments(
       kind: "model" as const,
       description: [
         `${MEMORY_RUNTIME_LABELS[runtime.kind] ?? runtime.kind} · PID ${runtime.pid}.`,
-        runtime.models.length ? `Modelos en memoria: ${runtime.models.join(", ")}.` : "",
-        "Memoria real del proceso: pesos, KV cache y buffers CUDA en la memoria unificada.",
-        runtime.managed ? "" : "No lo lanzó MyDGX: no se detiene al vaciar memoria para benchmarks.",
+        runtime.models.length ? t("Modelos en memoria: {join}.", { join: runtime.models.join(", ") }) : "",
+        t("Memoria real del proceso: pesos, KV cache y buffers CUDA en la memoria unificada."),
+        runtime.managed ? "" : t("No lo lanzó MyDGX: no se detiene al vaciar memoria para benchmarks."),
       ].filter(Boolean).join(" "),
     }));
   const accounted = memory.free + (memory.cache_bytes || 0) + (memory.system_bytes || 0) + (memory.driver_bytes || 0)
@@ -2183,11 +2186,11 @@ function measuredMemorySegments(
     used: memory.total - memory.free - memory.cache_bytes,
     available: memory.available,
     segments: [
-      ...(memory.system_bytes > 0 ? [{ name: "Sistema y otros", bytes: memory.system_bytes, kind: "system" as const, description: MEMORY_SEGMENT_DESCRIPTIONS.system }] : []),
-      ...(driverBytes > 0 ? [{ name: "CUDA del driver (sin proceso atribuible)", bytes: driverBytes, kind: "driver" as const, description: MEMORY_SEGMENT_DESCRIPTIONS.driver }] : []),
+      ...(memory.system_bytes > 0 ? [{ name: t("Sistema y otros"), bytes: memory.system_bytes, kind: "system" as const, description: MEMORY_SEGMENT_DESCRIPTIONS.system }] : []),
+      ...(driverBytes > 0 ? [{ name: t("CUDA del driver (sin proceso atribuible)"), bytes: driverBytes, kind: "driver" as const, description: MEMORY_SEGMENT_DESCRIPTIONS.driver }] : []),
       ...runtimes,
-      ...(memory.cache_bytes > 0 ? [{ name: "Caché de disco (recuperable)", bytes: memory.cache_bytes, kind: "cache" as const, description: MEMORY_SEGMENT_DESCRIPTIONS.cache }] : []),
-      { name: "Libre", bytes: memory.free, kind: "available" as const, description: MEMORY_SEGMENT_DESCRIPTIONS.available },
+      ...(memory.cache_bytes > 0 ? [{ name: t("Caché de disco (recuperable)"), bytes: memory.cache_bytes, kind: "cache" as const, description: MEMORY_SEGMENT_DESCRIPTIONS.cache }] : []),
+      { name: t("Libre"), bytes: memory.free, kind: "available" as const, description: MEMORY_SEGMENT_DESCRIPTIONS.available },
     ],
   };
 }
@@ -2247,13 +2250,13 @@ function unifiedMemorySegments(
     used,
     available,
     segments: [
-      ...(system > 0 ? [{ name: "Sistema y otros", bytes: system, kind: "system" as const, description: "Memoria usada que no se ha podido atribuir a ningún modelo cargado." }] : []),
+      ...(system > 0 ? [{ name: t("Sistema y otros"), bytes: system, kind: "system" as const, description: t("Memoria usada que no se ha podido atribuir a ningún modelo cargado.") }] : []),
       ...attributed.map((model) => ({
         ...model,
         kind: "model" as const,
-        description: model.estimated ? "Tamaño estimado a partir del modelo, no medido en el proceso." : "Memoria declarada por el runtime del modelo.",
+        description: model.estimated ? t("Tamaño estimado a partir del modelo, no medido en el proceso.") : t("Memoria declarada por el runtime del modelo."),
       })),
-      { name: "Disponible", bytes: available, kind: "available" as const, description: "Memoria libre más la caché que el sistema puede ceder." },
+      { name: t("Disponible"), bytes: available, kind: "available" as const, description: t("Memoria libre más la caché que el sistema puede ceder.") },
     ],
   };
 }
@@ -2279,31 +2282,31 @@ function UnifiedMemoryMap({
     const compactSegments = memory.segments
       .filter((segment) => segment.kind !== "cache")
       .map((segment) => segment.kind === "available"
-        ? { ...segment, bytes: segment.bytes + cacheBytes, description: "Memoria libre más la caché de disco, que el sistema recupera al cargar modelos." }
+        ? { ...segment, bytes: segment.bytes + cacheBytes, description: t("Memoria libre más la caché de disco, que el sistema recupera al cargar modelos.") }
         : segment);
     return (
-      <div className="memory-map-mini" title={`${bytes(memory.used)} usados de ${bytes(memory.total)}`}>
-        <div className="memory-map-mini-bar" aria-label={`Memoria: ${bytes(memory.used)} usados de ${bytes(memory.total)}`}>
+      <div className="memory-map-mini" title={t("{used} usados de {total}", { used: bytes(memory.used), total: bytes(memory.total) })}>
+        <div className="memory-map-mini-bar" aria-label={t("Memoria: {used} usados de {total}", { used: bytes(memory.used), total: bytes(memory.total) })}>
           {compactSegments.map((segment, index) => (
             <span
               className={`${segment.kind} ${segment.kind === "model" ? `color-${index % 6}` : ""}`}
               key={`${segment.kind}:${segment.name}:${index}`}
               style={{ width: `${segment.bytes / memory.total * 100}%` }}
-              title={`${segment.name}: ${segment.estimated ? "~" : ""}${bytes(segment.bytes)} (${percent(segment.bytes).toFixed(1)}%)\n${segment.description}`}
+              title={t("{name}: {size} ({pct}%)\n{description}", { name: segment.name, size: `${segment.estimated ? "~" : ""}${bytes(segment.bytes)}`, pct: percent(segment.bytes).toFixed(1), description: segment.description })}
             />
           ))}
         </div>
-        <small><span>MEMORIA</span><b>{bytes(memory.used)} / {bytes(memory.total)}</b></small>
+        <small><span>{t("MEMORIA")}</span><b>{bytes(memory.used)} / {bytes(memory.total)}</b></small>
       </div>
     );
   }
   return (
     <SegmentedMap
       className={className}
-      title="Mapa de memoria unificada"
-      badge={<span className="live-memory-indicator"><i /> EN VIVO</span>}
-      summary={`${bytes(memory.used)} usados · ${bytes(memory.available)} disponibles · ${bytes(memory.total)} total`}
-      ariaLabel={`Memoria unificada: ${bytes(memory.used)} usados y ${bytes(memory.available)} disponibles`}
+      title={t("Mapa de memoria unificada")}
+      badge={<span className="live-memory-indicator"><i />{" "}{t("EN VIVO")}</span>}
+      summary={t("{used} usados · {available} disponibles · {total} total", { used: bytes(memory.used), available: bytes(memory.available), total: bytes(memory.total) })}
+      ariaLabel={t("Memoria unificada: {used} usados y {available} disponibles", { used: bytes(memory.used), available: bytes(memory.available) })}
       total={memory.total}
       segments={memory.segments.map((segment, index) => ({ ...segment, colorIndex: segment.kind === "model" ? index : undefined }))}
     />
@@ -2349,7 +2352,7 @@ function SegmentedMap({ title, badge, summary, ariaLabel, total, segments, class
             style={{ width: `${percent(segment.bytes)}%` }}
             role="listitem"
             tabIndex={0}
-            aria-label={`${segment.name}: ${bytes(segment.bytes)}, ${percent(segment.bytes).toFixed(1)}%. ${segment.description}`}
+            aria-label={t("{name}: {size}, {pct}%. {description}", { name: segment.name, size: bytes(segment.bytes), pct: percent(segment.bytes).toFixed(1), description: segment.description })}
             onMouseEnter={() => setActiveSegment(index)}
             onFocus={() => setActiveSegment(index)}
             onBlur={() => setActiveSegment(null)}
@@ -2366,7 +2369,7 @@ function SegmentedMap({ title, badge, summary, ariaLabel, total, segments, class
           style={{ left: `${Math.min(88, Math.max(12, offsets[activeSegment] + percent(active.bytes) / 2))}%` }}
         >
           <strong>{active.name}</strong>
-          <b>{active.estimated ? "~" : ""}{bytes(active.bytes)} · {percent(active.bytes).toFixed(1)}% del total</b>
+          <b>{active.estimated ? "~" : ""}{bytes(active.bytes)} · {percent(active.bytes).toFixed(1)}{t("% del total")}</b>
           <p>{active.description}</p>
         </div>
       )}
@@ -2426,8 +2429,8 @@ function ActivitySection({ eyebrow, title, total, active, children }: {
           <h2>{title}</h2>
         </div>
         <span className="activity-section-meta">
-          {active > 0 && <span className="badge running">{active} en curso</span>}
-          <small>{total} {total === 1 ? "tarea" : "tareas"}</small>
+          {active > 0 && <span className="badge running">{active}{" "}{t("en curso")}</span>}
+          <small>{total} {total === 1 ? t("tarea") : t("tareas")}</small>
           <ChevronDown size={18} className="activity-section-chevron" />
         </span>
       </summary>
@@ -2447,12 +2450,12 @@ function ProgressRing({
 }) {
   const safe = Math.max(0, Math.min(100, value ?? 0));
   const state = safe >= 90 ? "critical" : safe >= 75 ? "warning" : "normal";
-  const stateLabel = state === "critical" ? "Crítico" : state === "warning" ? "Atención" : "Normal";
+  const stateLabel = state === "critical" ? t("Crítico") : state === "warning" ? t("Atención") : t("Normal");
   const angle = Math.PI - safe / 100 * Math.PI;
   const markerX = 60 + 45 * Math.cos(angle);
   const markerY = 64 - 45 * Math.sin(angle);
   return (
-    <div className={`metric-ring-wrap ${state}`} aria-label={`${label}: ${value == null ? "sin datos" : `${Math.round(value)} por ciento`}, ${stateLabel}`}>
+    <div className={`metric-ring-wrap ${state}`} aria-label={`${label}: ${value == null ? t("sin datos") : t("{value} por ciento", { value: Math.round(value) })}, ${stateLabel}`}>
       <span className="metric-label">{label}</span>
       <div className="metric-gauge">
         <svg viewBox="0 0 120 78" role="img" aria-hidden="true">
@@ -2575,11 +2578,11 @@ function TelemetryChartCard({
               />
             ))}
           </AreaChart>
-        </ResponsiveContainer> : <div className="telemetry-no-data">Esperando muestras históricas…</div>}
+        </ResponsiveContainer> : <div className="telemetry-no-data">{t("Esperando muestras históricas…")}</div>}
       </div>
       <div className="telemetry-chart-foot">
-        <span>Media <strong>{summary(average)}</strong></span>
-        <span>Máx. <strong>{summary(maximum)}</strong></span>
+        <span>{t("Media")}{" "}<strong>{summary(average)}</strong></span>
+        <span>{t("Máx.")}{" "}<strong>{summary(maximum)}</strong></span>
         <div>{series.map((item) => <small key={item.key}><i style={{ background: item.color }} />{item.label}</small>)}</div>
       </div>
     </Card>
@@ -2661,7 +2664,7 @@ function Dashboard({
     };
   }, [historyMinutes, historyOffset, loadHistory]);
 
-  if (!overview) return <Loading label="Leyendo telemetría del sistema" />;
+  if (!overview) return <Loading label={t("Leyendo telemetría del sistema")} />;
   const m = overview.metrics;
   const includeDate = historyMinutes > 1440 || historyOffset > 0;
   const telemetryData: TelemetryPoint[] = history.map((item, index) => {
@@ -2706,7 +2709,7 @@ function Dashboard({
   const uptimeDays = Math.floor(uptimeMinutes / 1_440);
   const uptimeHours = Math.floor((uptimeMinutes % 1_440) / 60);
   const uptimeRemainingMinutes = uptimeMinutes % 60;
-  const uptimeLabel = `${uptimeDays} d ${uptimeHours} h ${uptimeRemainingMinutes} min`;
+  const uptimeLabel = t("{days} d {hours} h {minutes} min", { days: uptimeDays, hours: uptimeHours, minutes: uptimeRemainingMinutes });
   const branding = deviceBranding(overview.host);
   const gatewayDisplayHosts = gateway
     ? gateway.host === "0.0.0.0" || gateway.host === "::"
@@ -2719,7 +2722,7 @@ function Dashboard({
   const gatewayUrlHost = gatewayDisplayHost?.includes(":") ? `[${gatewayDisplayHost}]` : gatewayDisplayHost;
   const gatewayBaseUrl = gateway && gatewayUrlHost
     ? `http://${gatewayUrlHost}:${gateway.port}/v1`
-    : config?.gateway_url ?? "Cargando…";
+    : config?.gateway_url ?? t("Cargando…");
 
   return (
     <div className="view-stack dashboard-view">
@@ -2732,10 +2735,10 @@ function Dashboard({
                   {branding.logo && <span className="vendor-logo"><img src={branding.logo} alt={overview.host.device_vendor} /></span>}
                   <span>{branding.label} · {branding.subtitle}</span>
                 </div>
-              ) : <span className="eyebrow">CENTRO DE CONTROL</span>}
-              <h1>Buenos días, tu Spark está {overview.services.ollama ? "listo." : "en espera."}</h1>
+              ) : <span className="eyebrow">{t("CENTRO DE CONTROL")}</span>}
+              <h1>{t("Buenos días, tu Spark está")}{" "}{overview.services.ollama ? t("listo.") : t("en espera.")}</h1>
               <p>
-                {overview.host.hostname} · {overview.host.architecture} · activo hace {uptimeLabel}
+                {overview.host.hostname} · {overview.host.architecture}{" "}{t("· activo hace")}{" "}{uptimeLabel}
               </p>
             </div>
             {overview.host.is_dgx_spark && branding.product && (
@@ -2747,16 +2750,16 @@ function Dashboard({
           </div>
           {overview.host.is_dgx_spark && (
             <div className="dgx-facts">
-              <span><small>PLATAFORMA</small>{overview.host.device_model}</span>
+              <span><small>{t("PLATAFORMA")}</small>{overview.host.device_model}</span>
               <span><small>GPU</small>{overview.host.gpu_name || "NVIDIA GB10"}</span>
-              <span><small>MEMORIA</small>{bytes(m.memory_total)} unificada</span>
-              <span><small>DISCO</small>{bytes(m.disk_total)} total</span>
+              <span><small>{t("MEMORIA")}</small>{bytes(m.memory_total)} {t("unificada")}</span>
+              <span><small>{t("DISCO")}</small>{bytes(m.disk_total)} {t("total")}</span>
             </div>
           )}
           {overview.host.is_dgx_spark && (
             <div className="hero-actions">
-              {overview.services.dgx_dashboard && <a className="button secondary" href={config?.dgx_dashboard_url} target="_blank" rel="noreferrer">DGX Dashboard <ExternalLink size={15} /></a>}
-              <a className="button primary" href={config?.openwebui_url} target="_blank" rel="noreferrer">Open WebUI <ChevronRight size={15} /></a>
+              {overview.services.dgx_dashboard && <a className="button secondary" href={config?.dgx_dashboard_url} target="_blank" rel="noreferrer">{t("DGX Dashboard")}{" "}<ExternalLink size={15} /></a>}
+              <a className="button primary" href={config?.openwebui_url} target="_blank" rel="noreferrer">{t("Open WebUI")}{" "}<ChevronRight size={15} /></a>
               {overview.services.comfyui && <a className="button secondary" href={config?.comfyui_url} target="_blank" rel="noreferrer">ComfyUI <Sparkles size={15} /></a>}
               {(overview.web_apps ?? []).map((app) => <WebAppButton app={app} key={app.name} />)}
             </div>
@@ -2764,8 +2767,8 @@ function Dashboard({
         </div>
         {!overview.host.is_dgx_spark && (
           <div className="hero-actions">
-            {overview.services.dgx_dashboard && <a className="button secondary" href={config?.dgx_dashboard_url} target="_blank" rel="noreferrer">DGX Dashboard <ExternalLink size={15} /></a>}
-            <a className="button primary" href={config?.openwebui_url} target="_blank" rel="noreferrer">Open WebUI <ChevronRight size={15} /></a>
+            {overview.services.dgx_dashboard && <a className="button secondary" href={config?.dgx_dashboard_url} target="_blank" rel="noreferrer">{t("DGX Dashboard")}{" "}<ExternalLink size={15} /></a>}
+            <a className="button primary" href={config?.openwebui_url} target="_blank" rel="noreferrer">{t("Open WebUI")}{" "}<ChevronRight size={15} /></a>
             {overview.services.comfyui && <a className="button secondary" href={config?.comfyui_url} target="_blank" rel="noreferrer">ComfyUI <Sparkles size={15} /></a>}
               {(overview.web_apps ?? []).map((app) => <WebAppButton app={app} key={app.name} />)}
           </div>
@@ -2774,28 +2777,28 @@ function Dashboard({
 
       <div className="metrics-grid">
         <Card className="metrics-card">
-          <ProgressRing value={m.gpu_utilization} label="GPU" detail={m.gpu_temperature == null ? "No detectada" : `${m.gpu_temperature} °C`} />
-          <ProgressRing value={m.cpu_percent} label="CPU" detail={`${overview.host.cpu_count} núcleos`} />
-          <ProgressRing value={m.memory_percent} label="Memoria unificada" detail={`${bytes(m.memory_used)} / ${bytes(m.memory_total)}`} />
-          <ProgressRing value={m.disk_percent} label="Disco" detail={`${bytes(m.disk_used)} / ${bytes(m.disk_total)}`} />
+          <ProgressRing value={m.gpu_utilization} label="GPU" detail={m.gpu_temperature == null ? t("No detectada") : `${m.gpu_temperature} °C`} />
+          <ProgressRing value={m.cpu_percent} label="CPU" detail={t("{cpu_count} núcleos", { cpu_count: overview.host.cpu_count })} />
+          <ProgressRing value={m.memory_percent} label={t("Memoria unificada")} detail={`${bytes(m.memory_used)} / ${bytes(m.memory_total)}`} />
+          <ProgressRing value={m.disk_percent} label={t("Disco")} detail={`${bytes(m.disk_used)} / ${bytes(m.disk_total)}`} />
         </Card>
         <UnifiedMemoryMap models={models} overview={overview} modelMetrics={modelMetrics} className="dashboard-memory-map" />
         <Card className="quick-grid">
-          <div className="card-kicker"><Gauge size={15} /> Recursos en vivo</div>
+          <div className="card-kicker"><Gauge size={15} />{" "}{t("Recursos en vivo")}</div>
           <div className="quick-resource-row">
             <div className="quick-icon"><Thermometer /></div>
-            <div className="quick-resource-copy"><small>Temperatura GPU</small><strong>{m.gpu_temperature == null ? "—" : `${m.gpu_temperature} °C`}</strong></div>
+            <div className="quick-resource-copy"><small>{t("Temperatura GPU")}</small><strong>{m.gpu_temperature == null ? "—" : `${m.gpu_temperature} °C`}</strong></div>
             {m.gpu_temperature != null && <QuickScale value={m.gpu_temperature} min={30} max={100} />}
           </div>
           <div className="quick-resource-row">
             <div className="quick-icon"><Database /></div>
-            <div className="quick-resource-copy"><small>Memoria unificada usada</small><strong>{bytes(m.memory_used)} <b>{Math.round(m.memory_percent)}%</b></strong></div>
+            <div className="quick-resource-copy"><small>{t("Memoria unificada usada")}</small><strong>{bytes(m.memory_used)} <b>{Math.round(m.memory_percent)}%</b></strong></div>
             <QuickScale value={m.memory_percent} />
           </div>
           <div className="quick-resource-row traffic">
             <div className="quick-icon"><Zap /></div>
-            <div className="quick-resource-copy"><small>Tráfico enviado</small><strong>{latestTelemetry ? `${latestTelemetry.networkTx.toFixed(1)} MiB/s` : "—"} <b>{bytes(m.network_sent)} total</b></strong></div>
-            <div className="quick-sparkline" aria-label="Histórico reciente de tráfico enviado">
+            <div className="quick-resource-copy"><small>{t("Tráfico enviado")}</small><strong>{latestTelemetry ? `${latestTelemetry.networkTx.toFixed(1)} MiB/s` : "—"} <b>{bytes(m.network_sent)} {t("total")}</b></strong></div>
+            <div className="quick-sparkline" aria-label={t("Histórico reciente de tráfico enviado")}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={telemetryData.slice(-40)}>
                   <Line type="monotone" dataKey="networkTx" stroke="var(--accent)" strokeWidth={2.2} dot={false} isAnimationActive={false} />
@@ -2806,33 +2809,33 @@ function Dashboard({
         </Card>
         <Card className="gateway-summary-card">
           <div className="gateway-summary-head">
-            <div className="card-kicker"><Globe size={15} /> Gateway API</div>
+            <div className="card-kicker"><Globe size={15} />{" "}{t("Gateway API")}</div>
             <span className={`badge ${gateway?.running ? "live" : ""}`}>
-              {gateway?.running ? "En línea" : gateway?.enabled ? "No disponible" : "Desactivado"}
+              {gateway?.running ? t("En línea") : gateway?.enabled ? t("No disponible") : t("Desactivado")}
             </span>
           </div>
           <div className="gateway-summary-endpoint">
-            <small>BASE URL · OPENAI COMPATIBLE</small>
+            <small>{t("BASE URL · OPENAI COMPATIBLE")}</small>
             <strong title={gatewayBaseUrl}>{gatewayBaseUrl}</strong>
           </div>
           <div className="gateway-summary-grid">
-            <span title={gatewayDisplayHosts.join(", ")}><small>IP / HOST</small><strong>{gatewayDisplayHosts.join(" · ") || "—"}</strong></span>
-            <span><small>PUERTO</small><strong>{gateway?.port ?? "—"}</strong></span>
-            <span><small>AUTENTICACIÓN</small><strong>{gateway?.api_key_configured ? "Bearer token" : "Sin token"}</strong></span>
-            <span className="gateway-summary-models"><small>MODELOS PUBLICADOS</small><GatewayModelList gateway={gateway} empty="Ningún modelo cargado" /></span>
+            <span title={gatewayDisplayHosts.join(", ")}><small>{t("IP / HOST")}</small><strong>{gatewayDisplayHosts.join(" · ") || "—"}</strong></span>
+            <span><small>{t("PUERTO")}</small><strong>{gateway?.port ?? "—"}</strong></span>
+            <span><small>{t("AUTENTICACIÓN")}</small><strong>{gateway?.api_key_configured ? t("Bearer token") : t("Sin token")}</strong></span>
+            <span className="gateway-summary-models"><small>{t("MODELOS PUBLICADOS")}</small><GatewayModelList gateway={gateway} empty={t("Ningún modelo cargado")} /></span>
           </div>
           <div className="gateway-token-hint">
             <ShieldCheck size={14} />
-            <span><small>Token para clientes</small><strong>{gateway?.api_key_configured ? "Bearer <GATEWAY_API_KEY>" : "No requerido · solo acceso local"}</strong></span>
+            <span><small>{t("Token para clientes")}</small><strong>{gateway?.api_key_configured ? t("Bearer <GATEWAY_API_KEY>") : t("No requerido · solo acceso local")}</strong></span>
           </div>
         </Card>
         <Card className="status-card">
-          <div className="card-kicker"><Activity size={15} /> Servicios</div>
+          <div className="card-kicker"><Activity size={15} />{" "}{t("Servicios")}</div>
           {Object.entries(overview.services).map(([name, online]) => (
             <div className="service-row" key={name}>
               <StatusDot online={online} />
               <span>{name.replace("_", " ")}</span>
-              <small>{online ? "En línea" : "No disponible"}</small>
+              <small>{online ? t("En línea") : t("No disponible")}</small>
             </div>
           ))}
         </Card>
@@ -2841,13 +2844,13 @@ function Dashboard({
       <section className="telemetry-history-section">
         <div className="telemetry-history-heading">
           <div>
-            <span className="eyebrow">HISTÓRICO DE RECURSOS</span>
-            <h2>Telemetría del sistema</h2>
+            <span className="eyebrow">{t("HISTÓRICO DE RECURSOS")}</span>
+            <h2>{t("Telemetría del sistema")}</h2>
             <small>
               {visibleRange.start.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}
               {" — "}
               {visibleRange.end.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}
-              {historyLoading && " · actualizando…"}
+              {historyLoading && <>{" · "}{t("actualizando…")}</>}
             </small>
           </div>
           <div className="telemetry-history-controls">
@@ -2867,35 +2870,35 @@ function Dashboard({
               ))}
             </div>
             <div className="telemetry-navigation">
-              <button className="icon-button" aria-label="Periodo anterior" disabled={historyOffset >= maxHistoryOffset} onClick={() => setHistoryOffset((value) => Math.min(maxHistoryOffset, value + 1))}><ChevronLeft size={15} /></button>
-              <button className="button secondary" disabled={historyOffset === 0} onClick={() => setHistoryOffset(0)}>Ahora</button>
-              <button className="icon-button" aria-label="Periodo siguiente" disabled={historyOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}><ChevronRight size={15} /></button>
+              <button className="icon-button" aria-label={t("Periodo anterior")} disabled={historyOffset >= maxHistoryOffset} onClick={() => setHistoryOffset((value) => Math.min(maxHistoryOffset, value + 1))}><ChevronLeft size={15} /></button>
+              <button className="button secondary" disabled={historyOffset === 0} onClick={() => setHistoryOffset(0)}>{t("Ahora")}</button>
+              <button className="icon-button" aria-label={t("Periodo siguiente")} disabled={historyOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}><ChevronRight size={15} /></button>
             </div>
           </div>
         </div>
-        {historyError && <div className="telemetry-history-error"><TriangleAlert size={14} />{historyError}<button onClick={() => void loadHistory()}>Reintentar</button></div>}
+        {historyError && <div className="telemetry-history-error"><TriangleAlert size={14} />{historyError}<button onClick={() => void loadHistory()}>{t("Reintentar")}</button></div>}
         <div className="telemetry-chart-grid">
           <TelemetryChartCard
-            title="Utilización GPU"
+            title={t("Utilización GPU")}
             data={telemetryData}
             series={[{ key: "gpu", label: "GPU", color: "#76b900", unit: "%" }]}
-            current={displayedMetrics.gpu_utilization == null ? "No disponible" : `${displayedMetrics.gpu_utilization.toFixed(1)} %`}
+            current={displayedMetrics.gpu_utilization == null ? t("No disponible") : `${displayedMetrics.gpu_utilization.toFixed(1)} %`}
             status={metricState(displayedMetrics.gpu_utilization, 75, 90)}
             domain={[0, 100]}
           />
           <TelemetryChartCard
-            title="Temperatura GPU"
+            title={t("Temperatura GPU")}
             data={telemetryData}
-            series={[{ key: "temperature", label: "Temperatura", color: "#ed5f5f", unit: "°C" }]}
-            current={displayedMetrics.gpu_temperature == null ? "No disponible" : `${displayedMetrics.gpu_temperature.toFixed(1)} °C`}
+            series={[{ key: "temperature", label: t("Temperatura"), color: "#ed5f5f", unit: "°C" }]}
+            current={displayedMetrics.gpu_temperature == null ? t("No disponible") : `${displayedMetrics.gpu_temperature.toFixed(1)} °C`}
             status={metricState(displayedMetrics.gpu_temperature, 75, 85)}
             domain={[0, 100]}
           />
           <TelemetryChartCard
-            title="Potencia GPU"
+            title={t("Potencia GPU")}
             data={telemetryData}
-            series={[{ key: "power", label: "Consumo", color: "#f0a22e", unit: "W" }]}
-            current={displayedMetrics.gpu_power_watts == null ? "No disponible" : `${displayedMetrics.gpu_power_watts.toFixed(1)} W${displayedMetrics.gpu_power_limit_watts ? ` / ${displayedMetrics.gpu_power_limit_watts.toFixed(0)} W` : ""}`}
+            series={[{ key: "power", label: t("Consumo"), color: "#f0a22e", unit: "W" }]}
+            current={displayedMetrics.gpu_power_watts == null ? t("No disponible") : `${displayedMetrics.gpu_power_watts.toFixed(1)} W${displayedMetrics.gpu_power_limit_watts ? ` / ${displayedMetrics.gpu_power_limit_watts.toFixed(0)} W` : ""}`}
             status={metricState(
               displayedMetrics.gpu_power_watts == null || !displayedMetrics.gpu_power_limit_watts ? null : displayedMetrics.gpu_power_watts / displayedMetrics.gpu_power_limit_watts * 100,
               75,
@@ -2903,48 +2906,48 @@ function Dashboard({
             )}
           />
           <TelemetryChartCard
-            title="CPU y memoria"
+            title={t("CPU y memoria")}
             data={telemetryData}
             series={[
               { key: "cpu", label: "CPU", color: "#4d91ff", unit: "%" },
-              { key: "memory", label: "Memoria", color: "#a77bf3", unit: "%" },
+              { key: "memory", label: t("Memoria"), color: "#a77bf3", unit: "%" },
             ]}
-            current={`${displayedMetrics.cpu_percent.toFixed(1)} % CPU`}
+            current={t("{pct} % CPU", { pct: displayedMetrics.cpu_percent.toFixed(1) })}
             status={metricState(Math.max(displayedMetrics.cpu_percent, displayedMetrics.memory_percent), 75, 90)}
             domain={[0, 100]}
           />
           <TelemetryChartCard
-            title="Red"
+            title={t("Red")}
             data={telemetryData}
             series={[
-              { key: "networkRx", label: "Recibido", color: "#4d91ff", unit: "MiB/s" },
-              { key: "networkTx", label: "Enviado", color: "#76b900", unit: "MiB/s" },
+              { key: "networkRx", label: t("Recibido"), color: "#4d91ff", unit: "MiB/s" },
+              { key: "networkTx", label: t("Enviado"), color: "#76b900", unit: "MiB/s" },
             ]}
-            current={latestTelemetry ? `${latestTelemetry.networkRx.toFixed(2)} MiB/s ↓` : "Sin muestras"}
+            current={latestTelemetry ? `${latestTelemetry.networkRx.toFixed(2)} MiB/s ↓` : t("Sin muestras")}
           />
           <TelemetryChartCard
-            title="E/S de disco"
+            title={t("E/S de disco")}
             data={telemetryData}
             series={[
-              { key: "diskRead", label: "Lectura", color: "#f0a22e", unit: "MiB/s" },
-              { key: "diskWrite", label: "Escritura", color: "#a77bf3", unit: "MiB/s" },
+              { key: "diskRead", label: t("Lectura"), color: "#f0a22e", unit: "MiB/s" },
+              { key: "diskWrite", label: t("Escritura"), color: "#a77bf3", unit: "MiB/s" },
             ]}
-            current={latestTelemetry ? `${latestTelemetry.diskRead.toFixed(2)} MiB/s lectura` : "Sin muestras"}
+            current={latestTelemetry ? t("{rate} MiB/s lectura", { rate: latestTelemetry.diskRead.toFixed(2) }) : t("Sin muestras")}
           />
           <TelemetryChartCard
-            title="Ocupación de disco"
+            title={t("Ocupación de disco")}
             data={telemetryData}
-            series={[{ key: "diskUsage", label: "Ocupado", color: "#33b7a2", unit: "%" }]}
+            series={[{ key: "diskUsage", label: t("Ocupado"), color: "#33b7a2", unit: "%" }]}
             current={`${displayedMetrics.disk_percent.toFixed(1)} % · ${bytes(displayedMetrics.disk_used)}`}
             status={metricState(displayedMetrics.disk_percent, 75, 90)}
             domain={[0, 100]}
           />
         </div>
-        <p className="telemetry-retention-note">Las muestras se conservan en SQLite durante {modelMetrics.retention_hours || 168} horas. Las tasas de red y disco se calculan entre muestras consecutivas.</p>
+        <p className="telemetry-retention-note">{t("Las muestras se conservan en SQLite durante")}{" "}{modelMetrics.retention_hours || 168}{" "}{t("horas. Las tasas de red y disco se calculan entre muestras consecutivas.")}</p>
       </section>
 
       <section className="model-telemetry-section">
-        <SectionHeading eyebrow="POR MODELO · ÚLTIMA HORA" title="Consumo de inferencia" />
+        <SectionHeading eyebrow={t("POR MODELO · ÚLTIMA HORA")} title={t("Consumo de inferencia")} />
         {modelMetrics.current.length > 0 ? <div className="model-telemetry-grid">
           {modelMetrics.current.map((sample, index) => {
             const key = `${sample.profile_id || "standalone"}:${sample.model_id}`;
@@ -2956,13 +2959,13 @@ function Dashboard({
             }));
             return <Card className="model-telemetry-card" key={key}>
               <div className="model-telemetry-head">
-                <div><strong title={sample.model_name}>{sample.model_name}</strong><small><StatusDot online={Boolean(sample.active)} /> {sample.active ? "Activo" : "Última muestra"} · {sample.engine}{sample.pid ? ` · PID ${sample.pid}` : ""}</small></div>
-                <span className={`attribution ${sample.attribution}`}>{sample.attribution === "process" ? "Proceso" : sample.attribution === "ollama" ? "Ollama" : "No atribuible"}</span>
+                <div><strong title={sample.model_name}>{sample.model_name}</strong><small><StatusDot online={Boolean(sample.active)} /> {sample.active ? t("Activo") : t("Última muestra")} · {sample.engine}{sample.pid ? ` · PID ${sample.pid}` : ""}</small></div>
+                <span className={`attribution ${sample.attribution}`}>{sample.attribution === "process" ? t("Proceso") : sample.attribution === "ollama" ? t("Ollama") : t("No atribuible")}</span>
               </div>
               <div className="model-telemetry-values">
                 <span><small>GPU</small><strong>{sample.gpu_utilization == null ? "—" : `${sample.gpu_utilization.toFixed(1)}%`}</strong></span>
-                <span><small>Memoria GPU</small><strong>{bytes(sample.gpu_memory_bytes)}</strong></span>
-                <span><small>RAM / unificada</small><strong>{bytes(sample.unified_memory_bytes ?? sample.ram_bytes)}</strong></span>
+                <span><small>{t("Memoria GPU")}</small><strong>{bytes(sample.gpu_memory_bytes)}</strong></span>
+                <span><small>{t("RAM / unificada")}</small><strong>{bytes(sample.unified_memory_bytes ?? sample.ram_bytes)}</strong></span>
                 <span><small>CPU</small><strong>{sample.cpu_percent == null ? "—" : `${sample.cpu_percent.toFixed(1)}%`}</strong></span>
               </div>
               <div className="model-mini-chart">
@@ -2970,15 +2973,15 @@ function Dashboard({
                   <AreaChart data={data}>
                     <defs><linearGradient id={`modelMemory${index}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity={0.28} /><stop offset="100%" stopColor="var(--accent)" stopOpacity={0} /></linearGradient></defs>
                     <Tooltip contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 8 }} />
-                    <Area type="monotone" dataKey="Memoria" unit=" GB" stroke="var(--accent)" fill={`url(#modelMemory${index})`} strokeWidth={1.7} />
+                    <Area type="monotone" dataKey="Memoria" name={t("Memoria")} unit=" GB" stroke="var(--accent)" fill={`url(#modelMemory${index})`} strokeWidth={1.7} />
                     <Area type="monotone" dataKey="GPU" unit="%" stroke="var(--blue)" fill="transparent" strokeWidth={1.2} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
-              <small className="telemetry-note">{sample.attribution === "external-unattributed" ? "El motor comparte proceso o no expone métricas por modelo." : "Muestras conservadas en SQLite según la retención configurada."}</small>
+              <small className="telemetry-note">{sample.attribution === "external-unattributed" ? t("El motor comparte proceso o no expone métricas por modelo.") : t("Muestras conservadas en SQLite según la retención configurada.")}</small>
             </Card>;
           })}
-        </div> : <Card><Empty icon={<Gauge />} title="Sin modelos activos" text="Arranca un perfil o carga un modelo en Ollama para comenzar el histórico." /></Card>}
+        </div> : <Card><Empty icon={<Gauge />} title={t("Sin modelos activos")} text={t("Arranca un perfil o carga un modelo en Ollama para comenzar el histórico.")} /></Card>}
       </section>
 
       <ActivitySummary jobs={jobs} />
@@ -3018,19 +3021,19 @@ type ModelImportResult = {
 };
 
 const MODEL_IMPORT_STEPS = [
-  { title: "Subir el ZIP", detail: "Tu navegador envía el archivo al DGX" },
-  { title: "Comprobar el contenido", detail: "Rutas seguras, archivos permitidos y mydgx.json" },
-  { title: "Extraer a la biblioteca", detail: "Copia los GGUF y comprueba que no están dañados" },
-  { title: "Analizar el modelo", detail: "Arquitectura, contexto, partes y memoria necesaria" },
-  { title: "Probar", detail: "Lo arranca como «Encender» y ejecuta un benchmark corto" },
+  { title: t("Subir el ZIP"), detail: t("Tu navegador envía el archivo al DGX") },
+  { title: t("Comprobar el contenido"), detail: t("Rutas seguras, archivos permitidos y mydgx.json") },
+  { title: t("Extraer a la biblioteca"), detail: t("Copia los GGUF y comprueba que no están dañados") },
+  { title: t("Analizar el modelo"), detail: t("Arquitectura, contexto, partes y memoria necesaria") },
+  { title: t("Probar"), detail: t("Lo arranca como «Encender» y ejecuta un benchmark corto") },
 ];
 
 const MODEL_IMPORT_TEMPLATE = `{
   "name": "Mi-Modelo-8B",
-  "description": "Para qué sirve, de dónde sale y cómo se entrenó.",
+  "description": "${t("Para qué sirve, de dónde sale y cómo se entrenó.")}",
   "license": "apache-2.0",
-  "base_model": "autor/modelo-original",
-  "tags": ["español", "código"],
+  "base_model": "${t("autor/modelo-original")}",
+  "tags": ["${t("español")}", "${t("código")}"],
   "task": "chat",
   "settings": {
     "context_size": 32768,
@@ -3108,7 +3111,7 @@ function ModelImportView({ notify, onImported, onShowInstalled }: {
     setUploadError("");
     if (!candidate.name.toLowerCase().endsWith(".zip")) {
       setFile(null);
-      setUploadError("Elige un archivo .zip (mira el paso 3 para crearlo).");
+      setUploadError(t("Elige un archivo .zip (mira el paso 3 para crearlo)."));
       return;
     }
     setFile(candidate);
@@ -3117,7 +3120,7 @@ function ModelImportView({ notify, onImported, onShowInstalled }: {
   function startUpload() {
     if (!file) return;
     if (limits && file.size > limits.max_upload_now_bytes) {
-      setUploadError(`El ZIP ocupa ${bytes(file.size)} y ahora caben ${bytes(limits.max_upload_now_bytes)}: libera espacio en Almacenamiento.`);
+      setUploadError(t("El ZIP ocupa {size} y ahora caben {max_upload_now_bytes}: libera espacio en Almacenamiento.", { size: bytes(file.size), max_upload_now_bytes: bytes(limits.max_upload_now_bytes) }));
       return;
     }
     const xhr = new XMLHttpRequest();
@@ -3144,13 +3147,13 @@ function ModelImportView({ notify, onImported, onShowInstalled }: {
         localStorage.setItem("mydgx-model-import-job", body.job_id);
         setJobId(body.job_id);
         setFile(null);
-        notify("ZIP subido; comprobando el modelo");
+        notify(t("ZIP subido; comprobando el modelo"));
       } else {
-        setUploadError(body.detail || `La subida falló (HTTP ${xhr.status})`);
+        setUploadError(body.detail || t("La subida falló (HTTP {status})", { status: xhr.status }));
       }
     };
-    xhr.onerror = () => { request.current = null; setUpload(null); setUploadError("Se perdió la conexión durante la subida. Vuelve a intentarlo."); };
-    xhr.onabort = () => { request.current = null; setUpload(null); setUploadError("Subida cancelada."); };
+    xhr.onerror = () => { request.current = null; setUpload(null); setUploadError(t("Se perdió la conexión durante la subida. Vuelve a intentarlo.")); };
+    xhr.onabort = () => { request.current = null; setUpload(null); setUploadError(t("Subida cancelada.")); };
     xhr.send(file);
   }
 
@@ -3159,7 +3162,7 @@ function ModelImportView({ notify, onImported, onShowInstalled }: {
     const target = benchmarkJob && activeJobStatuses.has(benchmarkJob.status) ? benchmarkJob.id : jobId;
     try {
       await api(`/api/jobs/${target}/cancel`, { method: "POST" });
-      notify("Cancelación solicitada");
+      notify(t("Cancelación solicitada"));
     } catch (error) {
       notify((error as Error).message, true);
     }
@@ -3198,7 +3201,7 @@ function ModelImportView({ notify, onImported, onShowInstalled }: {
   };
   const uploadPercent = upload ? Math.round((upload.sent / Math.max(upload.total, 1)) * 100) : 0;
   const stepDetail = (index: number) => {
-    if (index === 0 && upload) return `${bytes(upload.sent)} de ${bytes(upload.total)} · ${uploadPercent} %`;
+    if (index === 0 && upload) return t("{sent} de {total} · {uploadPercent} %", { sent: bytes(upload.sent), total: bytes(upload.total), uploadPercent: uploadPercent });
     if (index === lastStep && job && (active || failed)) return job.message;
     if (index === 4 && benchmarkJob) return `${Math.round(benchmarkJob.progress)} % · ${benchmarkJob.message}`;
     if (index === 4 && test && test.status !== "pending" && test.status !== "running") return test.message || "";
@@ -3211,17 +3214,15 @@ function ModelImportView({ notify, onImported, onShowInstalled }: {
     <Card className="model-import-hero">
       <div className="model-import-hero-icon"><FileArchive size={26} /></div>
       <div>
-        <span className="card-kicker">IMPORTAR DESDE UN ZIP</span>
-        <h3>Trae un modelo GGUF que ya tienes en tu ordenador</h3>
+        <span className="card-kicker">{t("IMPORTAR DESDE UN ZIP")}</span>
+        <h3>{t("Trae un modelo GGUF que ya tienes en tu ordenador")}</h3>
         <p>
-          Útil para modelos que no están en Hugging Face, versiones propias o equipos sin internet. MyDGX lo guarda en tu biblioteca
-          como <code>{limits?.namespace ?? "imported"}/nombre</code>, lo comprueba y, si quieres, lo arranca y le pasa un benchmark corto
-          para confirmar que funciona.
+          {t("Útil para modelos que no están en Hugging Face, versiones propias o equipos sin internet. MyDGX lo guarda en tu biblioteca como")}{" "}<code>{limits?.namespace ?? "imported"}/nombre</code>{t(", lo comprueba y, si quieres, lo arranca y le pasa un benchmark corto para confirmar que funciona.")}
         </p>
         {limits && <div className="model-import-limits">
-          <span><HardDrive size={13} /> Espacio libre: <b>{bytes(limits.free_bytes)}</b></span>
-          <span><Upload size={13} /> ZIP máximo ahora: <b>{bytes(limits.max_upload_now_bytes)}</b></span>
-          <span><Cpu size={13} /> Modelo principal hasta: <b>{bytes(limits.max_model_bytes)}</b></span>
+          <span><HardDrive size={13} />{" "}{t("Espacio libre:")}{" "}<b>{bytes(limits.free_bytes)}</b></span>
+          <span><Upload size={13} />{" "}{t("ZIP máximo ahora:")}{" "}<b>{bytes(limits.max_upload_now_bytes)}</b></span>
+          <span><Cpu size={13} />{" "}{t("Modelo principal hasta:")}{" "}<b>{bytes(limits.max_model_bytes)}</b></span>
         </div>}
       </div>
     </Card>
@@ -3229,40 +3230,40 @@ function ModelImportView({ notify, onImported, onShowInstalled }: {
     <div className="model-import-guide">
       <Card className="model-import-step">
         <span className="model-import-step-number">1</span>
-        <strong>Reúne los archivos en una carpeta</strong>
+        <strong>{t("Reúne los archivos en una carpeta")}</strong>
         <ul>
-          <li><b>Obligatorio:</b> el modelo en formato <code>.gguf</code>. Si viene en partes (<code>…-00001-of-00003.gguf</code>), incluye <b>todas</b>.</li>
-          <li><b>Visión (opcional):</b> el proyector <code>mmproj-….gguf</code>.</li>
-          <li><b>Más velocidad (opcional):</b> un drafter <code>mtp-…</code>, <code>dspark-…</code> o <code>eagle3-….gguf</code>.</li>
-          <li><b>Descripción (opcional):</b> <code>README.md</code> y <code>LICENSE</code>.</li>
+          <li><b>{t("Obligatorio:")}</b>{" "}{t("el modelo en formato")}{" "}<code>.gguf</code>. {t("Si viene en partes")} (<code>…-00001-of-00003.gguf</code>{t("), incluye")}{" "}<b>{t("todas")}</b>.</li>
+          <li><b>{t("Visión (opcional):")}</b>{" "}{t("el proyector")}{" "}<code>mmproj-….gguf</code>.</li>
+          <li><b>{t("Más velocidad (opcional):")}</b>{" "}{t("un drafter")}{" "}<code>mtp-…</code>, <code>dspark-…</code> o <code>eagle3-….gguf</code>.</li>
+          <li><b>{t("Descripción (opcional):")}</b> <code>README.md</code> y <code>LICENSE</code>.</li>
         </ul>
-        <small>Solo se admite GGUF (el formato de llama.cpp). Safetensors, PyTorch u otros archivos se ignoran.</small>
+        <small>{t("Solo se admite GGUF (el formato de llama.cpp). Safetensors, PyTorch u otros archivos se ignoran.")}</small>
       </Card>
       <Card className="model-import-step">
         <span className="model-import-step-number">2</span>
-        <strong>Añade <code>mydgx.json</code> si quieres fijar ajustes</strong>
-        <p>Es opcional: sin él MyDGX elige contexto y parámetros automáticamente. Todos los campos son opcionales.</p>
+        <strong>{t("Añade")}{" "}<code>mydgx.json</code>{" "}{t("si quieres fijar ajustes")}</strong>
+        <p>{t("Es opcional: sin él MyDGX elige contexto y parámetros automáticamente. Todos los campos son opcionales.")}</p>
         <pre className="model-import-template">{MODEL_IMPORT_TEMPLATE}</pre>
         <small>
-          <b>task</b>: <code>chat</code> o <code>vision</code>. <b>settings</b> admite lo mismo que el editor de ajustes del modelo:
+          <b>task</b>: <code>chat</code> {t("o")} <code>vision</code>. <b>settings</b> {t("admite lo mismo que el editor de ajustes del modelo:")}
           <code> context_size</code>, <code>context_max</code>, <code>temperature</code>, <code>top_p</code>, <code>top_k</code>, <code>min_p</code>,
           <code> repeat_penalty</code>, <code>model_filename</code>, <code>mmproj_filename</code>, <code>spec_type</code>, <code>draft_filename</code>…
         </small>
-        <button type="button" className="button secondary compact" onClick={downloadTemplate}><Download size={14} /> Descargar plantilla</button>
+        <button type="button" className="button secondary compact" onClick={downloadTemplate}><Download size={14} />{" "}{t("Descargar plantilla")}</button>
       </Card>
       <Card className="model-import-step">
         <span className="model-import-step-number">3</span>
-        <strong>Comprime la carpeta en un ZIP</strong>
-        <p><b>Finder:</b> clic derecho sobre la carpeta → <i>Comprimir</i>.</p>
-        <p><b>Terminal</b> (más rápido, no recomprime los GGUF):</p>
+        <strong>{t("Comprime la carpeta en un ZIP")}</strong>
+        <p><b>{t("Finder:")}</b>{" "}{t("clic derecho sobre la carpeta →")}{" "}<i>{t("Comprimir")}</i>.</p>
+        <p><b>{t("Terminal")}</b>{" "}{t("(más rápido, no recomprime los GGUF):")}</p>
         <pre className="model-import-template">{"cd ~/Downloads/mi-modelo\nzip -0 -r ../mi-modelo.zip ."}</pre>
-        <small>Sin contraseña y sin enlaces simbólicos. Da igual si los archivos están en la raíz o dentro de una carpeta.</small>
+        <small>{t("Sin contraseña y sin enlaces simbólicos. Da igual si los archivos están en la raíz o dentro de una carpeta.")}</small>
       </Card>
     </div>
 
     <Card className="model-import-upload">
       <span className="model-import-step-number">4</span>
-      <strong>Sube el ZIP</strong>
+      <strong>{t("Sube el ZIP")}</strong>
       <label
         className={`model-import-drop${dragging ? " dragging" : ""}${file ? " ready" : ""}`}
         onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
@@ -3271,26 +3272,25 @@ function ModelImportView({ notify, onImported, onShowInstalled }: {
       >
         <input ref={inputRef} type="file" accept=".zip,application/zip" disabled={Boolean(upload) || active} onChange={(event) => { chooseFile(event.target.files?.[0]); event.target.value = ""; }} />
         <FileArchive size={28} />
-        {file ? <span><b>{file.name}</b> · {bytes(file.size)}</span> : <span>Arrastra aquí el ZIP o <u>elige un archivo</u></span>}
+        {file ? <span><b>{file.name}</b> · {bytes(file.size)}</span> : <span>{t("Arrastra aquí el ZIP o")}{" "}<u>{t("elige un archivo")}</u></span>}
       </label>
       <label className="model-import-option">
         <input type="checkbox" checked={runTest} onChange={(event) => setRunTest(event.target.checked)} disabled={Boolean(upload)} />
         <span>
-          <b>Probar al terminar</b> (recomendado): arranca el modelo y ejecuta un benchmark corto.
-          Mientras dura (unos minutos) el chat y los perfiles quedan en pausa.
+          <b>{t("Probar al terminar")}</b>{" "}{t("(recomendado): arranca el modelo y ejecuta un benchmark corto. Mientras dura (unos minutos) el chat y los perfiles quedan en pausa.")}
         </span>
       </label>
       <div className="model-import-actions">
-        <button type="button" className="button" disabled={!file || Boolean(upload) || active} onClick={startUpload}><Upload size={15} /> Importar modelo</button>
-        {(upload || active) && <button type="button" className="button secondary" onClick={() => void cancelImport()}><X size={15} /> Cancelar</button>}
-        {(done || failed) && <button type="button" className="button secondary" onClick={reset}><Plus size={15} /> Importar otro</button>}
+        <button type="button" className="button" disabled={!file || Boolean(upload) || active} onClick={startUpload}><Upload size={15} />{" "}{t("Importar modelo")}</button>
+        {(upload || active) && <button type="button" className="button secondary" onClick={() => void cancelImport()}><X size={15} />{" "}{t("Cancelar")}</button>}
+        {(done || failed) && <button type="button" className="button secondary" onClick={reset}><Plus size={15} />{" "}{t("Importar otro")}</button>}
       </div>
       {upload && <div className="model-import-bar"><i style={{ width: `${uploadPercent}%` }} /></div>}
-      {upload && <small>No cierres ni recargues esta pestaña hasta que termine la subida.</small>}
+      {upload && <small>{t("No cierres ni recargues esta pestaña hasta que termine la subida.")}</small>}
     </Card>
 
     {showProgress && <Card className="model-import-progress">
-      <strong>Progreso</strong>
+      <strong>{t("Progreso")}</strong>
       <ol className="model-import-timeline">
         {MODEL_IMPORT_STEPS.map((step, index) => {
           const state = stepState(index);
@@ -3306,9 +3306,9 @@ function ModelImportView({ notify, onImported, onShowInstalled }: {
       {(uploadError || failed) && <div className="model-import-error">
         <TriangleAlert size={16} />
         <div>
-          <b>{job?.status === "cancelled" ? "Importación cancelada" : "No se pudo importar"}</b>
+          <b>{job?.status === "cancelled" ? t("Importación cancelada") : t("No se pudo importar")}</b>
           <span>{uploadError || job?.message}</span>
-          <small>Corrige el ZIP siguiendo los pasos 1 a 3 y vuelve a subirlo. No se ha guardado nada a medias.</small>
+          <small>{t("Corrige el ZIP siguiendo los pasos 1 a 3 y vuelve a subirlo. No se ha guardado nada a medias.")}</small>
         </div>
       </div>}
     </Card>}
@@ -3319,48 +3319,48 @@ function ModelImportView({ notify, onImported, onShowInstalled }: {
           {test?.status === "passed" ? <CheckCircle2 size={22} /> : test?.status === "failed" ? <TriangleAlert size={22} /> : <PackageCheck size={22} />}
         </span>
         <div>
-          <strong>{test?.status === "passed" ? "Listo: el modelo arranca y responde"
-            : test?.status === "failed" ? "Importado, pero la prueba falló"
-            : test?.status === "running" ? "Importado · probándolo ahora"
-            : "Modelo importado"}</strong>
-          <small>Disponible en Instalados como <code>{result.repo_id}</code></small>
+          <strong>{test?.status === "passed" ? t("Listo: el modelo arranca y responde")
+            : test?.status === "failed" ? t("Importado, pero la prueba falló")
+            : test?.status === "running" ? t("Importado · probándolo ahora")
+            : t("Modelo importado")}</strong>
+          <small>{t("Disponible en Instalados como")}{" "}<code>{result.repo_id}</code></small>
         </div>
-        <button type="button" className="button secondary compact" onClick={() => onShowInstalled(result.repo_id)}><HardDrive size={14} /> Ver en Instalados</button>
+        <button type="button" className="button secondary compact" onClick={() => onShowInstalled(result.repo_id)}><HardDrive size={14} />{" "}{t("Ver en Instalados")}</button>
       </div>
 
       {test && ["passed", "failed"].includes(test.status) && <div className="model-import-metrics">
-        <div><span>Score MyDGX</span><b>{test.score == null ? "—" : Math.round(test.score)}<small>/100</small></b></div>
-        <div><span>Velocidad</span><b>{test.tokens_per_second == null ? "—" : test.tokens_per_second.toFixed(1)}<small> tok/s</small></b></div>
-        <div><span>Primera palabra</span><b>{test.ttft_ms == null ? "—" : (test.ttft_ms / 1000).toFixed(2)}<small> s</small></b></div>
-        <div title="Memoria unificada máxima de todo el equipo durante la prueba, incluidos otros programas"><span>Memoria pico del equipo</span><b>{test.peak_memory_bytes ? bytes(test.peak_memory_bytes) : "—"}</b>{test.estimated_memory_mb ? <small>el modelo, ~{bytes(test.estimated_memory_mb * 1024 ** 2)} con el contexto de la prueba</small> : null}</div>
-        <div><span>Respuestas válidas</span><b>{test.reliability_percent == null ? "—" : Math.round(test.reliability_percent)}<small> %</small></b></div>
-        {test.acceptance_rate != null && <div><span>Aceptación del drafter</span><b>{Math.round(test.acceptance_rate * 100)}<small> %</small></b></div>}
+        <div><span>{t("Score MyDGX")}</span><b>{test.score == null ? "—" : Math.round(test.score)}<small>/100</small></b></div>
+        <div><span>{t("Velocidad")}</span><b>{test.tokens_per_second == null ? "—" : test.tokens_per_second.toFixed(1)}<small>{" "}{t("tok/s")}</small></b></div>
+        <div><span>{t("Primera palabra")}</span><b>{test.ttft_ms == null ? "—" : (test.ttft_ms / 1000).toFixed(2)}<small> s</small></b></div>
+        <div title={t("Memoria unificada máxima de todo el equipo durante la prueba, incluidos otros programas")}><span>{t("Memoria pico del equipo")}</span><b>{test.peak_memory_bytes ? bytes(test.peak_memory_bytes) : "—"}</b>{test.estimated_memory_mb ? <small>{t("el modelo, ~")}{bytes(test.estimated_memory_mb * 1024 ** 2)}{" "}{t("con el contexto de la prueba")}</small> : null}</div>
+        <div><span>{t("Respuestas válidas")}</span><b>{test.reliability_percent == null ? "—" : Math.round(test.reliability_percent)}<small> %</small></b></div>
+        {test.acceptance_rate != null && <div><span>{t("Aceptación del drafter")}</span><b>{Math.round(test.acceptance_rate * 100)}<small> %</small></b></div>}
       </div>}
       {test?.status === "failed" && <div className="model-import-error">
         <TriangleAlert size={16} />
         <div>
-          <b>Qué ha pasado</b>
-          <span>{test.message || "El benchmark no obtuvo respuestas válidas"}</span>
-          <small>El modelo sigue instalado. Prueba a bajar el contexto en el editor de ajustes del modelo (icono de deslizadores) o revisa Logs.</small>
+          <b>{t("Qué ha pasado")}</b>
+          <span>{test.message || t("El benchmark no obtuvo respuestas válidas")}</span>
+          <small>{t("El modelo sigue instalado. Prueba a bajar el contexto en el editor de ajustes del modelo (icono de deslizadores) o revisa Logs.")}</small>
         </div>
       </div>}
       {test && ["queued", "skipped"].includes(test.status) && <small className="model-import-note">{test.message}</small>}
 
       <div className="model-import-launch">
-        <span><b>Archivo que usa «Encender»:</b> {result.launch.model_filename}</span>
-        <span><b>Contexto:</b> {shortContext(result.launch.context_size)}{mainFile?.native_context ? ` de ${shortContext(mainFile.native_context)} nativos` : ""}</span>
-        {result.launch.estimated_memory_mb ? <span><b>Memoria estimada:</b> {bytes(result.launch.estimated_memory_mb * 1024 ** 2)}</span> : null}
-        {result.launch.mmproj_filename && <span><b>Visión:</b> {result.launch.mmproj_filename}</span>}
-        {result.launch.spec_type && <span><b>Especulativa:</b> {SPEC_LABELS[result.launch.spec_type] ?? result.launch.spec_type} · {result.launch.draft_filename}</span>}
-        {result.manifest.settings && Object.keys(result.manifest.settings).length > 0 && <span><b>Ajustes de mydgx.json:</b> {Object.entries(result.manifest.settings).map(([key, value]) => `${key}=${String(value)}`).join(", ")}</span>}
+        <span><b>{t("Archivo que usa «Encender»:")}</b> {result.launch.model_filename}</span>
+        <span><b>{t("Contexto:")}</b> {shortContext(result.launch.context_size)}{mainFile?.native_context ? t(" de {native_context} nativos", { native_context: shortContext(mainFile.native_context) }) : ""}</span>
+        {result.launch.estimated_memory_mb ? <span><b>{t("Memoria estimada:")}</b> {bytes(result.launch.estimated_memory_mb * 1024 ** 2)}</span> : null}
+        {result.launch.mmproj_filename && <span><b>{t("Visión:")}</b> {result.launch.mmproj_filename}</span>}
+        {result.launch.spec_type && <span><b>{t("Especulativa:")}</b> {SPEC_LABELS[result.launch.spec_type] ?? result.launch.spec_type} · {result.launch.draft_filename}</span>}
+        {result.manifest.settings && Object.keys(result.manifest.settings).length > 0 && <span><b>{t("Ajustes de mydgx.json:")}</b> {Object.entries(result.manifest.settings).map(([key, value]) => `${key}=${String(value)}`).join(", ")}</span>}
       </div>
 
       <table className="model-import-files">
-        <thead><tr><th>Archivo</th><th>Uso</th><th>Arquitectura</th><th>Cuant.</th><th>Contexto</th><th>Tamaño</th></tr></thead>
+        <thead><tr><th>{t("Archivo")}</th><th>{t("Uso")}</th><th>{t("Arquitectura")}</th><th>{t("Cuant.")}</th><th>{t("Contexto")}</th><th>{t("Tamaño")}</th></tr></thead>
         <tbody>{result.files.map((item) => <tr key={item.name}>
           <td>{item.name}</td>
           <td>{roleLabel(item.role)}</td>
-          <td>{item.architecture || "—"}{item.runtime_supported === false && <TriangleAlert size={12} aria-label="llama.cpp no la reconoce" />}</td>
+          <td>{item.architecture || "—"}{item.runtime_supported === false && <TriangleAlert size={12} aria-label={t("llama.cpp no la reconoce")} />}</td>
           <td>{item.quantization || "—"}</td>
           <td>{shortContext(item.native_context ?? undefined)}</td>
           <td>{bytes(item.size)}</td>
@@ -3478,7 +3478,7 @@ function ModelsView({
     try {
       await api("/api/models/ollama/pull", { method: "POST", body: JSON.stringify({ name: ollamaName.trim() }) });
       setOllamaName("");
-      notify("Descarga de Ollama iniciada");
+      notify(t("Descarga de Ollama iniciada"));
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -3553,8 +3553,8 @@ function ModelsView({
       const visible = fresh.filter((model) => !downloadedRepos.has(model.id.toLowerCase())).length;
       if (!more.length || next >= 9) setNoMoreResults(true);
       notify(fresh.length
-        ? `${visible} modelo(s) nuevos${fresh.length > visible ? ` · ${fresh.length - visible} ya descargados ocultos` : ""}`
-        : "No hay más modelos que encajen con estos filtros");
+        ? t("{visible} modelo(s) nuevos{extra}", { visible, extra: fresh.length > visible ? t(" · {value} ya descargados ocultos", { value: fresh.length - visible }) : "" })
+        : t("No hay más modelos que encajen con estos filtros"));
     } catch (error) {
       notify((error as Error).message, true);
     } finally {
@@ -3605,8 +3605,8 @@ function ModelsView({
         body: JSON.stringify({ repo_id: pending.repoId, revision: pending.revision, files }),
       });
       notify(result.deduplicated
-        ? `La descarga de ${pending.repoId} ya estaba en curso; no se ha duplicado`
-        : `${pending.label}${extraFiles.length ? " · con drafter" : ""}`);
+        ? t("La descarga de {repoId} ya estaba en curso; no se ha duplicado", { repoId: pending.repoId })
+        : `${pending.label}${extraFiles.length ? t(" · con drafter") : ""}`);
       pending.onDone?.();
       refresh();
     } catch (error) {
@@ -3622,7 +3622,7 @@ function ModelsView({
       repoId: inspection.repo_id,
       revision: inspection.remote?.revision || "main",
       files: selectedFiles,
-      label: `${selectedFiles.length} archivo(s) añadidos a la cola`,
+      label: t("{length} archivo(s) añadidos a la cola", { length: selectedFiles.length }),
       onDone: () => {
         setInspection(null);
         setSelectedFiles([]);
@@ -3636,7 +3636,7 @@ function ModelsView({
         repoId: model.id,
         revision: "main",
         files: model.recommended_files,
-        label: `Descarga recomendada iniciada: ${model.recommended_quantization}`,
+        label: t("Descarga recomendada iniciada: {recommended_quantization}", { recommended_quantization: model.recommended_quantization }),
       });
       return;
     }
@@ -3647,8 +3647,8 @@ function ModelsView({
         body: JSON.stringify({ repo_id: model.id, revision: "main" }),
       });
       notify(result.deduplicated
-        ? `La descarga de ${model.id} ya estaba en curso; no se ha duplicado`
-        : `Descarga completa iniciada: ${model.id}`);
+        ? t("La descarga de {id} ya estaba en curso; no se ha duplicado", { id: model.id })
+        : t("Descarga completa iniciada: {id}", { id: model.id }));
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -3663,7 +3663,7 @@ function ModelsView({
         method: "PUT",
         body: JSON.stringify({ repo_id: repoId, enabled }),
       });
-      notify(enabled ? "Modelo guardado en favoritos" : "Modelo eliminado de favoritos");
+      notify(enabled ? t("Modelo guardado en favoritos") : t("Modelo eliminado de favoritos"));
       await loadFavorites();
     } catch (error) {
       notify((error as Error).message, true);
@@ -3677,8 +3677,8 @@ function ModelsView({
         body: JSON.stringify({ source, model_id: modelId, enabled, ...(enabled && contextSize ? { context_size: contextSize } : {}) }),
       });
       notify(
-        `${modelId} ${enabled ? "añadido al" : "quitado del"} perfil Default`
-        + (result.applied ? " · aplicado ahora" : " · se aplicará al arrancar Default"),
+        `${modelId} ${enabled ? t("añadido al") : t("quitado del")} ${t("perfil Default")}`
+        + (result.applied ? t(" · aplicado ahora") : t(" · se aplicará al arrancar Default")),
       );
       refresh();
     } catch (error) {
@@ -3693,7 +3693,7 @@ function ModelsView({
         method: "POST",
         body: JSON.stringify({ source, model_id: modelId, ...(start && contextSize ? { context_size: contextSize } : {}) }),
       });
-      notify(start ? `${modelId} encendido en Quick${result.alias ? ` · alias ${result.alias}` : ""}` : `${modelId} apagado`);
+      notify(start ? t("{modelId} encendido en Quick{aliasSuffix}", { modelId, aliasSuffix: result.alias ? t(" · alias {alias}", { alias: result.alias }) : "" }) : t("{modelId} apagado", { modelId }));
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -3706,7 +3706,7 @@ function ModelsView({
     setQuickBusy(`comfyui:${repoId}`);
     try {
       await api("/api/models/comfyui/release", { method: "POST" });
-      notify("ComfyUI ha liberado sus modelos de memoria");
+      notify(t("ComfyUI ha liberado sus modelos de memoria"));
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -3718,7 +3718,7 @@ function ModelsView({
   async function verifyIntegrity(repoId: string) {
     try {
       await api<{ job_id: string }>(`/api/models/huggingface/integrity/${encodeURIComponent(repoId)}`, { method: "POST" });
-      notify(`Verificación iniciada: ${repoId}`);
+      notify(t("Verificación iniciada: {repoId}", { repoId: repoId }));
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -3731,7 +3731,7 @@ function ModelsView({
         method: "POST",
         body: JSON.stringify(load ? { name, keep_alive: "10m" } : { name }),
       });
-      notify(load ? `${name} cargado durante 10 minutos` : `${name} descargado de memoria`);
+      notify(load ? t("{name} cargado durante 10 minutos", { name }) : t("{name} descargado de memoria", { name }));
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -3744,7 +3744,7 @@ function ModelsView({
         method: "POST",
         body: JSON.stringify({ name }),
       });
-      notify(`Actualización iniciada: ${name}`);
+      notify(t("Actualización iniciada: {name}", { name: name }));
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -3754,7 +3754,7 @@ function ModelsView({
   async function cancelJob(jobId: string) {
     try {
       await api(`/api/jobs/${jobId}/cancel`, { method: "POST" });
-      notify("Cancelación solicitada");
+      notify(t("Cancelación solicitada"));
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -3762,10 +3762,10 @@ function ModelsView({
   }
 
   async function remove(kind: "ollama" | "huggingface", name: string) {
-    if (!window.confirm(`¿Eliminar ${name}? Esta acción libera sus archivos locales.`)) return;
+    if (!window.confirm(t("¿Eliminar {name}? Esta acción libera sus archivos locales.", { name: name }))) return;
     try {
       await api(`/api/models/${kind}/${encodeURIComponent(name)}?confirm=${encodeURIComponent(name)}`, { method: "DELETE" });
-      notify(`${name} eliminado`);
+      notify(t("{name} eliminado", { name }));
       refresh();
     } catch (error) {
       notify((error as Error).message, true);
@@ -3782,8 +3782,8 @@ function ModelsView({
     const sizeBytes = Number(model.size ?? 0);
     const searchable = JSON.stringify(model).toLowerCase();
     const category = localModelCategory(localModelCategoryHint(source, model)).label;
-    const vision = ["Visión", "Imagen", "Vídeo"].includes(category);
-    const audio = category === "Voz / audio";
+    const vision = [t("Visión"), t("Imagen"), t("Vídeo")].includes(category);
+    const audio = category === t("Voz / audio");
     if (localQuery.trim() && !searchable.includes(localQuery.trim().toLowerCase())) return false;
     if (filter === "all") return true;
     if (filter === "loaded") return source === "ollama" ? isOllamaLoaded(model) : Boolean(model.loaded);
@@ -3890,15 +3890,15 @@ function ModelsView({
   return (
     <div className="view-stack">
       <SectionHeading
-        eyebrow="BIBLIOTECA LOCAL"
-        title="Modelos"
-        action={<button className="icon-button" onClick={refresh} aria-label="Actualizar"><RefreshCw size={17} /></button>}
+        eyebrow={t("BIBLIOTECA LOCAL")}
+        title={t("Modelos")}
+        action={<button className="icon-button" onClick={refresh} aria-label={t("Actualizar")}><RefreshCw size={17} /></button>}
       />
       <div className="tabs">
-        <button className={tab === "installed" ? "active" : ""} onClick={() => setTab("installed")}><HardDrive size={14} /> Instalados <b className="tab-count">{localModelCount}</b></button>
-        <button className={tab === "catalog" ? "active" : ""} onClick={() => setTab("catalog")}><Sparkles size={14} /> Explorar Hugging Face</button>
-        <button className={tab === "ollama" ? "active" : ""} onClick={() => setTab("ollama")}><Bot size={14} /> Descargar con Ollama{ollamaJobs.some((job) => activeJobStatuses.has(job.status)) && <b className="tab-count live">●</b>}</button>
-        <button className={tab === "import" ? "active" : ""} onClick={() => setTab("import")}><FileArchive size={14} /> Importar ZIP{jobs.some((job) => job.kind === "models.import" && activeJobStatuses.has(job.status)) && <b className="tab-count live">●</b>}</button>
+        <button className={tab === "installed" ? "active" : ""} onClick={() => setTab("installed")}><HardDrive size={14} />{" "}{t("Instalados")}{" "}<b className="tab-count">{localModelCount}</b></button>
+        <button className={tab === "catalog" ? "active" : ""} onClick={() => setTab("catalog")}><Sparkles size={14} />{" "}{t("Explorar Hugging Face")}</button>
+        <button className={tab === "ollama" ? "active" : ""} onClick={() => setTab("ollama")}><Bot size={14} />{" "}{t("Descargar con Ollama")}{ollamaJobs.some((job) => activeJobStatuses.has(job.status)) && <b className="tab-count live">●</b>}</button>
+        <button className={tab === "import" ? "active" : ""} onClick={() => setTab("import")}><FileArchive size={14} />{" "}{t("Importar ZIP")}{jobs.some((job) => job.kind === "models.import" && activeJobStatuses.has(job.status)) && <b className="tab-count live">●</b>}</button>
       </div>
 
       {tab === "import" ? (
@@ -3912,36 +3912,35 @@ function ModelsView({
           <Card className="ollama-hero">
             <div className="ollama-hero-icon"><Bot size={26} /></div>
             <div className="ollama-hero-copy">
-              <span className="card-kicker">REGISTRO DE OLLAMA</span>
-              <h3>Descarga un modelo por su nombre exacto</h3>
+              <span className="card-kicker">{t("REGISTRO DE OLLAMA")}</span>
+              <h3>{t("Descarga un modelo por su nombre exacto")}</h3>
               <p>
-                Escribe el nombre tal como aparece en la biblioteca de Ollama, o una ruta <code>hf.co/autor/repositorio:CUANTIZACIÓN</code> para
-                traer un GGUF de Hugging Face a través de Ollama. No es un buscador: para descubrir modelos usa «Explorar Hugging Face».
+                {t("Escribe el nombre tal como aparece en la biblioteca de Ollama, o una ruta")}{" "}<code>hf.co/autor/repositorio:CUANTIZACIÓN</code>{" "}{t("para traer un GGUF de Hugging Face a través de Ollama. No es un buscador: para descubrir modelos usa «Explorar Hugging Face».")}
               </p>
               <div className="model-help-toolbar">
-                <button className="button secondary compact" type="button" onClick={() => setGlossaryRequest({ title: "Ayuda rápida de modelos", terms: MODEL_GLOSSARY, parsed: false })}><CircleHelp size={14} /> Ayuda</button>
-                <small>Q8, GGUF, MoE, MTP, Heretic y más</small>
+                <button className="button secondary compact" type="button" onClick={() => setGlossaryRequest({ title: t("Ayuda rápida de modelos"), terms: MODEL_GLOSSARY, parsed: false })}><CircleHelp size={14} />{" "}{t("Ayuda")}</button>
+                <small>{t("Q8, GGUF, MoE, MTP, Heretic y más")}</small>
               </div>
               <form className="ollama-pull-form" onSubmit={pull}>
                 <Download size={17} />
-                <input value={ollamaName} onChange={(event) => setOllamaName(event.target.value)} placeholder="qwen3:8b · llama3.2:3b · hf.co/autor/modelo:Q4_K_M" aria-label="Nombre del modelo de Ollama" />
-                <button className="button primary" type="submit" disabled={!ollamaName.trim()}>Descargar</button>
+                <input value={ollamaName} onChange={(event) => setOllamaName(event.target.value)} placeholder={t("qwen3:8b · llama3.2:3b · hf.co/autor/modelo:Q4_K_M")} aria-label={t("Nombre del modelo de Ollama")} />
+                <button className="button primary" type="submit" disabled={!ollamaName.trim()}>{t("Descargar")}</button>
               </form>
               <div className="ollama-examples">
-                <small>Ejemplos:</small>
+                <small>{t("Ejemplos:")}</small>
                 {["qwen3:8b", "llama3.2:3b", "gemma3:12b", "nomic-embed-text", "hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M"].map((example) => (
                   <button key={example} type="button" onClick={() => setOllamaName(example)}>{example}</button>
                 ))}
-                <a href="https://ollama.com/library" target="_blank" rel="noreferrer noopener"><ExternalLink size={12} /> Biblioteca de Ollama</a>
+                <a href="https://ollama.com/library" target="_blank" rel="noreferrer noopener"><ExternalLink size={12} />{" "}{t("Biblioteca de Ollama")}</a>
               </div>
             </div>
           </Card>
           <div className="ollama-tips">
-            <div><Database size={16} /><span><strong>Se guarda en Ollama</strong><small>Aparece en Instalados con su cuantización, familia y parámetros.</small></span></div>
-            <div><ShieldCheck size={16} /><span><strong>Límite de memoria</strong><small>MyDGX cancela la descarga si el tamaño no cabe en la memoria unificada.</small></span></div>
-            <div><Gauge size={16} /><span><strong>Benchmark automático</strong><small>Al terminar se encola su medición si el modo automático está activo.</small></span></div>
+            <div><Database size={16} /><span><strong>{t("Se guarda en Ollama")}</strong><small>{t("Aparece en Instalados con su cuantización, familia y parámetros.")}</small></span></div>
+            <div><ShieldCheck size={16} /><span><strong>{t("Límite de memoria")}</strong><small>{t("MyDGX cancela la descarga si el tamaño no cabe en la memoria unificada.")}</small></span></div>
+            <div><Gauge size={16} /><span><strong>{t("Benchmark automático")}</strong><small>{t("Al terminar se encola su medición si el modo automático está activo.")}</small></span></div>
           </div>
-          <ActivitySection eyebrow="DESCARGAS" title="Actividad de Ollama" total={ollamaJobs.length} active={ollamaJobs.filter((job) => activeJobStatuses.has(job.status)).length}>
+          <ActivitySection eyebrow={t("DESCARGAS")} title={t("Actividad de Ollama")} total={ollamaJobs.length} active={ollamaJobs.filter((job) => activeJobStatuses.has(job.status)).length}>
           {ollamaJobs.length ? <div className="ollama-job-list">
             {ollamaJobs.map((job) => {
               const active = activeJobStatuses.has(job.status);
@@ -3950,12 +3949,12 @@ function ModelsView({
                   {active ? <RefreshCw size={15} className="spin" /> : job.status === "completed" ? <CheckCircle2 size={15} /> : <X size={15} />}
                   <span><strong>{job.target}</strong><small>{jobLabel(job.kind)} · {jobStatusLabel(job.status)} · {job.message}</small></span>
                   <b>{Math.round(job.progress)}%</b>
-                  {["queued", "running"].includes(job.status) && <button className="icon-button danger" onClick={() => cancelJob(job.id)} aria-label="Cancelar descarga"><X size={14} /></button>}
+                  {["queued", "running"].includes(job.status) && <button className="icon-button danger" onClick={() => cancelJob(job.id)} aria-label={t("Cancelar descarga")}><X size={14} /></button>}
                 </div>
                 {active && <div className="sidebar-operation-progress"><span style={{ width: `${job.progress}%` }} /></div>}
               </Card>;
             })}
-          </div> : <Empty icon={<Download />} title="Sin descargas de Ollama" text="Las descargas que lances aparecerán aquí con su progreso." />}
+          </div> : <Empty icon={<Download />} title={t("Sin descargas de Ollama")} text={t("Las descargas que lances aparecerán aquí con su progreso.")} />}
           </ActivitySection>
         </div>
       ) : tab === "installed" ? (
@@ -3964,36 +3963,36 @@ function ModelsView({
           <UnifiedMemoryMap models={models} overview={overview} modelMetrics={modelMetrics} />
 
           <div className="local-model-summary">
-            <span><Boxes size={15} /><strong>{localModelCount}</strong> modelos locales</span>
-            <span className="loaded"><StatusDot online /><strong>{loadedModelCount}</strong> cargados en memoria</span>
-            <span><Bot size={15} /><strong>{models?.assistant_model || "Sin modelo"}</strong> chatbot</span>
+            <span><Boxes size={15} /><strong>{localModelCount}</strong>{" "}{t("modelos locales")}</span>
+            <span className="loaded"><StatusDot online /><strong>{loadedModelCount}</strong>{" "}{t("cargados en memoria")}</span>
+            <span><Bot size={15} /><strong>{models?.assistant_model || t("Sin modelo")}</strong> chatbot</span>
           </div>
 
-          <div className="local-model-filters" aria-label="Filtrar modelos instalados">
+          <div className="local-model-filters" aria-label={t("Filtrar modelos instalados")}>
             {([
-              ["all", "Todos"],
-              ["loaded", "Cargados"],
-              ["text", "Texto"],
-              ["vision", "Visión / imagen / vídeo"],
-              ["audio", "Voz / audio"],
-              ["ollama", "Ollama"],
-              ["huggingface", "Hugging Face"],
-              ["compact", "≤ 10 GB"],
-              ["medium", "10–50 GB"],
-              ["large", "> 50 GB"],
+              ["all", t("Todos")],
+              ["loaded", t("Cargados")],
+              ["text", t("Texto")],
+              ["vision", t("Visión / imagen / vídeo")],
+              ["audio", t("Voz / audio")],
+              ["ollama", t("Ollama")],
+              ["huggingface", t("Hugging Face")],
+              ["compact", t("≤ 10 GB")],
+              ["medium", t("10–50 GB")],
+              ["large", t("> 50 GB")],
             ] as Array<[LocalModelFilter, string]>).map(([value, label]) => (
               <button className={localFilter === value ? "active" : ""} key={value} onClick={() => setLocalFilter(value)} type="button" disabled={value !== "all" && filterCount(value) === 0 && localFilter !== value}>{label}<b>{filterCount(value)}</b></button>
             ))}
             <label className={`local-model-search${searchStateClass(localQuery, visibleLocalModelCount + (models?.runtime_models ?? []).filter(matchesRuntimeFilter).length)}`} data-count={searchCountLabel(localQuery, visibleLocalModelCount + (models?.runtime_models ?? []).filter(matchesRuntimeFilter).length)}>
               <Search size={14} />
               <input
-                aria-label="Buscar modelos instalados"
+                aria-label={t("Buscar modelos instalados")}
                 onChange={(event) => setLocalQuery(event.target.value)}
-                placeholder="Buscar modelos"
+                placeholder={t("Buscar modelos")}
                 type="search"
                 value={localQuery}
               />
-              {localQuery && <button aria-label="Limpiar búsqueda" onClick={() => setLocalQuery("")} type="button"><X size={13} /></button>}
+              {localQuery && <button aria-label={t("Limpiar búsqueda")} onClick={() => setLocalQuery("")} type="button"><X size={13} /></button>}
             </label>
           </div>
 
@@ -4004,15 +4003,15 @@ function ModelsView({
                 .filter((section) => section.count > 0);
               if (!groupSections.length) return null;
               return <section className={`model-split split-section ${loadedGroup ? "is-active" : ""}`} key={loadedGroup ? "loaded" : "unloaded"}>
-                <div className="split-section-title"><strong>{loadedGroup ? "Activos" : "Disponibles"}</strong><span>{groupSections.reduce((total, section) => total + section.count, 0)}</span></div>
+                <div className="split-section-title"><strong>{loadedGroup ? t("Activos") : t("Disponibles")}</strong><span>{groupSections.reduce((total, section) => total + section.count, 0)}</span></div>
             {groupSections.map((category, categoryIndex) => <div className="model-category-wrapper" key={category.key}>
               {category.managed && !groupSections[categoryIndex - 1]?.managed && <div className="managed-model-divider">
-                <span>Recursos seleccionados automáticamente</span>
-                <small>Los motores de imagen, vídeo y audio cargan el recurso adecuado cuando ejecutas una tarea.</small>
+                <span>{t("Recursos seleccionados automáticamente")}</span>
+                <small>{t("Los motores de imagen, vídeo y audio cargan el recurso adecuado cuando ejecutas una tarea.")}</small>
               </div>}
               <section className={`model-category-section ${category.managed ? "is-managed" : "is-user-selectable"}`}>
                 <div className="model-category-title">
-                  <div><strong>{category.title}</strong><small>{category.managed ? "Gestionados por su motor o perfil" : "Puedes activarlos desde aquí o desde un perfil"}</small></div>
+                  <div><strong>{category.title}</strong><small>{category.managed ? t("Gestionados por su motor o perfil") : t("Puedes activarlos desde aquí o desde un perfil")}</small></div>
                   <span>{category.count}</span>
                 </div>
               <div className={`model-category-cards ${loadedGroup ? "is-active" : "is-available"}`}>
@@ -4027,9 +4026,9 @@ function ModelsView({
                 categoryHint={`${model.name} ${model.model_id} ${model.engine}`}
                 meta={model.runtime_version ? `${model.runtime} ${model.runtime_version}` : model.runtime}
                 specs={[
-                  { label: "Motor", value: model.engine },
-                  { label: "Parámetros", value: parametersFromName(model.model_id || model.name) },
-                  { label: "Memoria", value: "Estimada", title: "Memoria estimada hasta disponer de atribución directa" },
+                  { label: t("Motor"), value: model.engine },
+                  { label: t("Parámetros"), value: parametersFromName(model.model_id || model.name) },
+                  { label: t("Memoria"), value: t("Estimada"), title: t("Memoria estimada hasta disponer de atribución directa") },
                 ]}
                 size={model.size}
                 total={totalMemory}
@@ -4053,45 +4052,45 @@ function ModelsView({
                   assistant={Boolean(model.assistant)}
                   badges={<>
                     {loadedBy.filter((owner) => owner !== "Ollama").map((owner) => <span className={`badge runtime ${owner === "Quick" ? "quick" : ""}`} key={owner}>{owner}</span>)}
-                    {Boolean(model.assistant) && <span className="badge assistant"><Bot size={11} /> Chatbot</span>}
-                    {Boolean(model.persistent) && <span className="badge">Default</span>}
+                    {Boolean(model.assistant) && <span className="badge assistant"><Bot size={11} />{" "}{t("Chatbot")}</span>}
+                    {Boolean(model.persistent) && <span className="badge">{t("Default")}</span>}
                     <UncensoredBadge name={name} />
                   </>}
                   categoryHint={localModelCategoryHint("ollama", model)}
-                  meta={model.modified_at ? `actualizado ${new Date(String(model.modified_at)).toLocaleDateString()}` : ""}
+                  meta={model.modified_at ? t("actualizado {date}", { date: new Date(String(model.modified_at)).toLocaleDateString(locale) }) : ""}
                   specs={[
-                    { label: "Parámetros", value: String(details.parameter_size || "") || parametersFromName(name) },
-                    { label: "Cuantización", value: String(details.quantization_level || "") },
-                    { label: "Familia", value: String(details.family || "") },
-                    { label: "Formato", value: String(details.format || "").toUpperCase() },
-                    { label: model.quick ? "Contexto cargado" : "Contexto al encender", value: contextLabel((model.memory_estimate as MemoryEstimate | null | undefined)?.context_size) },
-                    { label: "Digest", value: String(model.digest || "").slice(0, 12), title: String(model.digest || "") },
+                    { label: t("Parámetros"), value: String(details.parameter_size || "") || parametersFromName(name) },
+                    { label: t("Cuantización"), value: String(details.quantization_level || "") },
+                    { label: t("Familia"), value: String(details.family || "") },
+                    { label: t("Formato"), value: String(details.format || "").toUpperCase() },
+                    { label: model.quick ? t("Contexto cargado") : t("Contexto al encender"), value: contextLabel((model.memory_estimate as MemoryEstimate | null | undefined)?.context_size) },
+                    { label: t("Digest"), value: String(model.digest || "").slice(0, 12), title: String(model.digest || "") },
                   ]}
                   size={Number(model.size)}
                   total={totalMemory}
                   memory={model.memory_estimate as MemoryEstimate | null | undefined}
                   actions={<>
-                    <label className="persistence-toggle" title="Incluir en el perfil Default, que arranca siempre con MyDGX">
+                    <label className="persistence-toggle" title={t("Incluir en el perfil Default, que arranca siempre con MyDGX")}>
                       <input type="checkbox" checked={Boolean(model.persistent)} onChange={(event) => void togglePersistence("ollama", name, event.target.checked)} />
-                      <span>Default</span>
+                      <span>{t("Default")}</span>
                     </label>
                     <ModelTermsButton text={`${name} ${JSON.stringify(details)}`} label={name} onOpen={setGlossaryRequest} />
                     <span className="lc-actions-spacer" />
                     {model.quick
-                      ? <button className="button danger compact" disabled={quickBusy !== null} onClick={() => void quickModel("ollama", name, false)} aria-label={`Apagar ${name}`}><Square size={13} /> {quickBusy === quickKey ? "Apagando…" : "Apagar"}</button>
+                      ? <button className="button danger compact" disabled={quickBusy !== null} onClick={() => void quickModel("ollama", name, false)} aria-label={t("Apagar {name}", { name: name })}><Square size={13} /> {quickBusy === quickKey ? t("Apagando…") : t("Apagar")}</button>
                       : profileOwner
-                        ? <button className="button secondary compact" disabled title={`Cargado por el perfil ${profileOwner}; detenlo desde Perfiles`}><Square size={13} /> {profileOwner}</button>
+                        ? <button className="button secondary compact" disabled title={t("Cargado por el perfil {profileOwner}; detenlo desde Perfiles", { profileOwner: profileOwner })}><Square size={13} /> {profileOwner}</button>
                         : loaded
-                          ? <button className="button secondary compact" onClick={() => ollamaMemory(name, false)} aria-label={`Descargar ${name} de memoria`}><Square size={13} /> Liberar</button>
-                          : <QuickStartButton label={name} availability={model.quick_start as QuickStart | undefined} busy={quickBusy !== null} pending={quickBusy === quickKey} title="Cargar ahora en el perfil Quick; no se restaura al reiniciar el equipo" onStart={() => void quickModel("ollama", name, true)} />}
-                    {(model.quick_start as QuickStart | undefined)?.supported !== false && <button className="icon-button" onClick={() => setAddToProfile({ source: "ollama", modelId: name })} title="Añadir a un perfil" aria-label={`Añadir ${name} a un perfil`}><ListPlus size={15} /></button>}
-                    <button className="icon-button" onClick={() => updateOllama(name)} title="Actualizar desde el registro" aria-label={`Actualizar ${name}`}><RefreshCw size={15} /></button>
+                          ? <button className="button secondary compact" onClick={() => ollamaMemory(name, false)} aria-label={t("Descargar {name} de memoria", { name: name })}><Square size={13} />{" "}{t("Liberar")}</button>
+                          : <QuickStartButton label={name} availability={model.quick_start as QuickStart | undefined} busy={quickBusy !== null} pending={quickBusy === quickKey} title={t("Cargar ahora en el perfil Quick; no se restaura al reiniciar el equipo")} onStart={() => void quickModel("ollama", name, true)} />}
+                    {(model.quick_start as QuickStart | undefined)?.supported !== false && <button className="icon-button" onClick={() => setAddToProfile({ source: "ollama", modelId: name })} title={t("Añadir a un perfil")} aria-label={t("Añadir {name} a un perfil", { name: name })}><ListPlus size={15} /></button>}
+                    <button className="icon-button" onClick={() => updateOllama(name)} title={t("Actualizar desde el registro")} aria-label={t("Actualizar {name}", { name: name })}><RefreshCw size={15} /></button>
                     <button
                       className="icon-button danger"
                       disabled={Boolean(model.assistant)}
-                      title={model.assistant ? "Protegido: este modelo lo utiliza el chatbot" : `Eliminar ${name}`}
+                      title={model.assistant ? t("Protegido: este modelo lo utiliza el chatbot") : t("Eliminar {name}", { name: name })}
                       onClick={() => remove("ollama", name)}
-                      aria-label={model.assistant ? `${name} está protegido porque lo utiliza el chatbot` : `Eliminar ${name}`}
+                      aria-label={model.assistant ? t("{name} está protegido porque lo utiliza el chatbot", { name: name }) : t("Eliminar {name}", { name: name })}
                     >{model.assistant ? <ShieldCheck size={16} /> : <Trash2 size={16} />}</button>
                   </>}
                 />
@@ -4109,9 +4108,9 @@ function ModelsView({
               const runnable = model.quantizations.length > 0 && model.formats.includes("GGUF");
               const baseName = modelBaseName(model.repo_id);
               const ggufVariant = runnable || !baseName ? undefined : (models?.huggingface ?? []).find((other) => other.repo_id !== model.repo_id && other.formats.includes("GGUF") && other.quantizations.length > 0 && other.repo_id.toLowerCase().replace(/[^a-z0-9]/g, "").includes(baseName));
-              const variantHint = ggufVariant ? ` Para usarlo enciende ${ggufVariant.repo_id}, la versión GGUF que ya está descargada.` : "";
+              const variantHint = ggufVariant ? t(" Para usarlo enciende {repo_id}, la versión GGUF que ya está descargada.", { repo_id: ggufVariant.repo_id }) : "";
               const unsupportedReason = cardOnly
-                ? `Sin pesos: solo se descargó la ficha (README).${variantHint || " Descarga los pesos para poder usarlo."}`
+                ? t("Sin pesos: solo se descargó la ficha (README).{value}", { value: variantHint || t(" Descarga los pesos para poder usarlo.") })
                 : runnable ? undefined
                 : `${unsupportedQuickStartReason(localModelCategory(localModelCategoryHint("huggingface", model as unknown as Record<string, unknown>)).label)}.${variantHint}`;
               return (
@@ -4124,57 +4123,57 @@ function ModelsView({
                   assistant={model.assistant}
                   badges={<>
                     {(model.loaded_by ?? []).map((runtime) => <span className={`badge runtime ${runtime === "Quick" ? "quick" : ""}`} key={runtime}>{runtime}</span>)}
-                    {model.assistant && <span className="badge assistant"><Bot size={11} /> Chatbot</span>}
-                    {model.persistent && <span className="badge">Default</span>}
+                    {model.assistant && <span className="badge assistant"><Bot size={11} />{" "}{t("Chatbot")}</span>}
+                    {model.persistent && <span className="badge">{t("Default")}</span>}
                     <UncensoredBadge name={model.repo_id} flagged={model.uncensored} />
-                    {incomplete && <span className="badge warning">Incompleto</span>}
-                    {cardOnly && <span className="badge warning" title="Solo está la ficha del modelo; no hay archivos de pesos">Sin pesos</span>}
-                    {model.speculative && <span className="badge" title={`Decodificación especulativa con ${model.speculative.draft_filename || "el MTP integrado en el GGUF"}`}><Zap size={11} /> {SPEC_LABELS[model.speculative.spec_type] ?? model.speculative.spec_type}</span>}
-                    {model.manual_settings && <span className="badge" title="Tiene ajustes manuales que mandan sobre la ficha y la cabecera GGUF"><SlidersHorizontal size={11} /> Manual</span>}
+                    {incomplete && <span className="badge warning">{t("Incompleto")}</span>}
+                    {cardOnly && <span className="badge warning" title={t("Solo está la ficha del modelo; no hay archivos de pesos")}>{t("Sin pesos")}</span>}
+                    {model.speculative && <span className="badge" title={t("Decodificación especulativa con {value}", { value: model.speculative.draft_filename || t("el MTP integrado en el GGUF") })}><Zap size={11} /> {SPEC_LABELS[model.speculative.spec_type] ?? model.speculative.spec_type}</span>}
+                    {model.manual_settings && <span className="badge" title={t("Tiene ajustes manuales que mandan sobre la ficha y la cabecera GGUF")}><SlidersHorizontal size={11} />{" "}{t("Manual")}</span>}
                   </>}
                   categoryHint={localModelCategoryHint("huggingface", model as unknown as Record<string, unknown>)}
-                  meta={`${model.snapshot_count} snapshot${model.snapshot_count === 1 ? "" : "s"} · ${model.file_count} archivo${model.file_count === 1 ? "" : "s"}${model.shard_count ? ` · ${model.shard_count} shards` : ""}`}
+                  meta={t("{snapshot_count} snapshot{snapshotPlural} · {file_count} archivo{filePlural}{shardSuffix}", { snapshot_count: model.snapshot_count, snapshotPlural: model.snapshot_count === 1 ? "" : "s", file_count: model.file_count, filePlural: model.file_count === 1 ? "" : "s", shardSuffix: model.shard_count ? t(" · {shard_count} shards", { shard_count: model.shard_count }) : "" })}
                   specs={[
-                    { label: "Parámetros", value: parametersFromName(model.repo_id) },
-                    { label: "Cuantización", value: model.quantizations.join(", ") },
-                    { label: "Formato", value: model.formats.map((format) => format.toUpperCase()).join(", ") },
-                    { label: "Arquitectura", value: architectureLabel },
-                    { label: model.quick ? "Contexto cargado" : "Contexto al encender", value: contextLabel(model.memory_estimate?.context_size), title: "Punto medio entre el mínimo de los agentes de código y el máximo del autor o del GGUF" },
-                    { label: "Contexto nativo", value: contextLabel(model.configuration.max_position_embeddings || model.memory_estimate?.native_context) },
-                    { label: "Revisión", value: model.revision ? model.revision.slice(0, 10) : "", title: model.revision },
+                    { label: t("Parámetros"), value: parametersFromName(model.repo_id) },
+                    { label: t("Cuantización"), value: model.quantizations.join(", ") },
+                    { label: t("Formato"), value: model.formats.map((format) => format.toUpperCase()).join(", ") },
+                    { label: t("Arquitectura"), value: architectureLabel },
+                    { label: model.quick ? t("Contexto cargado") : t("Contexto al encender"), value: contextLabel(model.memory_estimate?.context_size), title: t("Punto medio entre el mínimo de los agentes de código y el máximo del autor o del GGUF") },
+                    { label: t("Contexto nativo"), value: contextLabel(model.configuration.max_position_embeddings || model.memory_estimate?.native_context) },
+                    { label: t("Revisión"), value: model.revision ? model.revision.slice(0, 10) : "", title: model.revision },
                   ]}
                   size={model.size}
                   total={totalMemory}
                   memory={model.memory_estimate}
                   extra={verification && <div className={`model-verification ${verification.status}`}>
                     <ShieldCheck size={13} />
-                    <div><strong>{verification.message}</strong><small>{verification.status === "completed" ? "Integridad comprobada" : verification.status === "failed" ? "La verificación falló" : `${Math.round(verification.progress)}% completado`}</small></div>
+                    <div><strong>{verification.message}</strong><small>{verification.status === "completed" ? t("Integridad comprobada") : verification.status === "failed" ? t("La verificación falló") : t("{progress}% completado", { progress: Math.round(verification.progress) })}</small></div>
                     {verificationActive && <span style={{ width: `${verification.progress}%` }} />}
                   </div>}
                   actions={<>
-                    <label className={`persistence-toggle ${model.quantizations.length ? "" : "disabled"}`} title={model.quantizations.length ? "Incluir en el perfil Default, que arranca siempre con MyDGX" : "El perfil Default requiere un GGUF"}>
+                    <label className={`persistence-toggle ${model.quantizations.length ? "" : "disabled"}`} title={model.quantizations.length ? t("Incluir en el perfil Default, que arranca siempre con MyDGX") : t("El perfil Default requiere un GGUF")}>
                       <input type="checkbox" disabled={!model.quantizations.length} checked={model.persistent} onChange={(event) => void togglePersistence("huggingface", model.repo_id, event.target.checked, chosenContexts[model.repo_id])} />
-                      <span>Default</span>
+                      <span>{t("Default")}</span>
                     </label>
                     <ModelTermsButton text={`${model.repo_id} ${model.formats.join(" ")} ${model.quantizations.join(" ")} ${architectureLabel} ${(model.tasks ?? []).join(" ")}`} label={model.repo_id} onOpen={setGlossaryRequest} />
                     <span className="lc-actions-spacer" />
                     {model.quick
-                      ? <button className="button danger compact" disabled={quickBusy !== null} onClick={() => void quickModel("huggingface", model.repo_id, false)} aria-label={`Apagar ${model.repo_id}`}><Square size={13} /> {quickBusy === `huggingface:${model.repo_id}` ? "Apagando…" : "Apagar"}</button>
+                      ? <button className="button danger compact" disabled={quickBusy !== null} onClick={() => void quickModel("huggingface", model.repo_id, false)} aria-label={t("Apagar {repo_id}", { repo_id: model.repo_id })}><Square size={13} /> {quickBusy === `huggingface:${model.repo_id}` ? t("Apagando…") : t("Apagar")}</button>
                       : model.loaded_by.includes("ComfyUI")
-                        ? <button className="button secondary compact" disabled={quickBusy !== null} onClick={() => void releaseComfyUI(model.repo_id)} title="ComfyUI descarga de memoria todos los modelos que tenga cargados; se vuelven a cargar en la siguiente generación" aria-label={`Liberar ${model.repo_id} de ComfyUI`}><Square size={13} /> {quickBusy === `comfyui:${model.repo_id}` ? "Liberando…" : "Liberar"}</button>
+                        ? <button className="button secondary compact" disabled={quickBusy !== null} onClick={() => void releaseComfyUI(model.repo_id)} title={t("ComfyUI descarga de memoria todos los modelos que tenga cargados; se vuelven a cargar en la siguiente generación")} aria-label={t("Liberar {repo_id} de ComfyUI", { repo_id: model.repo_id })}><Square size={13} /> {quickBusy === `comfyui:${model.repo_id}` ? t("Liberando…") : t("Liberar")}</button>
                       : !model.loaded && !incomplete
-                        && <QuickStartButton label={model.repo_id} availability={model.quick_start} defaultContext={model.memory_estimate?.context_size} unsupportedReason={unsupportedReason} busy={quickBusy !== null} pending={quickBusy === `huggingface:${model.repo_id}`} title="Cargar ahora con llama.cpp en el perfil Quick; no se restaura al reiniciar el equipo" onStart={(contextSize) => void quickModel("huggingface", model.repo_id, true, contextSize)} onContextChange={(contextSize) => setChosenContexts((current) => ({ ...current, [model.repo_id]: contextSize }))} />}
-                    <a className="icon-button" href={`https://huggingface.co/${model.repo_id}`} target="_blank" rel="noreferrer noopener" title="Abrir en Hugging Face" aria-label={`Abrir ${model.repo_id} en Hugging Face`}><ExternalLink size={15} /></a>
-                    <button className="button secondary compact" disabled={inspectingRepo !== null} onClick={() => inspect(model.repo_id)} aria-label={`Inspeccionar ${model.repo_id}`}><Search className={inspectingRepo === model.repo_id ? "spin" : ""} size={13} /> Detalles</button>
-                    {runnable && !incomplete && !unsupportedReason && model.quick_start?.supported !== false && <button className="icon-button" onClick={() => setAddToProfile({ source: "huggingface", modelId: model.repo_id, range: model.quick_start?.context, defaultContext: chosenContexts[model.repo_id] ?? model.memory_estimate?.context_size })} title="Añadir a un perfil, con su contexto" aria-label={`Añadir ${model.repo_id} a un perfil`}><ListPlus size={15} /></button>}
-                    {runnable && !incomplete && <button className="icon-button" onClick={() => setSettingsModel(model.repo_id)} title="Ajustes de arranque: cuantización, contexto, drafter y muestreo" aria-label={`Ajustes de ${model.repo_id}`}><SlidersHorizontal size={15} /></button>}
-                    <button className="icon-button" disabled={verificationActive} onClick={() => verifyIntegrity(model.repo_id)} aria-label={`Verificar ${model.repo_id}`} title={verification?.message || "Verificar integridad (SHA-256)"}><ShieldCheck className={verificationActive ? "spin" : ""} size={15} /></button>
+                        && <QuickStartButton label={model.repo_id} availability={model.quick_start} defaultContext={model.memory_estimate?.context_size} unsupportedReason={unsupportedReason} busy={quickBusy !== null} pending={quickBusy === `huggingface:${model.repo_id}`} title={t("Cargar ahora con llama.cpp en el perfil Quick; no se restaura al reiniciar el equipo")} onStart={(contextSize) => void quickModel("huggingface", model.repo_id, true, contextSize)} onContextChange={(contextSize) => setChosenContexts((current) => ({ ...current, [model.repo_id]: contextSize }))} />}
+                    <a className="icon-button" href={`https://huggingface.co/${model.repo_id}`} target="_blank" rel="noreferrer noopener" title={t("Abrir en Hugging Face")} aria-label={t("Abrir {repo_id} en Hugging Face", { repo_id: model.repo_id })}><ExternalLink size={15} /></a>
+                    <button className="button secondary compact" disabled={inspectingRepo !== null} onClick={() => inspect(model.repo_id)} aria-label={t("Inspeccionar {repo_id}", { repo_id: model.repo_id })}><Search className={inspectingRepo === model.repo_id ? "spin" : ""} size={13} />{" "}{t("Detalles")}</button>
+                    {runnable && !incomplete && !unsupportedReason && model.quick_start?.supported !== false && <button className="icon-button" onClick={() => setAddToProfile({ source: "huggingface", modelId: model.repo_id, range: model.quick_start?.context, defaultContext: chosenContexts[model.repo_id] ?? model.memory_estimate?.context_size })} title={t("Añadir a un perfil, con su contexto")} aria-label={t("Añadir {repo_id} a un perfil", { repo_id: model.repo_id })}><ListPlus size={15} /></button>}
+                    {runnable && !incomplete && <button className="icon-button" onClick={() => setSettingsModel(model.repo_id)} title={t("Ajustes de arranque: cuantización, contexto, drafter y muestreo")} aria-label={t("Ajustes de {repo_id}", { repo_id: model.repo_id })}><SlidersHorizontal size={15} /></button>}
+                    <button className="icon-button" disabled={verificationActive} onClick={() => verifyIntegrity(model.repo_id)} aria-label={t("Verificar {repo_id}", { repo_id: model.repo_id })} title={verification?.message || t("Verificar integridad (SHA-256)")}><ShieldCheck className={verificationActive ? "spin" : ""} size={15} /></button>
                     <button
                       className="icon-button danger"
                       disabled={model.assistant}
-                      title={model.assistant ? "Protegido: este modelo lo utiliza el chatbot" : `Eliminar ${model.repo_id}`}
+                      title={model.assistant ? t("Protegido: este modelo lo utiliza el chatbot") : t("Eliminar {repo_id}", { repo_id: model.repo_id })}
                       onClick={() => remove("huggingface", model.repo_id)}
-                      aria-label={model.assistant ? `${model.repo_id} está protegido porque lo utiliza el chatbot` : `Eliminar ${model.repo_id}`}
+                      aria-label={model.assistant ? t("{repo_id} está protegido porque lo utiliza el chatbot", { repo_id: model.repo_id }) : t("Eliminar {repo_id}", { repo_id: model.repo_id })}
                     >{model.assistant ? <ShieldCheck size={16} /> : <Trash2 size={16} />}</button>
                   </>}
                 />
@@ -4185,25 +4184,25 @@ function ModelsView({
             </div>)}
               </section>;
             })}
-            {!models?.ollama.length && !models?.huggingface.length && <Empty icon={<Boxes />} title="No hay modelos locales" text="Descarga tu primer modelo desde «Explorar Hugging Face» o «Descargar con Ollama»." />}
-            {localModelCount > 0 && visibleLocalModelCount === 0 && <Empty icon={<Search />} title="Ningún modelo coincide" text="Prueba otro filtro." />}
+            {!models?.ollama.length && !models?.huggingface.length && <Empty icon={<Boxes />} title={t("No hay modelos locales")} text={t("Descarga tu primer modelo desde «Explorar Hugging Face» o «Descargar con Ollama».")} />}
+            {localModelCount > 0 && visibleLocalModelCount === 0 && <Empty icon={<Search />} title={t("Ningún modelo coincide")} text={t("Prueba otro filtro.")} />}
           </div>
         </>
       ) : (
         <>
           <Card className="spark-search-panel">
             <div className="catalog-mode-switch">
-              <button className={catalogMode === "spark" ? "active" : ""} onClick={() => setCatalogMode("spark")} type="button"><Sparkles size={13} /> Para este Spark</button>
-              <button className={catalogMode === "all" ? "active" : ""} onClick={() => setCatalogMode("all")} type="button"><Globe size={13} /> Todo Hugging Face</button>
-              <button className={catalogMode === "favorites" ? "active" : ""} onClick={() => setCatalogMode("favorites")} type="button"><Star size={13} fill={catalogMode === "favorites" ? "currentColor" : "none"} /> Favoritos</button>
+              <button className={catalogMode === "spark" ? "active" : ""} onClick={() => setCatalogMode("spark")} type="button"><Sparkles size={13} />{" "}{t("Para este Spark")}</button>
+              <button className={catalogMode === "all" ? "active" : ""} onClick={() => setCatalogMode("all")} type="button"><Globe size={13} />{" "}{t("Todo Hugging Face")}</button>
+              <button className={catalogMode === "favorites" ? "active" : ""} onClick={() => setCatalogMode("favorites")} type="button"><Star size={13} fill={catalogMode === "favorites" ? "currentColor" : "none"} />{" "}{t("Favoritos")}</button>
             </div>
             <div className="model-help-toolbar catalog-help">
-              <button className="button secondary compact" type="button" onClick={() => setGlossaryRequest({ title: "Ayuda rápida de Hugging Face", terms: MODEL_GLOSSARY, parsed: false })}><CircleHelp size={14} /> Ayuda</button>
-              <small>¿Q8, MTP, Heretic o Abliterated? Explicaciones simples</small>
+              <button className="button secondary compact" type="button" onClick={() => setGlossaryRequest({ title: t("Ayuda rápida de Hugging Face"), terms: MODEL_GLOSSARY, parsed: false })}><CircleHelp size={14} />{" "}{t("Ayuda")}</button>
+              <small>{t("¿Q8, MTP, Heretic o Abliterated? Explicaciones simples")}</small>
             </div>
             <div className="spark-search-copy">
               <div className="spark-search-icon">{catalogMode === "spark" ? <Sparkles /> : catalogMode === "all" ? <Globe /> : <Star />}</div>
-              <div><strong>{catalogMode === "spark" ? "Recomendador para este Spark" : catalogMode === "all" ? "Búsqueda general en Hugging Face" : "Modelos guardados para probar"}</strong><small>{catalogMode === "spark" ? (alignment === "uncensored" ? "Analiza memoria, GGUF y el catálogo hft.md de modelos sin censura o abliterados." : "Analiza memoria libre, GGUF, contexto, runtime GB10 y calidad de la ficha.") : catalogMode === "all" ? "Busca cualquier modelo, autor o arquitectura publicada en el Hub." : "Tu lista persistente de candidatos para revisar, comparar o descargar más adelante."}</small></div>
+              <div><strong>{catalogMode === "spark" ? t("Recomendador para este Spark") : catalogMode === "all" ? t("Búsqueda general en Hugging Face") : t("Modelos guardados para probar")}</strong><small>{catalogMode === "spark" ? (alignment === "uncensored" ? t("Analiza memoria, GGUF y el catálogo hft.md de modelos sin censura o abliterados.") : t("Analiza memoria libre, GGUF, contexto, runtime GB10 y calidad de la ficha.")) : catalogMode === "all" ? t("Busca cualquier modelo, autor o arquitectura publicada en el Hub.") : t("Tu lista persistente de candidatos para revisar, comparar o descargar más adelante.")}</small></div>
             </div>
             {catalogMode !== "favorites" && <form className={`search-bar${searchStateClass(query, hasSearched && !busy ? (catalogMode === "all" ? allResults : results).length : null)}`} data-count={searchCountLabel(query, hasSearched && !busy ? (catalogMode === "all" ? allResults : results).length : null)} onSubmit={search} ref={searchFormRef}>
               <Search size={18} />
@@ -4214,87 +4213,87 @@ function ModelsView({
                   value={query}
                   onChange={(event) => { setQuery(event.target.value); setSearchHistoryOpen(true); }}
                   onFocus={() => setSearchHistoryOpen(true)}
-                  placeholder="Ejemplo: Qwen coder, Llama instruct, reasoning…"
+                  placeholder={t("Ejemplo: Qwen coder, Llama instruct, reasoning…")}
                   autoComplete="off"
-                  aria-label="Buscar modelos en Hugging Face"
+                  aria-label={t("Buscar modelos en Hugging Face")}
                   aria-expanded={searchHistoryOpen && matchingRecentSearches.length > 0}
                 />
                 {searchHistoryOpen && matchingRecentSearches.length > 0 && <div className="search-history-menu">
-                  <div className="search-history-head"><span><History size={13} /> Búsquedas recientes</span><button type="button" onClick={clearSearchHistory}>Borrar</button></div>
+                  <div className="search-history-head"><span><History size={13} />{" "}{t("Búsquedas recientes")}</span><button type="button" onClick={clearSearchHistory}>{t("Borrar")}</button></div>
                   {matchingRecentSearches.map((item) => <button className="search-history-item" type="button" key={item} onClick={() => reuseSearch(item)}><History size={13} /><span>{item}</span></button>)}
                 </div>}
               </div>
-              <button className="button primary" type="submit" disabled={busy}>{busy ? (catalogMode === "spark" ? "Analizando…" : "Buscando…") : (catalogMode === "spark" ? "Recomendar" : "Buscar")}</button>
+              <button className="button primary" type="submit" disabled={busy}>{busy ? (catalogMode === "spark" ? t("Analizando…") : t("Buscando…")) : (catalogMode === "spark" ? t("Recomendar") : t("Buscar"))}</button>
             </form>}
             {catalogMode !== "favorites" && <a className="hft-catalog-link" href="https://hft.md/uncensored-ai/" target="_blank" rel="noreferrer noopener">
               <ExternalLink size={13} />
-              <span>Catálogo sin censura</span>
+              <span>{t("Catálogo sin censura")}</span>
               <span className="hft-catalog-url">https://hft.md/uncensored-ai/</span>
             </a>}
             {catalogMode === "spark" ? <div className="recommendation-filters">
-              <label><span>Tarea</span><select value={task} onChange={(event) => setTask(event.target.value as typeof task)}>
-                <option value="any">Cualquier tarea</option><option value="chat">Chat</option><option value="code">Código</option>
-                <option value="reasoning">Reasoning</option><option value="embedding">Embeddings</option><option value="vision">Visión</option>
-                <option value="audio-chat">Chat con audio</option><option value="video-chat">Chat con vídeo</option>
-                <option value="image-generation">Generación de imagen</option><option value="asr">Audio a texto</option>
-                <option value="tts">Texto a audio</option><option value="video-generation">Generación de vídeo</option>
-                <option value="reranking">Reranking</option>
+              <label><span>{t("Tarea")}</span><select value={task} onChange={(event) => setTask(event.target.value as typeof task)}>
+                <option value="any">{t("Cualquier tarea")}</option><option value="chat">{t("Chat")}</option><option value="code">{t("Código")}</option>
+                <option value="reasoning">{t("Reasoning")}</option><option value="embedding">{t("Embeddings")}</option><option value="vision">{t("Visión")}</option>
+                <option value="audio-chat">{t("Chat con audio")}</option><option value="video-chat">{t("Chat con vídeo")}</option>
+                <option value="image-generation">{t("Generación de imagen")}</option><option value="asr">{t("Audio a texto")}</option>
+                <option value="tts">{t("Texto a audio")}</option><option value="video-generation">{t("Generación de vídeo")}</option>
+                <option value="reranking">{t("Reranking")}</option>
               </select></label>
-              <label><span>Tamaño</span><select value={size} onChange={(event) => setSize(event.target.value as typeof size)}>
-                <option value="any">Mejor calidad que quepa</option><option value="compact">Compacto · hasta 16 GB</option>
-                <option value="balanced">Equilibrado · hasta 48 GB</option><option value="large">Grande · memoria disponible</option>
+              <label><span>{t("Tamaño")}</span><select value={size} onChange={(event) => setSize(event.target.value as typeof size)}>
+                <option value="any">{t("Mejor calidad que quepa")}</option><option value="compact">{t("Compacto · hasta 16 GB")}</option>
+                <option value="balanced">{t("Equilibrado · hasta 48 GB")}</option><option value="large">{t("Grande · memoria disponible")}</option>
               </select></label>
-              <label><span>Contenido</span><select value={alignment} onChange={(event) => setAlignment(event.target.value as typeof alignment)}>
-                <option value="any">Todos los modelos</option><option value="uncensored">Sin censura · uncensored / abliterated</option>
-                <option value="standard">Estándar</option>
+              <label><span>{t("Contenido")}</span><select value={alignment} onChange={(event) => setAlignment(event.target.value as typeof alignment)}>
+                <option value="any">{t("Todos los modelos")}</option><option value="uncensored">{t("Sin censura · uncensored / abliterated")}</option>
+                <option value="standard">{t("Estándar")}</option>
               </select></label>
-              <label><span>Entrada</span><select value={modality} onChange={(event) => setModality(event.target.value as typeof modality)}>
-                <option value="any">Cualquier modalidad</option><option value="text">Texto</option><option value="image">Imagen</option>
-                <option value="audio">Audio</option><option value="video">Vídeo</option>
+              <label><span>{t("Entrada")}</span><select value={modality} onChange={(event) => setModality(event.target.value as typeof modality)}>
+                <option value="any">{t("Cualquier modalidad")}</option><option value="text">{t("Texto")}</option><option value="image">{t("Imagen")}</option>
+                <option value="audio">{t("Audio")}</option><option value="video">{t("Vídeo")}</option>
               </select></label>
-              <label><span>Runtime</span><select value={runtime} onChange={(event) => setRuntime(event.target.value as typeof runtime)}>
-                <option value="any">Mejor runtime disponible</option><option value="llama.cpp">llama.cpp · GGUF</option>
-                <option value="external">Motor externo local</option>
+              <label><span>{t("Runtime")}</span><select value={runtime} onChange={(event) => setRuntime(event.target.value as typeof runtime)}>
+                <option value="any">{t("Mejor runtime disponible")}</option><option value="llama.cpp">{t("llama.cpp · GGUF")}</option>
+                <option value="external">{t("Motor externo local")}</option>
               </select></label>
-              <label><span>Formato</span><select value={modelFormat} onChange={(event) => setModelFormat(event.target.value as typeof modelFormat)}>
-                <option value="any">Cualquier formato</option><option value="gguf">GGUF</option>
-                <option value="safetensors">Safetensors</option><option value="onnx">ONNX</option>
+              <label><span>{t("Formato")}</span><select value={modelFormat} onChange={(event) => setModelFormat(event.target.value as typeof modelFormat)}>
+                <option value="any">{t("Cualquier formato")}</option><option value="gguf">GGUF</option>
+                <option value="safetensors">{t("Safetensors")}</option><option value="onnx">ONNX</option>
               </select></label>
-              <label><span>Resultados</span><select value={sparkLimit} onChange={(event) => setSparkLimit(Number(event.target.value) as typeof sparkLimit)}>
-                <option value={12}>12 por búsqueda · más rápido</option>
-                <option value={18}>18 por búsqueda</option>
-                <option value={30}>30 por búsqueda · más completo</option>
+              <label><span>{t("Resultados")}</span><select value={sparkLimit} onChange={(event) => setSparkLimit(Number(event.target.value) as typeof sparkLimit)}>
+                <option value={12}>{t("12 por búsqueda · más rápido")}</option>
+                <option value={18}>{t("18 por búsqueda")}</option>
+                <option value={30}>{t("30 por búsqueda · más completo")}</option>
               </select></label>
-              <span className="memory-live"><StatusDot online />Ranking con telemetría en vivo</span>
+              <span className="memory-live"><StatusDot online />{t("Ranking con telemetría en vivo")}</span>
             </div> : catalogMode === "all" ? <div className="general-search-filters">
-              <label><span>Capacidad</span><select value={task} onChange={(event) => setTask(event.target.value as typeof task)}>
-                <option value="any">Cualquier capacidad</option><option value="chat">Chat</option><option value="vision">Chat con imagen</option>
-                <option value="audio-chat">Chat con audio</option><option value="video-chat">Chat con vídeo</option>
-                <option value="embedding">Embeddings</option><option value="image-generation">Generación de imagen</option>
-                <option value="asr">ASR</option><option value="tts">TTS</option><option value="video-generation">Generación de vídeo</option>
-                <option value="reranking">Reranking</option>
+              <label><span>{t("Capacidad")}</span><select value={task} onChange={(event) => setTask(event.target.value as typeof task)}>
+                <option value="any">{t("Cualquier capacidad")}</option><option value="chat">{t("Chat")}</option><option value="vision">{t("Chat con imagen")}</option>
+                <option value="audio-chat">{t("Chat con audio")}</option><option value="video-chat">{t("Chat con vídeo")}</option>
+                <option value="embedding">{t("Embeddings")}</option><option value="image-generation">{t("Generación de imagen")}</option>
+                <option value="asr">ASR</option><option value="tts">TTS</option><option value="video-generation">{t("Generación de vídeo")}</option>
+                <option value="reranking">{t("Reranking")}</option>
               </select></label>
-              <label><span>Entrada</span><select value={modality} onChange={(event) => setModality(event.target.value as typeof modality)}>
-                <option value="any">Cualquier modalidad</option><option value="text">Texto</option><option value="image">Imagen</option>
-                <option value="audio">Audio</option><option value="video">Vídeo</option>
+              <label><span>{t("Entrada")}</span><select value={modality} onChange={(event) => setModality(event.target.value as typeof modality)}>
+                <option value="any">{t("Cualquier modalidad")}</option><option value="text">{t("Texto")}</option><option value="image">{t("Imagen")}</option>
+                <option value="audio">{t("Audio")}</option><option value="video">{t("Vídeo")}</option>
               </select></label>
-              <span className="general-search-note"><Gauge size={13} />Score para este Spark · comunidad HF como señal secundaria</span>
-            </div> : <div className="favorite-summary"><Star size={14} fill="currentColor" /><strong>{favorites.length}</strong><span>modelo(s) guardado(s)</span></div>}
+              <span className="general-search-note"><Gauge size={13} />{t("Score para este Spark · comunidad HF como señal secundaria")}</span>
+            </div> : <div className="favorite-summary"><Star size={14} fill="currentColor" /><strong>{favorites.length}</strong><span>{t("modelo(s) guardado(s)")}</span></div>}
           </Card>
 
           {catalogMode === "spark" ? <>
             {results.length > 0 && <SectionHeading
-              eyebrow={installedRecommendations ? `ORDEN DINÁMICO · ${installedRecommendations} ya instalado${installedRecommendations === 1 ? "" : "s"}` : "ORDEN DINÁMICO"}
-              title="Recomendados para este Spark"
-              action={<select className="benchmark-comparison-select" value={sparkSort} onChange={(event) => setSparkSort(event.target.value as typeof sparkSort)} aria-label="Ordenar recomendados">
-                <option value="recommended">Recomendación para este Spark</option>
-                <option value="speed">Rendimiento estimado (tok/s)</option>
-                <option value="memory">Menor memoria</option>
-                <option value="community">Score comunidad HF</option>
-                <option value="downloads">Más descargados</option>
-                <option value="likes">Más likes</option>
-                <option value="trending">Tendencia</option>
-                <option value="name">Nombre</option>
+              eyebrow={installedRecommendations ? t("ORDEN DINÁMICO · {installedRecommendations} ya instalado{value}", { installedRecommendations: installedRecommendations, value: installedRecommendations === 1 ? "" : "s" }) : t("ORDEN DINÁMICO")}
+              title={t("Recomendados para este Spark")}
+              action={<select className="benchmark-comparison-select" value={sparkSort} onChange={(event) => setSparkSort(event.target.value as typeof sparkSort)} aria-label={t("Ordenar recomendados")}>
+                <option value="recommended">{t("Recomendación para este Spark")}</option>
+                <option value="speed">{t("Rendimiento estimado (tok/s)")}</option>
+                <option value="memory">{t("Menor memoria")}</option>
+                <option value="community">{t("Score comunidad HF")}</option>
+                <option value="downloads">{t("Más descargados")}</option>
+                <option value="likes">{t("Más likes")}</option>
+                <option value="trending">{t("Tendencia")}</option>
+                <option value="name">{t("Nombre")}</option>
               </select>}
             />}
             <div className="catalog-grid recommendation-grid">
@@ -4324,51 +4323,51 @@ function ModelsView({
                     <div className="score-ring" style={{ "--score": `${model.recommended_score * 3.6}deg` } as CSSProperties}>
                       <strong>{model.recommended_score}</strong><small>/100</small>
                     </div>
-                    <span className={`recommendation-status ${statusClass}`}>{model.recommendation_status}</span>
+                    <span className={`recommendation-status ${statusClass}`}>{t(model.recommendation_status)}</span>
                   </div>
-                  <div className="catalog-top"><div className="model-icon hf"><HuggingFaceIcon /></div><div className="recommendation-tags">{installed && <span className="installed">instalado</span>}{model.uncensored && <span className="uncensored">sin censura</span>}{model.hft_catalog && <span className="uncensored">hft.md</span>}{model.tasks.map((item) => <span key={item}>{item}</span>)}</div></div>
+                  <div className="catalog-top"><div className="model-icon hf"><HuggingFaceIcon /></div><div className="recommendation-tags">{installed && <span className="installed">{t("instalado")}</span>}{model.uncensored && <span className="uncensored">{t("sin censura")}</span>}{model.hft_catalog && <span className="uncensored">hft.md</span>}{model.tasks.map((item) => <span key={item}>{item}</span>)}</div></div>
                   <div className="recommendation-name" title={model.id}>
                     <span><strong>{model.id.split("/").pop() || model.id}</strong><ModelTermsButton text={`${model.id} ${model.recommended_quantization} ${model.architecture} ${model.runtime_requirement} ${model.speculative_methods.join(" ")} ${model.tasks.join(" ")}`} label={model.id} onOpen={setGlossaryRequest} /></span>
                     {model.id.includes("/") && <small>{model.id}</small>}
                   </div>
-                  {model.hft_catalog && <div className="hft-catalog-score" title={model.hft_catalog.summary || "Catálogo hft.md"}>
+                  {model.hft_catalog && <div className="hft-catalog-score" title={model.hft_catalog.summary || t("Catálogo hft.md")}>
                     <a href={model.hft_catalog.url} target="_blank" rel="noreferrer">hft.md</a>
                     {model.hft_catalog.uncensored_iq != null && <span>IQ {model.hft_catalog.uncensored_iq}</span>}
-                    {model.hft_catalog.reasoning != null && <span>razonamiento {model.hft_catalog.reasoning}</span>}
-                    {model.hft_catalog.answers && <span>respuestas {model.hft_catalog.answers}</span>}
+                    {model.hft_catalog.reasoning != null && <span>{t("razonamiento")} {model.hft_catalog.reasoning}</span>}
+                    {model.hft_catalog.answers && <span>{t("respuestas")} {model.hft_catalog.answers}</span>}
                     {model.hft_catalog.base_model && <span>{model.hft_catalog.base_model}</span>}
                   </div>}
-                  <small>{model.downloads.toLocaleString()} descargas · {model.likes.toLocaleString()} likes · {model.license || "licencia no indicada"}</small>
-                  <div className="hf-community-score" title={`Descargas ${model.community_signals.download_points}/50 · Likes ${model.community_signals.like_points}/40 · Tendencia ${model.community_signals.trending_points}/10`}>
-                    <Star size={12} fill="currentColor" /><strong>{model.community_score}/100</strong><span>Comunidad HF</span>
-                    {model.trending_score > 0 && <small>tendencia {model.trending_score.toLocaleString()}</small>}
+                  <small>{model.downloads.toLocaleString(locale)}{" "}{t("descargas ·")}{" "}{model.likes.toLocaleString(locale)}{" "}{t("likes ·")}{" "}{model.license || t("licencia no indicada")}</small>
+                  <div className="hf-community-score" title={t("Descargas {download_points}/50 · Likes {like_points}/40 · Tendencia {trending_points}/10", { download_points: model.community_signals.download_points, like_points: model.community_signals.like_points, trending_points: model.community_signals.trending_points })}>
+                    <Star size={12} fill="currentColor" /><strong>{model.community_score}/100</strong><span>{t("Comunidad HF")}</span>
+                    {model.trending_score > 0 && <small>{t("tendencia")} {model.trending_score.toLocaleString(locale)}</small>}
                   </div>
                   <div className="modality-flow"><span>{model.input_modalities.join(" + ")}</span><ChevronRight size={11} /><span>{model.output_modalities.join(" + ")}</span></div>
                   <div className="recommendation-specs">
-                    <span><small>Formato</small><strong>{model.recommended_quantization || model.formats.join(" / ") || "Snapshot HF"}</strong></span>
-                    <span><small>{model.recommended_context ? "Contexto" : "Runtime"}</small><strong>{model.recommended_context ? `${Math.round(model.recommended_context / 1024)}K` : "Externo local"}</strong></span>
-                    <span title="Estimación comparativa basada en pesos activos y ancho de banda; no sustituye un benchmark"><small>Arquitectura</small><strong>{model.architecture}{model.active_parameters_b ? ` · ${model.active_parameters_b}B activos` : ""}</strong></span>
-                    <span title="Estimación conservadora; depende del runtime, plantilla, contexto y batching"><small>Rendimiento</small><strong>{model.estimated_tokens_per_second ? `≈${model.estimated_tokens_per_second} tok/s · ${model.recommended_slots} slot(s)` : "Según runtime"}</strong></span>
-                    {model.speculative_methods.length > 0 && <span><small>Especulativa</small><strong>{model.speculative_methods.join(" · ")}</strong></span>}
-                    {model.spark_count > 1 && <span><small>Cluster</small><strong>{model.spark_count} Sparks · {model.memory_bandwidth_gbps} GB/s</strong></span>}
-                    <span><small>Memoria</small><strong>{Math.round(model.estimated_memory_mb / 1024)} GB</strong></span>
+                    <span><small>{t("Formato")}</small><strong>{model.recommended_quantization || model.formats.join(" / ") || t("Snapshot HF")}</strong></span>
+                    <span><small>{model.recommended_context ? t("Contexto") : t("Runtime")}</small><strong>{model.recommended_context ? `${Math.round(model.recommended_context / 1024)}K` : t("Externo local")}</strong></span>
+                    <span title={t("Estimación comparativa basada en pesos activos y ancho de banda; no sustituye un benchmark")}><small>{t("Arquitectura")}</small><strong>{model.architecture}{model.active_parameters_b ? t(" · {count}B activos", { count: model.active_parameters_b }) : ""}</strong></span>
+                    <span title={t("Estimación conservadora; depende del runtime, plantilla, contexto y batching")}><small>{t("Rendimiento")}</small><strong>{model.estimated_tokens_per_second ? `≈${model.estimated_tokens_per_second} tok/s · ${model.recommended_slots} slot(s)` : t("Según runtime")}</strong></span>
+                    {model.speculative_methods.length > 0 && <span><small>{t("Especulativa")}</small><strong>{model.speculative_methods.join(" · ")}</strong></span>}
+                    {model.spark_count > 1 && <span><small>{t("Cluster")}</small><strong>{model.spark_count}{" "}{t("Sparks ·")}{" "}{model.memory_bandwidth_gbps}{" "}{t("GB/s")}</strong></span>}
+                    <span><small>{t("Memoria")}</small><strong>{Math.round(model.estimated_memory_mb / 1024)} GB</strong></span>
                   </div>
-                  <div className="memory-fit"><div><span style={{ width: `${memoryPercent}%` }} /></div><small>{memoryPercent}% del presupuesto · {Math.round(model.memory_budget_mb / 1024)} GB utilizables</small></div>
+                  <div className="memory-fit"><div><span style={{ width: `${memoryPercent}%` }} /></div><small>{memoryPercent}{t("% del presupuesto ·")}{" "}{Math.round(model.memory_budget_mb / 1024)}{" "}{t("GB utilizables")}</small></div>
                   <div className="recommendation-reasons">
-                    {model.artifex_verified && <span className="verified"><ShieldCheck size={12} />Verificado por ARTIFEX</span>}
-                    {model.recommended_mmproj_file && <span className="verified"><ShieldCheck size={12} />mmproj incluido · {model.recommended_mmproj_file}</span>}
+                    {model.artifex_verified && <span className="verified"><ShieldCheck size={12} />{t("Verificado por ARTIFEX")}</span>}
+                    {model.recommended_mmproj_file && <span className="verified"><ShieldCheck size={12} />{t("mmproj incluido ·")}{" "}{model.recommended_mmproj_file}</span>}
                     {model.reasons.slice(0, 2).map((reason) => <span key={reason}><Zap size={11} />{reason}</span>)}
                     {model.warnings.slice(0, 1).map((warning) => <span className="warning" key={warning}><Activity size={11} />{warning}</span>)}
                   </div>
                   <small className="runtime-note">{model.runtime_requirement} · {model.recommended_engines.slice(0, 3).join(" / ")}</small>
                   <div className="catalog-actions">
-                    <button className={`icon-button favorite-button ${favoriteIds.has(model.id) ? "selected" : ""}`} onClick={() => void toggleHfFavorite(model.id, !favoriteIds.has(model.id))} aria-label={favoriteIds.has(model.id) ? `Quitar ${model.id} de favoritos` : `Guardar ${model.id} en favoritos`}><Star size={15} fill={favoriteIds.has(model.id) ? "currentColor" : "none"} /></button>
-                    <button className="button secondary" disabled={inspectingRepo !== null} onClick={() => inspect(model.id, model.recommended_files)}><Search className={inspectingRepo === model.id ? "spin" : ""} size={15} /> {inspectingRepo === model.id ? "Abriendo…" : "Detalles"}</button>
+                    <button className={`icon-button favorite-button ${favoriteIds.has(model.id) ? "selected" : ""}`} onClick={() => void toggleHfFavorite(model.id, !favoriteIds.has(model.id))} aria-label={favoriteIds.has(model.id) ? t("Quitar {id} de favoritos", { id: model.id }) : t("Guardar {id} en favoritos", { id: model.id })}><Star size={15} fill={favoriteIds.has(model.id) ? "currentColor" : "none"} /></button>
+                    <button className="button secondary" disabled={inspectingRepo !== null} onClick={() => inspect(model.id, model.recommended_files)}><Search className={inspectingRepo === model.id ? "spin" : ""} size={15} /> {inspectingRepo === model.id ? t("Abriendo…") : t("Detalles")}</button>
                     {installed
-                      ? <button className="button primary" disabled><CheckCircle2 size={15} /> Instalado</button>
+                      ? <button className="button primary" disabled><CheckCircle2 size={15} />{" "}{t("Instalado")}</button>
                       : model.gguf_search
-                      ? <button className="button primary" onClick={() => searchGgufVariant(model.gguf_search ?? "")} title="Este modelo solo tiene pesos safetensors o PyTorch y en la Spark no hay motor que los ejecute; busca una versión GGUF para llama.cpp"><Search size={15} /> Buscar versión GGUF</button>
-                      : <button className="button primary" disabled={!model.fits || downloadBusy !== null} onClick={() => downloadRecommendation(model)}><Download className={downloadBusy === model.id ? "spin" : ""} size={15} /> {downloadBusy === model.id ? "Preparando…" : model.recommended_files.length ? "Descargar recomendada" : "Descargar snapshot"}</button>}
+                      ? <button className="button primary" onClick={() => searchGgufVariant(model.gguf_search ?? "")} title={t("Este modelo solo tiene pesos safetensors o PyTorch y en la Spark no hay motor que los ejecute; busca una versión GGUF para llama.cpp")}><Search size={15} />{" "}{t("Buscar versión GGUF")}</button>
+                      : <button className="button primary" disabled={!model.fits || downloadBusy !== null} onClick={() => downloadRecommendation(model)}><Download className={downloadBusy === model.id ? "spin" : ""} size={15} /> {downloadBusy === model.id ? t("Preparando…") : model.recommended_files.length ? t("Descargar recomendada") : t("Descargar snapshot")}</button>}
                   </div>
                 </Card>
               );
@@ -4377,17 +4376,17 @@ function ModelsView({
             {!busy && results.length > 0 && <div className="catalog-load-more">
               <button className="button secondary" type="button" disabled={loadingMore || noMoreResults} onClick={() => void loadMoreRecommendations()}>
                 <Search className={loadingMore ? "spin" : ""} size={15} />
-                {loadingMore ? "Analizando más candidatos…" : noMoreResults ? "No hay más resultados" : `Buscar ${sparkLimit} más`}
+                {loadingMore ? t("Analizando más candidatos…") : noMoreResults ? t("No hay más resultados") : t("Buscar {sparkLimit} más", { sparkLimit: sparkLimit })}
               </button>
-              <small>{results.length} analizados{sparkPage > 0 ? ` · ${sparkPage + 1} rondas` : ""} · los nuevos se añaden al final y se pueden reordenar con el selector</small>
+              <small>{t("{count} analizados", { count: results.length })}{sparkPage > 0 ? t(" · {rounds} rondas", { rounds: sparkPage + 1 }) : ""}{" "}{t("· los nuevos se añaden al final y se pueden reordenar con el selector")}</small>
             </div>}
-            {!busy && hasSearched && results.length === 0 && <Empty icon={<Boxes />} title="Sin modelos recomendables" text="Prueba otra búsqueda o amplía los filtros." />}
+            {!busy && hasSearched && results.length === 0 && <Empty icon={<Boxes />} title={t("Sin modelos recomendables")} text={t("Prueba otra búsqueda o amplía los filtros.")} />}
           </> : catalogMode === "all" ? <>
-            {allResults.length > 0 && <SectionHeading eyebrow="HUGGING FACE HUB" title={`${allResults.length} resultados generales`} />}
+            {allResults.length > 0 && <SectionHeading eyebrow={t("HUGGING FACE HUB")} title={t("{count} resultados generales", { count: allResults.length })} />}
             <div className="catalog-grid general-results-grid">
               {allResults.map((model) => {
                 const installed = downloadedRepos.has(model.id.toLowerCase());
-                const recommendationStatus = model.recommendation_status || "No recomendado";
+                const recommendationStatus = model.recommendation_status || t("No recomendado");
                 const statusClass = recommendationStatus.toLowerCase().replace(" ", "-");
                 const sparkScore = model.recommended_score ?? 0;
                 return (
@@ -4397,48 +4396,48 @@ function ModelsView({
                     <div className="score-ring" style={{ "--score": `${sparkScore * 3.6}deg` } as CSSProperties}>
                       <strong>{sparkScore}</strong><small>/100</small>
                     </div>
-                    <span className={`recommendation-status ${statusClass}`}>{recommendationStatus}</span>
+                    <span className={`recommendation-status ${statusClass}`}>{t(recommendationStatus)}</span>
                   </div>
                   <div className="catalog-top">
                     <div className="model-icon hf"><HuggingFaceIcon /></div>
                     <div className="recommendation-tags">
-                      {installed && <span className="installed">instalado</span>}
+                      {installed && <span className="installed">{t("instalado")}</span>}
                       {model.pipeline_tag && <span>{model.pipeline_tag}</span>}
-                      {model.uncensored && <span className="uncensored">sin censura</span>}
+                      {model.uncensored && <span className="uncensored">{t("sin censura")}</span>}
                       {model.gated && <span className="restricted">gated</span>}
                     </div>
                   </div>
                   <div className="catalog-model-name"><strong title={model.id}>{model.id}</strong><ModelTermsButton text={`${model.id} ${model.pipeline_tag ?? ""} ${model.tags.join(" ")} ${model.tasks.join(" ")}`} label={model.id} onOpen={setGlossaryRequest} /></div>
-                  <small>{model.downloads.toLocaleString()} descargas · {model.likes.toLocaleString()} likes</small>
-                  {typeof model.community_score === "number" && <div className="hf-community-score" title={model.community_signals ? `Descargas ${model.community_signals.download_points}/50 · Likes ${model.community_signals.like_points}/40 · Tendencia ${model.community_signals.trending_points}/10` : "Popularidad relativa en Hugging Face"}>
-                    <Star size={12} fill="currentColor" /><strong>{model.community_score}/100</strong><span>Comunidad HF</span>
-                    {(model.trending_score ?? 0) > 0 && <small>tendencia {model.trending_score?.toLocaleString()}</small>}
+                  <small>{model.downloads.toLocaleString(locale)}{" "}{t("descargas ·")}{" "}{model.likes.toLocaleString(locale)} likes</small>
+                  {typeof model.community_score === "number" && <div className="hf-community-score" title={model.community_signals ? t("Descargas {download_points}/50 · Likes {like_points}/40 · Tendencia {trending_points}/10", { download_points: model.community_signals.download_points, like_points: model.community_signals.like_points, trending_points: model.community_signals.trending_points }) : t("Popularidad relativa en Hugging Face")}>
+                    <Star size={12} fill="currentColor" /><strong>{model.community_score}/100</strong><span>{t("Comunidad HF")}</span>
+                    {(model.trending_score ?? 0) > 0 && <small>{t("tendencia")} {model.trending_score?.toLocaleString(locale)}</small>}
                   </div>}
                   <div className="modality-flow"><span>{model.input_modalities.join(" + ")}</span><ChevronRight size={11} /><span>{model.output_modalities.join(" + ")}</span></div>
                   <div className="general-spark-summary">
-                    <span><small>Configuración</small><strong>{model.recommended_quantization || (model.formats ?? []).join(" / ") || "Runtime externo"}</strong></span>
-                    <span><small>Memoria estimada</small><strong>{model.estimated_memory_mb ? `${Math.round(model.estimated_memory_mb / 1024)} GB` : "Por determinar"}</strong></span>
+                    <span><small>{t("Configuración")}</small><strong>{model.recommended_quantization || (model.formats ?? []).join(" / ") || t("Runtime externo")}</strong></span>
+                    <span><small>{t("Memoria estimada")}</small><strong>{model.estimated_memory_mb ? `${Math.round(model.estimated_memory_mb / 1024)} GB` : t("Por determinar")}</strong></span>
                   </div>
                   <div className="general-model-tags">{model.tags.slice(0, 5).map((tag) => <span key={tag}>{tag}</span>)}</div>
                   <div className="catalog-actions">
-                    <button className={`icon-button favorite-button ${favoriteIds.has(model.id) ? "selected" : ""}`} onClick={() => void toggleHfFavorite(model.id, !favoriteIds.has(model.id))} aria-label={favoriteIds.has(model.id) ? `Quitar ${model.id} de favoritos` : `Guardar ${model.id} en favoritos`}><Star size={15} fill={favoriteIds.has(model.id) ? "currentColor" : "none"} /></button>
+                    <button className={`icon-button favorite-button ${favoriteIds.has(model.id) ? "selected" : ""}`} onClick={() => void toggleHfFavorite(model.id, !favoriteIds.has(model.id))} aria-label={favoriteIds.has(model.id) ? t("Quitar {id} de favoritos", { id: model.id }) : t("Guardar {id} en favoritos", { id: model.id })}><Star size={15} fill={favoriteIds.has(model.id) ? "currentColor" : "none"} /></button>
                     <button
                       className="button primary"
                       disabled={inspectingRepo !== null}
                       onClick={() => inspect(model.id, model.recommended_files)}
-                      title="MyDGX seleccionará la cuantización adecuada y todos sus archivos"
-                    ><Download className={inspectingRepo === model.id ? "spin" : ""} size={15} /> {inspectingRepo === model.id ? "Preparando…" : "Descargar recomendada"}</button>
+                      title={t("MyDGX seleccionará la cuantización adecuada y todos sus archivos")}
+                    ><Download className={inspectingRepo === model.id ? "spin" : ""} size={15} /> {inspectingRepo === model.id ? t("Preparando…") : t("Descargar recomendada")}</button>
                   </div>
                 </Card>
               );})}
             </div>
-            {!busy && hasSearched && allResults.length === 0 && <Empty icon={<Globe />} title="Sin resultados" text="Prueba con otro nombre, autor, arquitectura o filtro." />}
+            {!busy && hasSearched && allResults.length === 0 && <Empty icon={<Globe />} title={t("Sin resultados")} text={t("Prueba con otro nombre, autor, arquitectura o filtro.")} />}
           </> : <>
-            {favorites.length > 0 && <SectionHeading eyebrow="PARA MÁS ADELANTE" title={`${favorites.length} modelo(s) favorito(s)`} />}
+            {favorites.length > 0 && <SectionHeading eyebrow={t("PARA MÁS ADELANTE")} title={t("{count} modelo(s) favorito(s)", { count: favorites.length })} />}
             <div className="catalog-grid general-results-grid favorite-model-grid">
               {favorites.map((model) => {
                 const installed = downloadedRepos.has(model.id.toLowerCase());
-                const recommendationStatus = model.recommendation_status || "No recomendado";
+                const recommendationStatus = model.recommendation_status || t("No recomendado");
                 const statusClass = recommendationStatus.toLowerCase().replace(" ", "-");
                 const sparkScore = model.recommended_score ?? 0;
                 return (
@@ -4448,81 +4447,81 @@ function ModelsView({
                     <div className="score-ring" style={{ "--score": `${sparkScore * 3.6}deg` } as CSSProperties}>
                       <strong>{sparkScore}</strong><small>/100</small>
                     </div>
-                    <span className={`recommendation-status ${statusClass}`}>{recommendationStatus}</span>
+                    <span className={`recommendation-status ${statusClass}`}>{t(recommendationStatus)}</span>
                   </div>
                   <div className="catalog-top">
                     <div className="model-icon hf"><HuggingFaceIcon /></div>
                     <div className="recommendation-tags">
-                      {installed && <span className="installed">instalado</span>}
+                      {installed && <span className="installed">{t("instalado")}</span>}
                       {model.pipeline_tag && <span>{model.pipeline_tag}</span>}
-                      {model.uncensored && <span className="uncensored">sin censura</span>}
+                      {model.uncensored && <span className="uncensored">{t("sin censura")}</span>}
                       {model.gated && <span className="restricted">gated</span>}
                     </div>
                   </div>
                   <div className="catalog-model-name"><strong title={model.id}>{model.id}</strong><ModelTermsButton text={`${model.id} ${model.pipeline_tag ?? ""} ${model.tags.join(" ")} ${model.tasks.join(" ")}`} label={model.id} onOpen={setGlossaryRequest} /></div>
-                  <small>{model.downloads.toLocaleString()} descargas · {model.likes.toLocaleString()} likes</small>
-                  {typeof model.community_score === "number" && <div className="hf-community-score"><Star size={12} fill="currentColor" /><strong>{model.community_score}/100</strong><span>Comunidad HF</span></div>}
+                  <small>{model.downloads.toLocaleString(locale)}{" "}{t("descargas ·")}{" "}{model.likes.toLocaleString(locale)} likes</small>
+                  {typeof model.community_score === "number" && <div className="hf-community-score"><Star size={12} fill="currentColor" /><strong>{model.community_score}/100</strong><span>{t("Comunidad HF")}</span></div>}
                   <div className="modality-flow"><span>{model.input_modalities.join(" + ")}</span><ChevronRight size={11} /><span>{model.output_modalities.join(" + ")}</span></div>
                   <div className="general-spark-summary">
-                    <span><small>Configuración</small><strong>{model.recommended_quantization || (model.formats ?? []).join(" / ") || "Runtime externo"}</strong></span>
-                    <span><small>Memoria estimada</small><strong>{model.estimated_memory_mb ? `${Math.round(model.estimated_memory_mb / 1024)} GB` : "Por determinar"}</strong></span>
+                    <span><small>{t("Configuración")}</small><strong>{model.recommended_quantization || (model.formats ?? []).join(" / ") || t("Runtime externo")}</strong></span>
+                    <span><small>{t("Memoria estimada")}</small><strong>{model.estimated_memory_mb ? `${Math.round(model.estimated_memory_mb / 1024)} GB` : t("Por determinar")}</strong></span>
                   </div>
                   <div className="general-model-tags">{model.tags.slice(0, 5).map((tag) => <span key={tag}>{tag}</span>)}</div>
                   <div className="catalog-actions">
-                    <button className="icon-button favorite-button selected" onClick={() => void toggleHfFavorite(model.id, false)} aria-label={`Quitar ${model.id} de favoritos`}><Star size={15} fill="currentColor" /></button>
+                    <button className="icon-button favorite-button selected" onClick={() => void toggleHfFavorite(model.id, false)} aria-label={t("Quitar {id} de favoritos", { id: model.id })}><Star size={15} fill="currentColor" /></button>
                     <button
                       className="button primary"
                       disabled={inspectingRepo !== null}
                       onClick={() => inspect(model.id, model.recommended_files)}
-                      title="MyDGX seleccionará la cuantización adecuada y todos sus archivos"
-                    ><Download className={inspectingRepo === model.id ? "spin" : ""} size={15} /> {inspectingRepo === model.id ? "Preparando…" : "Descargar recomendada"}</button>
+                      title={t("MyDGX seleccionará la cuantización adecuada y todos sus archivos")}
+                    ><Download className={inspectingRepo === model.id ? "spin" : ""} size={15} /> {inspectingRepo === model.id ? t("Preparando…") : t("Descargar recomendada")}</button>
                   </div>
                 </Card>
               );})}
             </div>
-            {!favorites.length && <Empty icon={<Star />} title="Aún no hay favoritos" text="Marca la estrella de cualquier resultado para guardarlo y probarlo más adelante." />}
+            {!favorites.length && <Empty icon={<Star />} title={t("Aún no hay favoritos")} text={t("Marca la estrella de cualquier resultado para guardarlo y probarlo más adelante.")} />}
           </>}
         </>
       )}
 
       {inspection && (
-        <div className="hf-inspector-overlay" role="dialog" aria-modal="true" aria-label={`Detalles de ${inspection.repo_id}`} onMouseDown={(event) => { if (event.target === event.currentTarget) setInspection(null); }}>
+        <div className="hf-inspector-overlay" role="dialog" aria-modal="true" aria-label={t("Detalles de {repo_id}", { repo_id: inspection.repo_id })} onMouseDown={(event) => { if (event.target === event.currentTarget) setInspection(null); }}>
         <Card className="hf-inspector">
-          <SectionHeading eyebrow="HUGGING FACE" title={inspection.repo_id} action={<div className="dialog-heading-actions"><ModelTermsButton text={`${inspection.repo_id} ${(inspection.remote?.formats ?? []).join(" ")} ${(inspection.remote?.tasks ?? []).join(" ")} ${(inspection.remote?.recommended_engines ?? []).join(" ")}`} label={inspection.repo_id} onOpen={setGlossaryRequest} /><button className="icon-button" onClick={() => setInspection(null)} aria-label="Cerrar detalles"><X size={15} /></button></div>} />
+          <SectionHeading eyebrow={t("HUGGING FACE")} title={inspection.repo_id} action={<div className="dialog-heading-actions"><ModelTermsButton text={`${inspection.repo_id} ${(inspection.remote?.formats ?? []).join(" ")} ${(inspection.remote?.tasks ?? []).join(" ")} ${(inspection.remote?.recommended_engines ?? []).join(" ")}`} label={inspection.repo_id} onOpen={setGlossaryRequest} /><button className="icon-button" onClick={() => setInspection(null)} aria-label={t("Cerrar detalles")}><X size={15} /></button></div>} />
           <div className="hf-inspection-summary">
-            <span><small>Revisión</small><strong>{inspection.remote?.revision?.slice(0, 12) || Object.values(inspection.local?.refs || {})[0]?.slice(0, 12) || "—"}</strong></span>
-            <span><small>Licencia</small><strong>{inspection.remote?.license || "No indicada"}</strong></span>
-            <span><small>Acceso</small><strong>{inspection.remote?.gated ? "Gated" : inspection.remote?.private ? "Privado" : "Público"}</strong></span>
-            <span><small>Estado local</small><strong>{inspection.local?.partials.length || inspection.local?.shards.some((item) => !item.complete) ? "Incompleto" : inspection.local ? "Completo" : "No descargado"}</strong></span>
+            <span><small>{t("Revisión")}</small><strong>{inspection.remote?.revision?.slice(0, 12) || Object.values(inspection.local?.refs || {})[0]?.slice(0, 12) || "—"}</strong></span>
+            <span><small>{t("Licencia")}</small><strong>{inspection.remote?.license || t("No indicada")}</strong></span>
+            <span><small>{t("Acceso")}</small><strong>{inspection.remote?.gated ? t("Gated") : inspection.remote?.private ? t("Privado") : t("Público")}</strong></span>
+            <span><small>{t("Estado local")}</small><strong>{inspection.local?.partials.length || inspection.local?.shards.some((item) => !item.complete) ? t("Incompleto") : inspection.local ? t("Completo") : t("No descargado")}</strong></span>
           </div>
           {inspection.remote && <div className="hf-capability-strip">
             <span>{inspection.remote.input_modalities.join(" + ")} → {inspection.remote.output_modalities.join(" + ")}</span>
-            <span>{inspection.remote.formats.join(" · ") || "formato no identificado"}</span>
-            <span>{inspection.remote.recommended_engines.join(" · ") || "runtime por determinar"}</span>
+            <span>{inspection.remote.formats.join(" · ") || t("formato no identificado")}</span>
+            <span>{inspection.remote.recommended_engines.join(" · ") || t("runtime por determinar")}</span>
           </div>}
-          {inspection.remote_error && <div className="profile-warning"><ShieldCheck size={15} />No se pudo consultar la ficha remota: {inspection.remote_error}</div>}
+          {inspection.remote_error && <div className="profile-warning"><ShieldCheck size={15} />{t("No se pudo consultar la ficha remota:")}{" "}{inspection.remote_error}</div>}
           {inspection.remote && !inspection.remote.download_supported && <div className="profile-warning">
             <TriangleAlert size={15} />{inspection.remote.download_block_reason}
           </div>}
           {inspection.local && <div className="hf-local-detail">
-            <small>Cuantizaciones: {inspection.local.quantizations.join(", ") || "no detectadas"} · Snapshots: {inspection.local.snapshots.length} · Parciales: {inspection.local.partials.length}</small>
+            <small>{t("Cuantizaciones:")}{" "}{inspection.local.quantizations.join(", ") || t("no detectadas")}{" "}{t("· Snapshots:")}{" "}{inspection.local.snapshots.length}{" "}{t("· Parciales:")}{" "}{inspection.local.partials.length}</small>
             {inspection.local.shards.map((shard) => <span className={`badge ${shard.complete ? "completed" : "failed"}`} key={`${shard.name}-${shard.expected}`}>{shard.name}: {shard.present.length}/{shard.expected}</span>)}
           </div>}
           {inspection.remote && !inspection.remote.gated && <div className="hf-download-guidance">
             <Download size={15} />
-            <span><strong>Esta es la opción que MyDGX recomienda para tu Spark</strong><small>Ya está seleccionada completa. Si está dividida en varios archivos, se descargarán juntos. No necesitas elegir entre S, M o L salvo que quieras ajustar manualmente calidad y tamaño.</small></span>
+            <span><strong>{t("Esta es la opción que MyDGX recomienda para tu Spark")}</strong><small>{t("Ya está seleccionada completa. Si está dividida en varios archivos, se descargarán juntos. No necesitas elegir entre S, M o L salvo que quieras ajustar manualmente calidad y tamaño.")}</small></span>
           </div>}
           {inspection.remote?.gated && <div className="profile-warning">
-            <ShieldCheck size={15} />Este repositorio requiere aceptar sus condiciones en Hugging Face y configurar acceso antes de descargar.
+            <ShieldCheck size={15} />{t("Este repositorio requiere aceptar sus condiciones en Hugging Face y configurar acceso antes de descargar.")}
           </div>}
           <div className="hf-model-description">
             <div>
-              <strong>Descripción del modelo</strong>
+              <strong>{t("Descripción del modelo")}</strong>
               <small>
                 {inspection.description_source === "generated_public_metadata"
-                  ? "Generada con datos públicos y conservada en la base de datos"
-                  : "Ficha de Hugging Face conservada en la base de datos"}
-                {inspection.description_revision ? ` · revisión ${inspection.description_revision.slice(0, 12)}` : ""}
+                  ? t("Generada con datos públicos y conservada en la base de datos")
+                  : t("Ficha de Hugging Face conservada en la base de datos")}
+                {inspection.description_revision ? t(" · revisión {slice}", { slice: inspection.description_revision.slice(0, 12) }) : ""}
               </small>
             </div>
             {inspection.description
@@ -4530,7 +4529,7 @@ function ModelsView({
                   content={inspection.description}
                   assetBaseUrl={`https://huggingface.co/${inspection.repo_id}/resolve/${inspection.description_revision || "main"}/`}
                 />
-              : <p>Este repositorio no proporciona una descripción.</p>}
+              : <p>{t("Este repositorio no proporciona una descripción.")}</p>}
           </div>
           <div className="hf-file-groups">
             {visibleInspectionGroups.map((group) => {
@@ -4541,7 +4540,7 @@ function ModelsView({
                 <summary>
                   {group.kind !== "auxiliary"
                     ? <input
-                        aria-label={`Seleccionar ${group.label}`}
+                        aria-label={t("Seleccionar {label}", { label: group.label })}
                         checked={selected}
                         disabled={!pending.length || inspection.remote?.download_supported === false}
                         name={group.kind === "weights" ? "hf-quantization" : undefined}
@@ -4551,40 +4550,40 @@ function ModelsView({
                       />
                     : <Info size={15} />}
                   <span>
-                    <strong>{group.label}{selected && group.kind === "weights" && <em className="hf-recommended-label">Recomendado para este Spark</em>}</strong>
+                    <strong>{group.label}{selected && group.kind === "weights" && <em className="hf-recommended-label">{t("Recomendado para este Spark")}</em>}</strong>
                     {group.kind !== "auxiliary" && <small className="hf-quantization-hint">{quantizationHint(group.label)}</small>}
                     <small>
-                      {group.sizeKnown ? bytes(group.size) : "Tamaño desconocido"} · {group.files.length} {group.files.length === 1 ? "archivo" : "archivos"}
-                      {downloadedCount ? ` · ${downloadedCount} ya descargado${downloadedCount === 1 ? "" : "s"}` : ""}
-                      {selected ? ` · seleccionado automáticamente${group.files.length > 1 ? " · se descargarán juntos" : ""}` : ""}
+                      {group.sizeKnown ? bytes(group.size) : t("Tamaño desconocido")} · {group.files.length} {group.files.length === 1 ? t("archivo") : t("archivos")}
+                      {downloadedCount ? t(" · {downloadedCount} ya descargado{value}", { downloadedCount: downloadedCount, value: downloadedCount === 1 ? "" : "s" }) : ""}
+                      {selected ? t(" · seleccionado automáticamente{value}", { value: group.files.length > 1 ? t(" · se descargarán juntos") : "" }) : ""}
                     </small>
                   </span>
                   <ChevronRight className="hf-group-chevron" size={16} />
                 </summary>
                 <div className="hf-group-files">
                   {group.files.map((file) => <div className={file.downloaded ? "downloaded" : ""} key={file.name}>
-                    <span><strong>{file.name}</strong><small>{bytes(file.size)}{file.lfs_sha256 ? ` · SHA256 ${file.lfs_sha256.slice(0, 12)}…` : ""}{file.downloaded ? " · Ya descargado" : ""}</small></span>
+                    <span><strong>{file.name}</strong><small>{bytes(file.size)}{file.lfs_sha256 ? ` · SHA256 ${file.lfs_sha256.slice(0, 12)}…` : ""}{file.downloaded ? t(" · Ya descargado") : ""}</small></span>
                     <ModelTermsButton text={`${file.name} ${file.quantization ?? ""}`} label={file.name} onOpen={setGlossaryRequest} />
                   </div>)}
                 </div>
               </details>;
             })}
             {hiddenInspectionGroupCount > 0 && <button className="button secondary hf-show-alternatives" type="button" onClick={() => setShowAllFileGroups(true)}>
-              Mostrar otras {hiddenInspectionGroupCount} cuantizaciones y archivos
+              {t("Mostrar otras")}{" "}{hiddenInspectionGroupCount}{" "}{t("cuantizaciones y archivos")}
             </button>}
             {showAllFileGroups && primaryInspectionGroups.length > 0 && <button className="button secondary hf-show-alternatives" type="button" onClick={() => setShowAllFileGroups(false)}>
-              Ocultar alternativas
+              {t("Ocultar alternativas")}
             </button>}
           </div>
           <div className="hf-inspector-actions">
             <small>
-              {selectedFiles.length} archivo(s) seleccionado(s)
+              {selectedFiles.length}{" "}{t("archivo(s) seleccionado(s)")}
               {selectedFiles.length > 0 && (
                 <> · {selectedSizeKnown
                   ? selectedResidentSize < selectedDownloadSize
-                    ? `${bytes(selectedDownloadSize)} de descarga · ~${bytes(selectedResidentSize)} residentes de ${bytes(inspection.download_limit_bytes)}`
-                    : `${bytes(selectedDownloadSize)} de ${bytes(inspection.download_limit_bytes)} de memoria total`
-                  : "tamaño desconocido"}</>
+                    ? t("{selectedDownloadSize} de descarga · ~{selectedResidentSize} residentes de {download_limit_bytes}", { selectedDownloadSize: bytes(selectedDownloadSize), selectedResidentSize: bytes(selectedResidentSize), download_limit_bytes: bytes(inspection.download_limit_bytes) })
+                    : t("{selectedDownloadSize} de {download_limit_bytes} de memoria total", { selectedDownloadSize: bytes(selectedDownloadSize), download_limit_bytes: bytes(inspection.download_limit_bytes) })
+                  : t("tamaño desconocido")}</>
               )}
             </small>
             <button
@@ -4593,10 +4592,10 @@ function ModelsView({
               title={inspection.remote?.download_supported === false
                 ? inspection.remote.download_block_reason
                 : selectedDownloadTooLarge
-                ? "La selección supera la memoria total del sistema"
-                : !selectedSizeKnown && selectedFiles.length ? "No se puede comprobar que la selección cabe" : undefined}
+                ? t("La selección supera la memoria total del sistema")
+                : !selectedSizeKnown && selectedFiles.length ? t("No se puede comprobar que la selección cabe") : undefined}
               onClick={downloadSelected}
-            ><Download className={downloadBusy === inspection.repo_id ? "spin" : ""} size={14} /> {downloadBusy === inspection.repo_id ? "Preparando…" : "Descargar archivos seleccionados"}</button>
+            ><Download className={downloadBusy === inspection.repo_id ? "spin" : ""} size={14} /> {downloadBusy === inspection.repo_id ? t("Preparando…") : t("Descargar archivos seleccionados")}</button>
           </div>
         </Card>
         </div>
@@ -4609,18 +4608,18 @@ function ModelsView({
 
       {displayedJobs.length > 0 && (
         <ActivitySection
-          eyebrow="TAREAS"
-          title="Actividad reciente"
+          eyebrow={t("TAREAS")}
+          title={t("Actividad reciente")}
           total={Math.min(displayedJobs.length, 8)}
           active={displayedJobs.slice(0, 8).filter(({ job }) => activeJobStatuses.has(job.status)).length}
         >
           <Card className="jobs">
             {displayedJobs.slice(0, 8).map(({ job, duplicateCount }) => (
               <div className="job-row" key={job.id}>
-                <div><strong>{job.target}</strong><small>{job.message}{duplicateCount > 1 ? ` · ${duplicateCount} solicitudes duplicadas agrupadas` : ""}</small></div>
+                <div><strong>{job.target}</strong><small>{job.message}{duplicateCount > 1 ? t(" · {count} solicitudes duplicadas agrupadas", { count: duplicateCount }) : ""}</small></div>
                 <div className="job-progress"><span style={{ width: `${job.progress}%` }} /></div>
                 <span className={`badge ${job.status}`}>{job.status}</span>
-                {["queued", "running"].includes(job.status) && ["ollama.pull", "ollama.update", "huggingface.files.download", "huggingface.integrity"].includes(job.kind) && <button className="icon-button danger" onClick={() => cancelJob(job.id)} aria-label="Cancelar trabajo"><X size={14} /></button>}
+                {["queued", "running"].includes(job.status) && ["ollama.pull", "ollama.update", "huggingface.files.download", "huggingface.integrity"].includes(job.kind) && <button className="icon-button danger" onClick={() => cancelJob(job.id)} aria-label={t("Cancelar trabajo")}><X size={14} /></button>}
               </div>
             ))}
           </Card>
@@ -4640,14 +4639,14 @@ function PortField({ auto, port, onAuto, onPort }: {
   onAuto: (auto: boolean) => void;
   onPort: (port: number) => void;
 }) {
-  return <label>Puerto
+  return <label>{t("Puerto")}
     <div className="paired-inputs">
-      <select value={auto ? "auto" : "manual"} onChange={(event) => onAuto(event.target.value === "auto")} aria-label="Modo del puerto">
-        <option value="auto">Automático</option>
-        <option value="manual">Manual</option>
+      <select value={auto ? "auto" : "manual"} onChange={(event) => onAuto(event.target.value === "auto")} aria-label={t("Modo del puerto")}>
+        <option value="auto">{t("Automático")}</option>
+        <option value="manual">{t("Manual")}</option>
       </select>
       {auto
-        ? <input value={port >= 1024 ? String(port) : "Al guardar"} readOnly title="MyDGX elige un puerto libre que no usa ningún otro perfil, app ni servicio, y lo mantiene mientras siga libre" />
+        ? <input value={port >= 1024 ? String(port) : t("Al guardar")} readOnly title={t("MyDGX elige un puerto libre que no usa ningún otro perfil, app ni servicio, y lo mantiene mientras siga libre")} />
         : <input type="number" min={1024} max={65535} value={port || ""} onChange={(event) => onPort(Number(event.target.value))} required />}
     </div>
   </label>;
@@ -4820,7 +4819,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
     const source = target.engine === "ollama" ? "ollama" : "huggingface";
     const modelId = source === "ollama" ? target.model_ref.trim() : target.model_repo.trim();
     if (!modelId || (source === "huggingface" && !modelId.includes("/"))) {
-      if (!silent) notify(source === "ollama" ? "Indica el modelo de Ollama" : "Indica el repositorio Hugging Face como organización/modelo", true);
+      if (!silent) notify(source === "ollama" ? t("Indica el modelo de Ollama") : t("Indica el repositorio Hugging Face como organización/modelo"), true);
       return;
     }
     setLoadingDefaults(index === null ? "primary" : form.additional_models[index].id);
@@ -4842,7 +4841,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       setForm((current) => index === null
         ? apply(current)
         : { ...current, additional_models: current.additional_models.map((model, itemIndex) => itemIndex === index ? apply(model) : model) });
-      notify(`Parámetros de ${modelId} aplicados · contexto ${Math.round((fields.context_size ?? 0) / 1024)}K · ~${(preview / 1024).toFixed(1)} GB en memoria`);
+      notify(t("Parámetros de {modelId} aplicados · contexto {round}K · ~{toFixed} GB en memoria", { modelId: modelId, round: Math.round((fields.context_size ?? 0) / 1024), toFixed: (preview / 1024).toFixed(1) }));
     } catch (error) {
       if (!silent) notify((error as Error).message, true);
     } finally {
@@ -4860,8 +4859,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   });
 
   const defaultsButton = (index: number | null, id: string) => (
-    <button type="button" className="button secondary" onClick={() => void applyModelDefaults(index)} disabled={loadingDefaults !== null} title="Contexto, muestreo, caché KV y mmproj que usaría Encender para este modelo descargado">
-      <Sparkles size={15} /> {loadingDefaults === id ? "Leyendo modelo…" : "Parámetros del modelo"}
+    <button type="button" className="button secondary" onClick={() => void applyModelDefaults(index)} disabled={loadingDefaults !== null} title={t("Contexto, muestreo, caché KV y mmproj que usaría Encender para este modelo descargado")}>
+      <Sparkles size={15} /> {loadingDefaults === id ? t("Leyendo modelo…") : t("Parámetros del modelo")}
     </button>
   );
 
@@ -4958,7 +4957,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   async function save(event: FormEvent) {
     event.preventDefault();
     if (duplicateAliases.length) {
-      notify(`Alias OpenAI duplicados: ${duplicateAliases.join(", ")}`, true);
+      notify(t("Alias OpenAI duplicados: {join}", { join: duplicateAliases.join(", ") }), true);
       return;
     }
     try {
@@ -4968,7 +4967,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
           method: "PUT",
           body: JSON.stringify({ alias: appWeb.alias.trim(), port: appWeb.port.trim() ? Number(appWeb.port) : null }),
         });
-        if (result.restart_required) appRestartNotice = ` · reinicia ${form.app} para que use el puerto nuevo`;
+        if (result.restart_required) appRestartNotice = t(" · reinicia {app} para que use el puerto nuevo", { app: form.app });
       }
       setAppWebDraft(null);
       await api(editing ? `/api/profiles/${editing}` : "/api/profiles", {
@@ -4981,7 +4980,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
           jinja: Boolean(form.jinja),
         }),
       });
-      notify(`${editing ? "Perfil actualizado" : "Perfil creado"}${appRestartNotice}`);
+      notify(`${editing ? t("Perfil actualizado") : t("Perfil creado")}${appRestartNotice}`);
       setShowForm(false);
       setEditing(null);
       load();
@@ -4993,7 +4992,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   async function recommend() {
     const repository = form.model_repo || form.model_ref;
     if (!repository.includes("/")) {
-      notify("Introduce un repositorio Hugging Face como organización/modelo", true);
+      notify(t("Introduce un repositorio Hugging Face como organización/modelo"), true);
       return;
     }
     setAnalyzing(true);
@@ -5038,7 +5037,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
         flash_attention: Number(result.parameters.flash_attention),
       }));
       setRecommendation(result);
-      notify("Recomendaciones aplicadas; revísalas antes de guardar");
+      notify(t("Recomendaciones aplicadas; revísalas antes de guardar"));
     } catch (error) {
       notify((error as Error).message, true);
     } finally {
@@ -5059,13 +5058,13 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   async function duplicate(profile: Profile) {
     const suggestion = `${profile.name} copia`.replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
     const name = window.prompt(
-      `Nombre del nuevo perfil (copia de ${profile.name}).\nLetras, números, espacios y · . _ - ; de 2 a 80 caracteres.`,
+      t("Nombre del nuevo perfil (copia de {name}).\nLetras, números, espacios y · . _ - ; de 2 a 80 caracteres.", { name: profile.name }),
       suggestion,
     )?.trim();
     if (!name) return;
     try {
       await api(`/api/profiles/${encodeURIComponent(profile.id)}/duplicate`, { method: "POST", body: JSON.stringify({ name }) });
-      notify(`Perfil «${name}» creado como copia de ${profile.name}; sus modelos llama.cpp usan puertos nuevos`);
+      notify(t("Perfil «{name}» creado como copia de {name2}; sus modelos llama.cpp usan puertos nuevos", { name: name, name2: profile.name }));
       load();
     } catch (error) {
       notify((error as Error).message, true);
@@ -5099,13 +5098,13 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       }>(`/api/profiles/${profile.id}/runtime-plan`);
       if (!plan.fits) {
         const conflict = plan.alias_conflicts.length
-          ? `Alias incompatibles: ${plan.alias_conflicts.join(", ")}`
+          ? t("Alias incompatibles: {join}", { join: plan.alias_conflicts.join(", ") })
           : plan.port_conflicts.length
-            ? `Puertos incompatibles: ${plan.port_conflicts.join(", ")}`
+            ? t("Puertos incompatibles: {join}", { join: plan.port_conflicts.join(", ") })
             : plan.profile_ids.filter((id) => !MANAGED_PROFILE_IDS.has(id)).length > 2
-              ? "Ya hay dos perfiles cargados"
-              : `Se necesitan ${(plan.incremental_mb / 1024).toFixed(1)} GB adicionales y hay ${(plan.available_mb / 1024).toFixed(1)} GB libres`;
-        notify(`No se puede arrancar: ${conflict}`, true);
+              ? t("Ya hay dos perfiles cargados")
+              : t("Se necesitan {toFixed} GB adicionales y hay {toFixed2} GB libres", { toFixed: (plan.incremental_mb / 1024).toFixed(1), toFixed2: (plan.available_mb / 1024).toFixed(1) });
+        notify(t("No se puede arrancar: {conflict}", { conflict: conflict }), true);
         return;
       }
       const result = await api<{ job_id: string }>(`/api/profiles/${profile.id}/start`, {
@@ -5114,10 +5113,10 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       setRequestedStarts((current) => ({ ...current, [profile.id]: result.job_id }));
       notify(
         missing
-          ? `Preparando ${profile.name}: se descargarán ${missing} modelo(s) y después arrancará`
+          ? t("Preparando {name}: se descargarán {missing} modelo(s) y después arrancará", { name: profile.name, missing: missing })
           : plan.port_assignments.length
-            ? `Preparando ${profile.name}: ${plan.port_assignments.map((item) => `${item.model} :${item.from}→:${item.to}`).join(" · ")}`
-            : `Preparando ${profile.name}: ${plan.shared_models} modelo(s) compartido(s), ${(plan.incremental_mb / 1024).toFixed(1)} GB nuevos`,
+            ? t("Preparando {name}: {assignments}", { name: profile.name, assignments: plan.port_assignments.map((item) => `${item.model} :${item.from}→:${item.to}`).join(" · ") })
+            : t("Preparando {name}: {shared_models} modelo(s) compartido(s), {toFixed} GB nuevos", { name: profile.name, shared_models: plan.shared_models, toFixed: (plan.incremental_mb / 1024).toFixed(1) }),
       );
       load();
     } catch (error) {
@@ -5132,7 +5131,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
           method: "POST",
           body: JSON.stringify({ name: model.model_ref }),
         });
-        notify(`Descarga de ${model.name} añadida a la cola`);
+        notify(t("Descarga de {name} añadida a la cola", { name: model.name }));
         load();
       } catch (error) {
         notify((error as Error).message, true);
@@ -5141,15 +5140,15 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
     }
     await action(
       `/api/profiles/${profile.id}/models/${model.id}/download`,
-      `Descarga de ${model.name} añadida a la cola`,
+      t("Descarga de {name} añadida a la cola", { name: model.name }),
     );
   }
 
   async function remove(profile: Profile) {
-    if (!window.confirm(`¿Eliminar el perfil ${profile.name}?`)) return;
+    if (!window.confirm(t("¿Eliminar el perfil {name}?", { name: profile.name }))) return;
     try {
       await api(`/api/profiles/${profile.id}?confirm=${encodeURIComponent(profile.name)}`, { method: "DELETE" });
-      notify("Perfil eliminado");
+      notify(t("Perfil eliminado"));
       load();
     } catch (error) {
       notify((error as Error).message, true);
@@ -5211,15 +5210,15 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
     const noFitReason = running
       ? ""
       : limitReached
-        ? "Ya hay dos perfiles encendidos; detén uno para arrancar este"
+        ? t("Ya hay dos perfiles encendidos; detén uno para arrancar este")
         : !profile.memory_plan.fits
-          ? "El conjunto supera la memoria segura del equipo o repite puertos"
+          ? t("El conjunto supera la memoria segura del equipo o repite puertos")
           : runtimePlan && !runtimePlan.fits
             ? runtimePlan.alias_conflicts.length
-              ? `Alias en uso por otro perfil encendido: ${runtimePlan.alias_conflicts.join(", ")}`
+              ? t("Alias en uso por otro perfil encendido: {join}", { join: runtimePlan.alias_conflicts.join(", ") })
               : runtimePlan.port_conflicts.length
-                ? `Puertos en uso por otro perfil encendido: ${runtimePlan.port_conflicts.join(", ")}`
-                : `Necesita ${(runtimePlan.incremental_mb / 1024).toFixed(1)} GB más y hay ${(Math.max(0, runtimePlan.available_mb - runtimePlan.reserve_mb) / 1024).toFixed(1)} GB libres`
+                ? t("Puertos en uso por otro perfil encendido: {join}", { join: runtimePlan.port_conflicts.join(", ") })
+                : t("Necesita {toFixed} GB más y hay {toFixed2} GB libres", { toFixed: (runtimePlan.incremental_mb / 1024).toFixed(1), toFixed2: (Math.max(0, runtimePlan.available_mb - runtimePlan.reserve_mb) / 1024).toFixed(1) })
             : "";
     const startJob = jobs.find((job) => (
       job.kind === "profile.prepare-start"
@@ -5249,28 +5248,28 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
           <div><strong>{profile.name}</strong><small>{profile.engine} · {profile.task} · {profile.model_repo || profile.model_ref}</small></div>
           <div className="profile-badges">
             {profile.source.startsWith("ARTIFEX") ? <span className="badge">ARTIFEX</span> : null}
-            {profile.read_only ? <span className="badge" title={profile.id === QUICK_PROFILE_ID ? "Modelos encendidos desde Modelos; no se restaura al reiniciar" : "Modelos marcados como Default en Modelos; arranca siempre con MyDGX"}>Solo lectura</span> : null}
-            {profile.active ? <span className="badge live">Predeterminado</span> : null}
-            {running ? <span className="badge running">Cargado</span> : null}
+            {profile.read_only ? <span className="badge" title={profile.id === QUICK_PROFILE_ID ? t("Modelos encendidos desde Modelos; no se restaura al reiniciar") : t("Modelos marcados como Default en Modelos; arranca siempre con MyDGX")}>{t("Solo lectura")}</span> : null}
+            {profile.active ? <span className="badge live">{t("Predeterminado")}</span> : null}
+            {running ? <span className="badge running">{t("Cargado")}</span> : null}
           </div>
           <button
             className={`profile-favorite ${profile.favorite ? "selected" : ""}`}
             onClick={() => void toggleFavorite(profile)}
-            title={profile.favorite ? "Quitar de favoritos" : "Marcar como favorito"}
-            aria-label={profile.favorite ? `Quitar ${profile.name} de favoritos` : `Marcar ${profile.name} como favorito`}
+            title={profile.favorite ? t("Quitar de favoritos") : t("Marcar como favorito")}
+            aria-label={profile.favorite ? t("Quitar {name} de favoritos", { name: profile.name }) : t("Marcar {name} como favorito", { name: profile.name })}
           >
             <Star size={17} fill={profile.favorite ? "currentColor" : "none"} />
           </button>
         </div>
         <div className="profile-specs">
-          <span><small>Modelos</small><strong>{profile.models.length}</strong></span>
-          <span><small>Puertos</small><strong>{profile.models.map((item) => item.port).join(", ")}</strong></span>
-          <span><small>Memoria estimada</small><strong>{(profile.memory_plan.required_mb / 1024).toFixed(1)} GB</strong></span>
-          <span><small>Capacidad segura</small><strong>{(profile.memory_plan.capacity_mb / 1024).toFixed(1)} GB</strong></span>
+          <span><small>{t("Modelos")}</small><strong>{profile.models.length}</strong></span>
+          <span><small>{t("Puertos")}</small><strong>{profile.models.map((item) => item.port).join(", ")}</strong></span>
+          <span><small>{t("Memoria estimada")}</small><strong>{(profile.memory_plan.required_mb / 1024).toFixed(1)} GB</strong></span>
+          <span><small>{t("Capacidad segura")}</small><strong>{(profile.memory_plan.capacity_mb / 1024).toFixed(1)} GB</strong></span>
         </div>
         <div className={`profile-capacity ${profile.memory_plan.fits ? "fits" : "over"}`}>
           <span style={{ width: `${Math.min(100, profile.memory_plan.required_mb / Math.max(1, profile.memory_plan.capacity_mb) * 100)}%` }} />
-          <small>{profile.memory_plan.fits ? "El conjunto cabe en la memoria segura" : "El conjunto supera la memoria segura o repite puertos"}</small>
+          <small>{profile.memory_plan.fits ? t("El conjunto cabe en la memoria segura") : t("El conjunto supera la memoria segura o repite puertos")}</small>
         </div>
         <div className="profile-model-roster">
           {profile.models.map((model) => {
@@ -5283,8 +5282,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             return <div key={model.id}>
               <span className={`status-dot ${modelRunning ? "ok" : model.downloaded ? "online" : "warn"}`} />
               <strong>{model.name}</strong>
-              <small>{model.engine} · {model.task} · :{model.port}{["chat", "vision", "embeddings"].includes(model.task) ? ` · ${(effectiveContext / 1024).toLocaleString()}K ctx${effectiveContext !== model.context_size ? " (ajustado)" : ""}` : ""}</small>
-              {!model.downloaded && ((model.engine === "llama.cpp" && model.model_repo) || model.engine === "ollama") && <button className="profile-model-download" onClick={() => void downloadMissingModel(profile, model)}><Download size={13} /> Descargar modelo</button>}
+              <small>{model.engine} · {model.task} · :{model.port}{["chat", "vision", "embeddings"].includes(model.task) ? ` · ${(effectiveContext / 1024).toLocaleString(locale)}K ctx${effectiveContext !== model.context_size ? ` ${t("(ajustado)")}` : ""}` : ""}</small>
+              {!model.downloaded && ((model.engine === "llama.cpp" && model.model_repo) || model.engine === "ollama") && <button className="profile-model-download" onClick={() => void downloadMissingModel(profile, model)}><Download size={13} />{" "}{t("Descargar modelo")}</button>}
             </div>;
           })}
           {profile.app ? (() => {
@@ -5292,22 +5291,22 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             const available = data.apps.available.includes(profile.app);
             const dot = !available || appState?.state === "error" ? "warn" : appState?.state === "running" ? "ok" : "online";
             const label = !available
-              ? `No encontrada en ${data.apps.root}`
-              : appState ? profileAppStateLabels[appState.state] : "Se arranca al cargar el perfil";
+              ? t("No encontrada en {root}", { root: data.apps.root })
+              : appState ? profileAppStateLabels[appState.state] : t("Se arranca al cargar el perfil");
             return <div className="profile-app-row">
               <span className={`status-dot ${dot}`} />
               <strong><Rocket size={13} /> {data.apps.web?.[profile.app]?.alias ?? profile.app}</strong>
-              <small title={appState?.message}>App{data.apps.web?.[profile.app] ? ` web :${data.apps.web[profile.app].port}` : ""} · {label}{appState?.message ? ` · ${appState.message}` : ""}</small>
+              <small title={appState?.message}>{t("App")}{data.apps.web?.[profile.app] ? ` ${t("web")} :${data.apps.web[profile.app].port}` : ""} · {label}{appState?.message ? ` · ${appState.message}` : ""}</small>
               {available && <span className="profile-app-actions">
-                {appState?.state === "running" && data.apps.web?.[profile.app] && <a className="profile-app-open" href={`http://${window.location.hostname || "127.0.0.1"}:${data.apps.web[profile.app].port}/`} target="_blank" rel="noreferrer"><ExternalLink size={13} /> Abrir</a>}
-                <button onClick={() => void appAction(profile.app, "status")}><Activity size={13} /> Estado</button>
-                {running && <button onClick={() => void appAction(profile.app, "restart")}><RefreshCw size={13} /> Reiniciar</button>}
+                {appState?.state === "running" && data.apps.web?.[profile.app] && <a className="profile-app-open" href={`http://${window.location.hostname || "127.0.0.1"}:${data.apps.web[profile.app].port}/`} target="_blank" rel="noreferrer"><ExternalLink size={13} />{" "}{t("Abrir")}</a>}
+                <button onClick={() => void appAction(profile.app, "status")}><Activity size={13} />{" "}{t("Estado")}</button>
+                {running && <button onClick={() => void appAction(profile.app, "restart")}><RefreshCw size={13} />{" "}{t("Reiniciar")}</button>}
               </span>}
             </div>;
           })() : null}
         </div>
         <div className="profile-actions">
-          {!profile.active && !profile.read_only && <button title="Seleccionarlo sin arrancarlo" onClick={() => action(`/api/profiles/${profile.id}/activate`, `${profile.name} será el perfil predeterminado al arrancar`)}><ShieldCheck size={14} /> Solo predeterminado</button>}
+          {!profile.active && !profile.read_only && <button title={t("Seleccionarlo sin arrancarlo")} onClick={() => action(`/api/profiles/${profile.id}/activate`, t("{name} será el perfil predeterminado al arrancar", { name: profile.name }))}><ShieldCheck size={14} />{" "}{t("Solo predeterminado")}</button>}
           <button
             className={noFitReason && !preparing ? "no-fit" : undefined}
             title={preparing ? undefined : noFitReason || undefined}
@@ -5315,37 +5314,37 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             onClick={() => {
               if (!running) {
                 void selectAndStart(profile);
-              } else if (window.confirm(`¿Detener ${profile.name}? Sus modelos dejarán de responder en el chat y el gateway.`)) {
-                void action(`/api/profiles/${profile.id}/stop`, "Perfil detenido");
+              } else if (window.confirm(t("¿Detener {name}? Sus modelos dejarán de responder en el chat y el gateway.", { name: profile.name }))) {
+                void action(`/api/profiles/${profile.id}/stop`, t("Perfil detenido"));
               }
             }}
           >
             {running ? <Square size={13} /> : <Play size={14} />}
             {running
-              ? "Detener"
+              ? t("Detener")
               : preparing
-                ? `Preparando ${Math.round(startJob?.progress ?? 0)}%`
+                ? t("Preparando {round}%", { round: Math.round(startJob?.progress ?? 0) })
                 : anyPreparing
-                  ? "Otro perfil en preparación"
+                  ? t("Otro perfil en preparación")
                 : noFitReason
-                  ? "No cabe ahora"
+                  ? t("No cabe ahora")
                 : missingModels
-                  ? `Descargar ${missingModels} y arrancar`
-                  : profile.read_only ? "Arrancar" : "Seleccionar y arrancar"}
+                  ? t("Descargar {missingModels} y arrancar", { missingModels: missingModels })
+                  : profile.read_only ? t("Arrancar") : t("Seleccionar y arrancar")}
           </button>
           {startJob && ["queued", "running"].includes(startJob.status) && <button
             className="danger"
             onClick={() => {
-              if (window.confirm(`¿Cancelar la preparación de ${profile.name}? Lo ya descargado se queda en la caché.`)) {
-                void action(`/api/jobs/${startJob.id}/cancel`, "Cancelación solicitada");
+              if (window.confirm(t("¿Cancelar la preparación de {name}? Lo ya descargado se queda en la caché.", { name: profile.name }))) {
+                void action(`/api/jobs/${startJob.id}/cancel`, t("Cancelación solicitada"));
               }
             }}
-          ><X size={14} /> Cancelar</button>}
-          <button title="Crear un perfil editable con la misma configuración y otro nombre" onClick={() => void duplicate(profile)}><Copy size={14} /> Duplicar</button>
+          ><X size={14} />{" "}{t("Cancelar")}</button>}
+          <button title={t("Crear un perfil editable con la misma configuración y otro nombre")} onClick={() => void duplicate(profile)}><Copy size={14} />{" "}{t("Duplicar")}</button>
           {profile.read_only
-            ? <small className="profile-readonly-hint">Se gestiona desde Modelos</small>
+            ? <small className="profile-readonly-hint">{t("Se gestiona desde Modelos")}</small>
             : <>
-              <button onClick={() => editProfile(profile)}><Pencil size={14} /> Editar</button>
+              <button onClick={() => editProfile(profile)}><Pencil size={14} />{" "}{t("Editar")}</button>
               <button className="danger" onClick={() => remove(profile)}><Trash2 size={14} /></button>
             </>}
         </div>
@@ -5356,169 +5355,169 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   return (
     <div className="view-stack">
       <SectionHeading
-        eyebrow="CONFIGURACIONES DE INFERENCIA"
-        title="Perfiles"
-        action={<button className="button primary" onClick={newProfile}><Rocket size={15} /> Nuevo perfil</button>}
+        eyebrow={t("CONFIGURACIONES DE INFERENCIA")}
+        title={t("Perfiles")}
+        action={<button className="button primary" onClick={newProfile}><Rocket size={15} />{" "}{t("Nuevo perfil")}</button>}
       />
       <div className="profile-summary">
-        <Card><small>Perfil predeterminado</small><strong>{data?.profiles.find((profile) => profile.active)?.name ?? "Sin seleccionar"}</strong></Card>
-        <Card><small>Runtime</small><strong>{data?.runtime.running ? `${(data.runtime.profile_ids ?? []).filter((id) => !MANAGED_PROFILE_IDS.has(id)).length}/2 perfiles${(data.runtime.profile_ids ?? []).some((id) => MANAGED_PROFILE_IDS.has(id)) ? " + Default/Quick" : ""} · ${data.runtime.running_models} modelo(s)` : "Detenido"}</strong></Card>
-        <Card><small>llama.cpp</small><strong>{data?.llama_cpp_available ? "Detectado" : "No detectado"}</strong></Card>
+        <Card><small>{t("Perfil predeterminado")}</small><strong>{data?.profiles.find((profile) => profile.active)?.name ?? t("Sin seleccionar")}</strong></Card>
+        <Card><small>{t("Runtime")}</small><strong>{data?.runtime.running ? t("{loaded}/2 perfiles{extra} · {runningModels} modelo(s)", { loaded: (data.runtime.profile_ids ?? []).filter((id) => !MANAGED_PROFILE_IDS.has(id)).length, extra: (data.runtime.profile_ids ?? []).some((id) => MANAGED_PROFILE_IDS.has(id)) ? " + Default/Quick" : "", runningModels: data.runtime.running_models }) : t("Detenido")}</strong></Card>
+        <Card><small>llama.cpp</small><strong>{data?.llama_cpp_available ? t("Detectado") : t("No detectado")}</strong></Card>
       </div>
-      {data?.runtime.boot_restore?.state === "restoring" && <div className="profile-warning"><RefreshCw className="spin" size={14} />Restaurando los perfiles del último arranque{data.runtime.boot_restore.pending.length ? `: ${data.runtime.boot_restore.pending.join(", ")}` : ""}…</div>}
-      {data?.runtime.boot_restore?.state === "done" && data.runtime.boot_restore.errors.length > 0 && <div className="profile-warning"><TriangleAlert size={14} />No se pudieron restaurar tras el arranque: {data.runtime.boot_restore.errors.join(" · ")}</div>}
+      {data?.runtime.boot_restore?.state === "restoring" && <div className="profile-warning"><RefreshCw className="spin" size={14} />{t("Restaurando los perfiles del último arranque")}{data.runtime.boot_restore.pending.length ? `: ${data.runtime.boot_restore.pending.join(", ")}` : ""}…</div>}
+      {data?.runtime.boot_restore?.state === "done" && data.runtime.boot_restore.errors.length > 0 && <div className="profile-warning"><TriangleAlert size={14} />{t("No se pudieron restaurar tras el arranque:")}{" "}{data.runtime.boot_restore.errors.join(" · ")}</div>}
       <div className={`profile-search${searchStateClass(profileSearch, data ? visibleProfiles.length : null)}`} data-count={searchCountLabel(profileSearch, data ? visibleProfiles.length : null)}>
         <Search size={14} />
         <input
           type="search"
           value={profileSearch}
           onChange={(event) => setProfileSearch(event.target.value)}
-          placeholder="Buscar perfiles, modelos, tareas…"
-          aria-label="Buscar perfiles"
+          placeholder={t("Buscar perfiles, modelos, tareas…")}
+          aria-label={t("Buscar perfiles")}
         />
-        {profileSearch && <button onClick={() => setProfileSearch("")} title="Limpiar búsqueda" aria-label="Limpiar búsqueda"><X size={13} /></button>}
+        {profileSearch && <button onClick={() => setProfileSearch("")} title={t("Limpiar búsqueda")} aria-label={t("Limpiar búsqueda")}><X size={13} /></button>}
       </div>
 
       {showForm && (
         <div ref={editorRef} className="profile-editor-anchor">
         <Card className="profile-editor">
-          <SectionHeading eyebrow={editing ? "EDITANDO" : "NUEVO"} title={editing ? form.name : "Crear perfil"} action={<button className="icon-button" onClick={() => setShowForm(false)}><X size={16} /></button>} />
+          <SectionHeading eyebrow={editing ? t("EDITANDO") : t("NUEVO")} title={editing ? form.name : t("Crear perfil")} action={<button className="icon-button" onClick={() => setShowForm(false)}><X size={16} /></button>} />
           <form onSubmit={save}>
-            <label>Nombre<input value={form.name} onChange={(event) => setField("name", event.target.value)} required /></label>
-            <label>Motor<select value={form.engine} onChange={(event) => setPrimaryEngine(event.target.value as Profile["engine"])}>{engineOptions.map((engine) => <option value={engine} key={engine}>{engine}</option>)}</select></label>
-            <label>Tarea<select value={form.task} onChange={(event) => setPrimaryTask(event.target.value as ModelTask)}>{taskOptions.map((task) => <option value={task.id} key={task.id}>{task.label}</option>)}</select></label>
-            <label>Runtime<select value={form.runtime_backend} onChange={(event) => setField("runtime_backend", event.target.value as Profile["runtime_backend"])}><option value="native">Nativo</option><option value="external">Endpoint externo local</option><option value="compose" disabled>Compose (próxima fase)</option></select></label>
-            <label className="wide">{form.engine === "llama.cpp" ? "Identificador del modelo / API" : "Modelo Ollama"}<input value={form.model_ref} onChange={(event) => setField("model_ref", event.target.value)} {...(form.engine === "ollama" ? modelFieldEvents(null) : {})} placeholder={form.engine === "llama.cpp" ? "Se completa con el repositorio" : "qwen3:8b"} required /></label>
+            <label>{t("Nombre")}<input value={form.name} onChange={(event) => setField("name", event.target.value)} required /></label>
+            <label>{t("Motor")}<select value={form.engine} onChange={(event) => setPrimaryEngine(event.target.value as Profile["engine"])}>{engineOptions.map((engine) => <option value={engine} key={engine}>{engine}</option>)}</select></label>
+            <label>{t("Tarea")}<select value={form.task} onChange={(event) => setPrimaryTask(event.target.value as ModelTask)}>{taskOptions.map((task) => <option value={task.id} key={task.id}>{task.label}</option>)}</select></label>
+            <label>{t("Runtime")}<select value={form.runtime_backend} onChange={(event) => setField("runtime_backend", event.target.value as Profile["runtime_backend"])}><option value="native">{t("Nativo")}</option><option value="external">{t("Endpoint externo local")}</option><option value="compose" disabled>{t("Compose (próxima fase)")}</option></select></label>
+            <label className="wide">{form.engine === "llama.cpp" ? t("Identificador del modelo / API") : t("Modelo Ollama")}<input value={form.model_ref} onChange={(event) => setField("model_ref", event.target.value)} {...(form.engine === "ollama" ? modelFieldEvents(null) : {})} placeholder={form.engine === "llama.cpp" ? t("Se completa con el repositorio") : "qwen3:8b"} required /></label>
             {form.engine === "ollama" && <div className="wide recommendation-action">{defaultsButton(null, "primary")}</div>}
             {!["llama.cpp", "ollama"].includes(form.engine) && <>
-              <label className="wide">Endpoint local<input type="url" value={form.endpoint_url} onChange={(event) => setField("endpoint_url", event.target.value)} placeholder={form.api_protocol === "tts-lab" ? "http://127.0.0.1:8010/api/projects/mi-voz" : "http://127.0.0.1:8000"} required /></label>
-              <label>Protocolo<select value={form.api_protocol} onChange={(event) => setField("api_protocol", event.target.value as Profile["api_protocol"])}><option value="openai">OpenAI compatible</option><option value="tts-lab">TTS Lab</option><option value="voice-agent">Voice Agent (API privada)</option><option value="ragkit">RAGKit</option><option value="security-app">Aplicación de seguridad</option><option value="comfyui">ComfyUI (adaptador requerido)</option></select></label>
-              <label>Timeout (s)<input type="number" min={10} max={86400} value={form.timeout_seconds} onChange={(event) => setField("timeout_seconds", Number(event.target.value))} /></label>
+              <label className="wide">{t("Endpoint local")}<input type="url" value={form.endpoint_url} onChange={(event) => setField("endpoint_url", event.target.value)} placeholder={form.api_protocol === "tts-lab" ? "http://127.0.0.1:8010/api/projects/mi-voz" : "http://127.0.0.1:8000"} required /></label>
+              <label>{t("Protocolo")}<select value={form.api_protocol} onChange={(event) => setField("api_protocol", event.target.value as Profile["api_protocol"])}><option value="openai">{t("OpenAI compatible")}</option><option value="tts-lab">{t("TTS Lab")}</option><option value="voice-agent">{t("Voice Agent (API privada)")}</option><option value="ragkit">RAGKit</option><option value="security-app">{t("Aplicación de seguridad")}</option><option value="comfyui">{t("ComfyUI (adaptador requerido)")}</option></select></label>
+              <label>{t("Timeout (s)")}<input type="number" min={10} max={86400} value={form.timeout_seconds} onChange={(event) => setField("timeout_seconds", Number(event.target.value))} /></label>
             </>}
             {form.engine === "llama.cpp" && (
               <>
-                <label className="wide">Repositorio Hugging Face<input value={form.model_repo} onChange={(event) => setField("model_repo", event.target.value)} {...modelFieldEvents(null)} placeholder="organización/modelo-GGUF" /></label>
-                <label>Alias OpenAI servido<input value={form.model_alias} onChange={(event) => setField("model_alias", event.target.value)} placeholder={form.model_ref || "mi-modelo"} /></label>
-                <label>Archivo GGUF remoto<input value={form.model_filename} onChange={(event) => setField("model_filename", event.target.value)} placeholder="modelo.Q4_K_M.gguf" /></label>
-                <label className="wide">Archivo GGUF local<input value={form.model_file} onChange={(event) => setField("model_file", event.target.value)} placeholder="Se completa al descargar, o indica una ruta absoluta" /></label>
-                <label className="wide">Shards GGUF remotos <small>(uno por línea)</small><textarea value={form.model_files.join("\n")} onChange={(event) => setField("model_files", event.target.value.split("\n").map((item) => item.trim()).filter(Boolean))} placeholder={"UD-IQ4_XS/model-00001-of-00003.gguf\nUD-IQ4_XS/model-00002-of-00003.gguf"} /></label>
+                <label className="wide">{t("Repositorio Hugging Face")}<input value={form.model_repo} onChange={(event) => setField("model_repo", event.target.value)} {...modelFieldEvents(null)} placeholder={t("organización/modelo-GGUF")} /></label>
+                <label>{t("Alias OpenAI servido")}<input value={form.model_alias} onChange={(event) => setField("model_alias", event.target.value)} placeholder={form.model_ref || "mi-modelo"} /></label>
+                <label>{t("Archivo GGUF remoto")}<input value={form.model_filename} onChange={(event) => setField("model_filename", event.target.value)} placeholder="modelo.Q4_K_M.gguf" /></label>
+                <label className="wide">{t("Archivo GGUF local")}<input value={form.model_file} onChange={(event) => setField("model_file", event.target.value)} placeholder={t("Se completa al descargar, o indica una ruta absoluta")} /></label>
+                <label className="wide">{t("Shards GGUF remotos")}{" "}<small>{t("(uno por línea)")}</small><textarea value={form.model_files.join("\n")} onChange={(event) => setField("model_files", event.target.value.split("\n").map((item) => item.trim()).filter(Boolean))} placeholder={"UD-IQ4_XS/model-00001-of-00003.gguf\nUD-IQ4_XS/model-00002-of-00003.gguf"} /></label>
                 {form.task === "vision" && <>
-                  <label>Repositorio mmproj<input value={form.mmproj_repo} onChange={(event) => setField("mmproj_repo", event.target.value)} placeholder={form.model_repo || "organización/modelo-GGUF"} /></label>
-                  <label>Archivo mmproj remoto<input value={form.mmproj_filename} onChange={(event) => setField("mmproj_filename", event.target.value)} placeholder="mmproj-model-f16.gguf" /></label>
-                  <label className="wide">Archivo mmproj local<input value={form.mmproj_file} onChange={(event) => setField("mmproj_file", event.target.value)} /></label>
+                  <label>{t("Repositorio mmproj")}<input value={form.mmproj_repo} onChange={(event) => setField("mmproj_repo", event.target.value)} placeholder={form.model_repo || t("organización/modelo-GGUF")} /></label>
+                  <label>{t("Archivo mmproj remoto")}<input value={form.mmproj_filename} onChange={(event) => setField("mmproj_filename", event.target.value)} placeholder="mmproj-model-f16.gguf" /></label>
+                  <label className="wide">{t("Archivo mmproj local")}<input value={form.mmproj_file} onChange={(event) => setField("mmproj_file", event.target.value)} /></label>
                 </>}
                 <div className="wide recommendation-action">
                   {defaultsButton(null, "primary")}
-                  <button type="button" className="button secondary" onClick={recommend} disabled={analyzing}><Sparkles size={15} /> {analyzing ? "Analizando ficha…" : "Recomendar desde Hugging Face"}</button>
-                  {recommendation && <small>Contexto obtenido de {recommendation.context_source}. GGUF sugerido: {recommendation.recommended_file ?? "no indicado"}.</small>}
+                  <button type="button" className="button secondary" onClick={recommend} disabled={analyzing}><Sparkles size={15} /> {analyzing ? t("Analizando ficha…") : t("Recomendar desde Hugging Face")}</button>
+                  {recommendation && <small>{t("Contexto obtenido de")}{" "}{recommendation.context_source}. {t("GGUF sugerido:")} {recommendation.recommended_file ?? t("no indicado")}.</small>}
                 </div>
               </>
             )}
             <PortField auto={isAutoPort(form)} port={form.port} onAuto={(auto) => setField("port_auto", auto)} onPort={(port) => setField("port", port)} />
-            <label>Contexto<input type="number" value={form.context_size} min={512} onChange={(event) => setField("context_size", Number(event.target.value))} /></label>
-            <label>Capas GPU<input type="number" value={form.gpu_layers} min={-1} onChange={(event) => setField("gpu_layers", Number(event.target.value))} /></label>
-            <label>Hilos CPU<input type="number" value={form.threads} min={1} onChange={(event) => setField("threads", Number(event.target.value))} /></label>
-            <label>Límite de entrada (MiB)<input type="number" min={1} max={1024} value={form.max_input_mb} onChange={(event) => setField("max_input_mb", Number(event.target.value))} /></label>
-            <label>Modalidades<input value={`${form.input_modalities.join(" + ")} → ${form.output_modalities.join(" + ")}`} readOnly /></label>
+            <label>{t("Contexto")}<input type="number" value={form.context_size} min={512} onChange={(event) => setField("context_size", Number(event.target.value))} /></label>
+            <label>{t("Capas GPU")}<input type="number" value={form.gpu_layers} min={-1} onChange={(event) => setField("gpu_layers", Number(event.target.value))} /></label>
+            <label>{t("Hilos CPU")}<input type="number" value={form.threads} min={1} onChange={(event) => setField("threads", Number(event.target.value))} /></label>
+            <label>{t("Límite de entrada (MiB)")}<input type="number" min={1} max={1024} value={form.max_input_mb} onChange={(event) => setField("max_input_mb", Number(event.target.value))} /></label>
+            <label>{t("Modalidades")}<input value={`${form.input_modalities.join(" + ")} → ${form.output_modalities.join(" + ")}`} readOnly /></label>
             {form.engine === "llama.cpp" && <details className="wide profile-advanced">
-              <summary>Parámetros avanzados de llama.cpp</summary>
+              <summary>{t("Parámetros avanzados de llama.cpp")}</summary>
               <div className="advanced-grid">
-                <label>Slots paralelos<input type="number" value={form.parallel} min={1} max={32} onChange={(event) => setField("parallel", Number(event.target.value))} /></label>
-                <label>Batch<input type="number" value={form.batch_size} min={1} onChange={(event) => setField("batch_size", Number(event.target.value))} /></label>
+                <label>{t("Slots paralelos")}<input type="number" value={form.parallel} min={1} max={32} onChange={(event) => setField("parallel", Number(event.target.value))} /></label>
+                <label>{t("Batch")}<input type="number" value={form.batch_size} min={1} onChange={(event) => setField("batch_size", Number(event.target.value))} /></label>
                 <label>Micro-batch<input type="number" value={form.ubatch_size} min={1} onChange={(event) => setField("ubatch_size", Number(event.target.value))} /></label>
-                <label>Temperatura<input type="number" step="0.05" value={form.temperature} min={0} max={2} onChange={(event) => setField("temperature", Number(event.target.value))} /></label>
-                <label>Top P<input type="number" step="0.01" value={form.top_p} min={0.01} max={1} onChange={(event) => setField("top_p", Number(event.target.value))} /></label>
-                <label>Top K<input type="number" value={form.top_k} min={0} onChange={(event) => setField("top_k", Number(event.target.value))} /></label>
-                <label>Min P<input type="number" step="0.01" value={form.min_p} min={0} max={1} onChange={(event) => setField("min_p", Number(event.target.value))} /></label>
-                <label>Repeat penalty<input type="number" step="0.05" value={form.repeat_penalty} min={0} max={2} onChange={(event) => setField("repeat_penalty", Number(event.target.value))} /></label>
-                <label>Presence penalty<input type="number" step="0.1" value={form.presence_penalty} min={0} max={2} onChange={(event) => setField("presence_penalty", Number(event.target.value))} /></label>
-                <label>KV cache K<select value={form.cache_type_k} onChange={(event) => setField("cache_type_k", event.target.value as Profile["cache_type_k"])}><option value="">Predeterminado (F16)</option><option value="f16">F16</option><option value="q8_0">Q8_0</option><option value="q4_0">Q4_0</option></select></label>
-                <label>KV cache V<select value={form.cache_type_v} onChange={(event) => setField("cache_type_v", event.target.value as Profile["cache_type_v"])}><option value="">Predeterminado (F16)</option><option value="f16">F16</option><option value="q8_0">Q8_0</option><option value="q4_0">Q4_0</option></select></label>
-                <label>Memoria libre mínima (MiB)<input type="number" value={form.min_free_memory_mb} min={0} onChange={(event) => setField("min_free_memory_mb", Number(event.target.value))} /></label>
-                <label>Reasoning effort<select value={form.reasoning_effort} onChange={(event) => setField("reasoning_effort", event.target.value as Profile["reasoning_effort"])}><option value="">Sin especificar</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
-                <label>Runtime requerido<input value={form.runtime_requirement} onChange={(event) => setField("runtime_requirement", event.target.value)} placeholder="llama.cpp v1.0.0 · CUDA 13 · sm_121" /></label>
+                <label>{t("Temperatura")}<input type="number" step="0.05" value={form.temperature} min={0} max={2} onChange={(event) => setField("temperature", Number(event.target.value))} /></label>
+                <label>{t("Top P")}<input type="number" step="0.01" value={form.top_p} min={0.01} max={1} onChange={(event) => setField("top_p", Number(event.target.value))} /></label>
+                <label>{t("Top K")}<input type="number" value={form.top_k} min={0} onChange={(event) => setField("top_k", Number(event.target.value))} /></label>
+                <label>{t("Min P")}<input type="number" step="0.01" value={form.min_p} min={0} max={1} onChange={(event) => setField("min_p", Number(event.target.value))} /></label>
+                <label>{t("Repeat penalty")}<input type="number" step="0.05" value={form.repeat_penalty} min={0} max={2} onChange={(event) => setField("repeat_penalty", Number(event.target.value))} /></label>
+                <label>{t("Presence penalty")}<input type="number" step="0.1" value={form.presence_penalty} min={0} max={2} onChange={(event) => setField("presence_penalty", Number(event.target.value))} /></label>
+                <label>{t("KV cache K")}<select value={form.cache_type_k} onChange={(event) => setField("cache_type_k", event.target.value as Profile["cache_type_k"])}><option value="">{t("Predeterminado (F16)")}</option><option value="f16">F16</option><option value="q8_0">Q8_0</option><option value="q4_0">Q4_0</option></select></label>
+                <label>{t("KV cache V")}<select value={form.cache_type_v} onChange={(event) => setField("cache_type_v", event.target.value as Profile["cache_type_v"])}><option value="">{t("Predeterminado (F16)")}</option><option value="f16">F16</option><option value="q8_0">Q8_0</option><option value="q4_0">Q4_0</option></select></label>
+                <label>{t("Memoria libre mínima (MiB)")}<input type="number" value={form.min_free_memory_mb} min={0} onChange={(event) => setField("min_free_memory_mb", Number(event.target.value))} /></label>
+                <label>{t("Reasoning effort")}<select value={form.reasoning_effort} onChange={(event) => setField("reasoning_effort", event.target.value as Profile["reasoning_effort"])}><option value="">{t("Sin especificar")}</option><option value="low">{t("Low")}</option><option value="medium">{t("Medium")}</option><option value="high">{t("High")}</option></select></label>
+                <label>{t("Runtime requerido")}<input value={form.runtime_requirement} onChange={(event) => setField("runtime_requirement", event.target.value)} placeholder={t("llama.cpp v1.0.0 · CUDA 13 · sm_121")} /></label>
                 <div className="advanced-checks">
-                  <label className="checkbox"><input type="checkbox" checked={Boolean(form.flash_attention)} onChange={(event) => setField("flash_attention", Number(event.target.checked))} /><span>Flash Attention</span></label>
-                  <label className="checkbox"><input type="checkbox" checked={Boolean(form.jinja)} onChange={(event) => setField("jinja", Number(event.target.checked))} /><span>Plantillas Jinja</span></label>
-                  <label className="checkbox"><input type="checkbox" checked={Boolean(form.reasoning_off)} onChange={(event) => setField("reasoning_off", Number(event.target.checked))} /><span>Reasoning desactivado</span></label>
-                  <label className="checkbox"><input type="checkbox" checked={Boolean(form.kv_unified_per_slot)} onChange={(event) => setField("kv_unified_per_slot", Number(event.target.checked))} /><span>KV unificado por slot</span></label>
+                  <label className="checkbox"><input type="checkbox" checked={Boolean(form.flash_attention)} onChange={(event) => setField("flash_attention", Number(event.target.checked))} /><span>{t("Flash Attention")}</span></label>
+                  <label className="checkbox"><input type="checkbox" checked={Boolean(form.jinja)} onChange={(event) => setField("jinja", Number(event.target.checked))} /><span>{t("Plantillas Jinja")}</span></label>
+                  <label className="checkbox"><input type="checkbox" checked={Boolean(form.reasoning_off)} onChange={(event) => setField("reasoning_off", Number(event.target.checked))} /><span>{t("Reasoning desactivado")}</span></label>
+                  <label className="checkbox"><input type="checkbox" checked={Boolean(form.kv_unified_per_slot)} onChange={(event) => setField("kv_unified_per_slot", Number(event.target.checked))} /><span>{t("KV unificado por slot")}</span></label>
                 </div>
               </div>
             </details>}
             <div className="wide capacity-editor">
               <div>
-                <strong>Seguridad de memoria del perfil</strong>
-                <small>MyDGX suma modelos y contextos antes de detener el perfil actual.</small>
+                <strong>{t("Seguridad de memoria del perfil")}</strong>
+                <small>{t("MyDGX suma modelos y contextos antes de detener el perfil actual.")}</small>
               </div>
-              <label>Reserva del sistema (MiB)<input type="number" min={1024} value={form.memory_reserve_mb} onChange={(event) => setField("memory_reserve_mb", Number(event.target.value))} /></label>
-              <label>Contexto mínimo de recuperación<input type="number" min={512} value={form.minimum_context_size} onChange={(event) => setField("minimum_context_size", Number(event.target.value))} /></label>
-              <label className="checkbox"><input type="checkbox" checked={Boolean(form.auto_fit_context)} onChange={(event) => setField("auto_fit_context", Number(event.target.checked))} /><span>Reducir contexto automáticamente tras OOM</span></label>
+              <label>{t("Reserva del sistema (MiB)")}<input type="number" min={1024} value={form.memory_reserve_mb} onChange={(event) => setField("memory_reserve_mb", Number(event.target.value))} /></label>
+              <label>{t("Contexto mínimo de recuperación")}<input type="number" min={512} value={form.minimum_context_size} onChange={(event) => setField("minimum_context_size", Number(event.target.value))} /></label>
+              <label className="checkbox"><input type="checkbox" checked={Boolean(form.auto_fit_context)} onChange={(event) => setField("auto_fit_context", Number(event.target.checked))} /><span>{t("Reducir contexto automáticamente tras OOM")}</span></label>
             </div>
             <div className="wide capacity-editor">
               <div>
-                <strong>App del perfil</strong>
-                <small>Se arranca con su <code>start.sh start</code> cuando la inferencia está lista y se detiene con <code>start.sh stop</code> al parar el perfil. Apps disponibles en {data?.apps.root ?? "el home"}.</small>
+                <strong>{t("App del perfil")}</strong>
+                <small>{t("Se arranca con su")}{" "}<code>start.sh start</code>{" "}{t("cuando la inferencia está lista y se detiene con")}{" "}<code>start.sh stop</code>{" "}{t("al parar el perfil. Apps disponibles en")}{" "}{data?.apps.root ?? t("el home")}.</small>
               </div>
-              <label>App al cargar el perfil
+              <label>{t("App al cargar el perfil")}
                 <select value={form.app ?? ""} onChange={(event) => setField("app", event.target.value)}>
-                  <option value="">Ninguna</option>
+                  <option value="">{t("Ninguna")}</option>
                   {data?.apps.available.map((name) => <option value={name} key={name}>{name}</option>)}
-                  {form.app && !data?.apps.available.includes(form.app) ? <option value={form.app}>{form.app} (no encontrada)</option> : null}
+                  {form.app && !data?.apps.available.includes(form.app) ? <option value={form.app}>{form.app}{" "}{t("(no encontrada)")}</option> : null}
                 </select>
               </label>
               {form.app ? <>
-                <label>Alias de la app web
+                <label>{t("Alias de la app web")}
                   <input maxLength={40} value={appWeb.alias} placeholder={form.app} onChange={(event) => setAppWebField("alias", event.target.value)} />
                 </label>
-                <label>Puerto web en 127.0.0.1
-                  <input type="number" min={1024} max={65535} value={appWeb.port} placeholder="Sin acceso web" onChange={(event) => setAppWebField("port", event.target.value)} />
+                <label>{t("Puerto web en 127.0.0.1")}
+                  <input type="number" min={1024} max={65535} value={appWeb.port} placeholder={t("Sin acceso web")} onChange={(event) => setAppWebField("port", event.target.value)} />
                 </label>
-                <small className="wide">Con puerto, <code>start.sh</code> recibe <code>MYDGX_APP_PORT</code>, <code>MYDGX_APP_HOST=127.0.0.1</code> y <code>MYDGX_APP_URL</code>, y la app aparece en Resumen y en la barra de menús mientras está en marcha. El alias y el puerto son de la app y se comparten entre los perfiles que la usan.</small>
+                <small className="wide">{t("Con puerto,")}{" "}<code>start.sh</code> {t("recibe")} <code>MYDGX_APP_PORT</code>, <code>MYDGX_APP_HOST=127.0.0.1</code> y <code>MYDGX_APP_URL</code>{t(", y la app aparece en Resumen y en la barra de menús mientras está en marcha. El alias y el puerto son de la app y se comparten entre los perfiles que la usan.")}</small>
               </> : null}
             </div>
             <div className="wide additional-models-editor">
               <div className="additional-models-heading">
-                <div><strong>Modelos del perfil</strong><small>El modelo principal y {form.additional_models.length} modelo(s) adicional(es) arrancarán en orden.</small></div>
-                <button type="button" className="button secondary" onClick={addModel}><Boxes size={15} /> Añadir modelo</button>
+                <div><strong>{t("Modelos del perfil")}</strong><small>{t("El modelo principal y")}{" "}{form.additional_models.length}{" "}{t("modelo(s) adicional(es) arrancarán en orden.")}</small></div>
+                <button type="button" className="button secondary" onClick={addModel}><Boxes size={15} />{" "}{t("Añadir modelo")}</button>
               </div>
               {form.additional_models.map((model, index) => (
                 <div className="additional-model-editor" key={model.id}>
                   <div className="additional-model-title">
-                    <strong>{model.name || `Modelo ${index + 2}`}</strong>
-                    <label className="checkbox"><input type="checkbox" checked={model.enabled} onChange={(event) => setAdditionalField(index, "enabled", event.target.checked)} /><span>Habilitado</span></label>
+                    <strong>{model.name || t("Modelo {value}", { value: index + 2 })}</strong>
+                    <label className="checkbox"><input type="checkbox" checked={model.enabled} onChange={(event) => setAdditionalField(index, "enabled", event.target.checked)} /><span>{t("Habilitado")}</span></label>
                     <button type="button" className="icon-button danger" onClick={() => removeAdditional(index)}><Trash2 size={14} /></button>
                   </div>
                   <div className="additional-model-grid">
-                    <label>Nombre<input value={model.name} onChange={(event) => setAdditionalField(index, "name", event.target.value)} required /></label>
-                    <label>Motor<select value={model.engine} onChange={(event) => setAdditionalEngine(index, event.target.value as ProfileModel["engine"])}>{engineOptions.map((engine) => <option value={engine} key={engine}>{engine}</option>)}</select></label>
-                    <label>Tarea<select value={model.task} onChange={(event) => setAdditionalTask(index, event.target.value as ModelTask)}>{taskOptions.map((task) => <option value={task.id} key={task.id}>{task.label}</option>)}</select></label>
-                    <label>Identificador / modelo<input value={model.model_ref} onChange={(event) => setAdditionalField(index, "model_ref", event.target.value)} {...(model.engine === "ollama" ? modelFieldEvents(index) : {})} placeholder={model.engine === "llama.cpp" ? "Se completa con el repositorio" : undefined} required /></label>
+                    <label>{t("Nombre")}<input value={model.name} onChange={(event) => setAdditionalField(index, "name", event.target.value)} required /></label>
+                    <label>{t("Motor")}<select value={model.engine} onChange={(event) => setAdditionalEngine(index, event.target.value as ProfileModel["engine"])}>{engineOptions.map((engine) => <option value={engine} key={engine}>{engine}</option>)}</select></label>
+                    <label>{t("Tarea")}<select value={model.task} onChange={(event) => setAdditionalTask(index, event.target.value as ModelTask)}>{taskOptions.map((task) => <option value={task.id} key={task.id}>{task.label}</option>)}</select></label>
+                    <label>{t("Identificador / modelo")}<input value={model.model_ref} onChange={(event) => setAdditionalField(index, "model_ref", event.target.value)} {...(model.engine === "ollama" ? modelFieldEvents(index) : {})} placeholder={model.engine === "llama.cpp" ? t("Se completa con el repositorio") : undefined} required /></label>
                     <PortField auto={isAutoPort(model)} port={model.port} onAuto={(auto) => setAdditionalField(index, "port_auto", auto)} onPort={(port) => setAdditionalField(index, "port", port)} />
                     {!["llama.cpp", "ollama"].includes(model.engine) && <>
-                      <label className="span-two">Endpoint local<input type="url" value={model.endpoint_url} onChange={(event) => setAdditionalField(index, "endpoint_url", event.target.value)} placeholder={model.api_protocol === "tts-lab" ? "http://127.0.0.1:8010/api/projects/mi-voz" : "http://127.0.0.1:8000"} required /></label>
-                      <label>Protocolo<select value={model.api_protocol} onChange={(event) => setAdditionalField(index, "api_protocol", event.target.value as ModelConfig["api_protocol"])}><option value="openai">OpenAI compatible</option><option value="tts-lab">TTS Lab</option><option value="voice-agent">Voice Agent (API privada)</option><option value="ragkit">RAGKit</option><option value="security-app">Aplicación de seguridad</option><option value="comfyui">ComfyUI</option></select></label>
+                      <label className="span-two">{t("Endpoint local")}<input type="url" value={model.endpoint_url} onChange={(event) => setAdditionalField(index, "endpoint_url", event.target.value)} placeholder={model.api_protocol === "tts-lab" ? "http://127.0.0.1:8010/api/projects/mi-voz" : "http://127.0.0.1:8000"} required /></label>
+                      <label>{t("Protocolo")}<select value={model.api_protocol} onChange={(event) => setAdditionalField(index, "api_protocol", event.target.value as ModelConfig["api_protocol"])}><option value="openai">{t("OpenAI compatible")}</option><option value="tts-lab">{t("TTS Lab")}</option><option value="voice-agent">{t("Voice Agent (API privada)")}</option><option value="ragkit">RAGKit</option><option value="security-app">{t("Aplicación de seguridad")}</option><option value="comfyui">ComfyUI</option></select></label>
                     </>}
                     {model.engine === "llama.cpp" && <>
-                      <label className="span-two">Repositorio Hugging Face<input value={model.model_repo} onChange={(event) => setAdditionalField(index, "model_repo", event.target.value)} {...modelFieldEvents(index)} placeholder="organización/modelo-GGUF" /></label>
-                      <label>Archivo GGUF remoto<input value={model.model_filename} onChange={(event) => setAdditionalField(index, "model_filename", event.target.value)} /></label>
-                      <label>Archivo GGUF local<input value={model.model_file} onChange={(event) => setAdditionalField(index, "model_file", event.target.value)} /></label>
+                      <label className="span-two">{t("Repositorio Hugging Face")}<input value={model.model_repo} onChange={(event) => setAdditionalField(index, "model_repo", event.target.value)} {...modelFieldEvents(index)} placeholder={t("organización/modelo-GGUF")} /></label>
+                      <label>{t("Archivo GGUF remoto")}<input value={model.model_filename} onChange={(event) => setAdditionalField(index, "model_filename", event.target.value)} /></label>
+                      <label>{t("Archivo GGUF local")}<input value={model.model_file} onChange={(event) => setAdditionalField(index, "model_file", event.target.value)} /></label>
                       {model.task === "vision" && <>
-                        <label>Archivo mmproj remoto<input value={model.mmproj_filename} onChange={(event) => setAdditionalField(index, "mmproj_filename", event.target.value)} /></label>
-                        <label>Archivo mmproj local<input value={model.mmproj_file} onChange={(event) => setAdditionalField(index, "mmproj_file", event.target.value)} /></label>
+                        <label>{t("Archivo mmproj remoto")}<input value={model.mmproj_filename} onChange={(event) => setAdditionalField(index, "mmproj_filename", event.target.value)} /></label>
+                        <label>{t("Archivo mmproj local")}<input value={model.mmproj_file} onChange={(event) => setAdditionalField(index, "mmproj_file", event.target.value)} /></label>
                       </>}
                     </>}
-                    <label>Contexto<input type="number" min={512} value={model.context_size} onChange={(event) => setAdditionalField(index, "context_size", Number(event.target.value))} /></label>
-                    <label>Batch / uBatch<div className="paired-inputs"><input type="number" min={1} value={model.batch_size} onChange={(event) => setAdditionalField(index, "batch_size", Number(event.target.value))} /><input type="number" min={1} value={model.ubatch_size} onChange={(event) => setAdditionalField(index, "ubatch_size", Number(event.target.value))} /></div></label>
-                    <label>Memoria estimada (MiB)<input type="number" min={0} value={model.estimated_memory_mb} onChange={(event) => setAdditionalField(index, "estimated_memory_mb", Number(event.target.value))} placeholder="0 = automática" /></label>
-                    <label>Alias OpenAI servido<input value={model.model_alias} onChange={(event) => setAdditionalField(index, "model_alias", event.target.value)} /></label>
+                    <label>{t("Contexto")}<input type="number" min={512} value={model.context_size} onChange={(event) => setAdditionalField(index, "context_size", Number(event.target.value))} /></label>
+                    <label>{t("Batch / uBatch")}<div className="paired-inputs"><input type="number" min={1} value={model.batch_size} onChange={(event) => setAdditionalField(index, "batch_size", Number(event.target.value))} /><input type="number" min={1} value={model.ubatch_size} onChange={(event) => setAdditionalField(index, "ubatch_size", Number(event.target.value))} /></div></label>
+                    <label>{t("Memoria estimada (MiB)")}<input type="number" min={0} value={model.estimated_memory_mb} onChange={(event) => setAdditionalField(index, "estimated_memory_mb", Number(event.target.value))} placeholder={t("0 = automática")} /></label>
+                    <label>{t("Alias OpenAI servido")}<input value={model.model_alias} onChange={(event) => setAdditionalField(index, "model_alias", event.target.value)} /></label>
                     {["llama.cpp", "ollama"].includes(model.engine) && <div className="span-two recommendation-action">{defaultsButton(index, model.id)}</div>}
                   </div>
                 </div>
               ))}
             </div>
-            {duplicateAliases.length > 0 && <div className="profile-warning wide"><ShieldCheck size={16} />Cada modelo habilitado necesita un alias OpenAI único. Duplicados: {duplicateAliases.join(", ")}.</div>}
+            {duplicateAliases.length > 0 && <div className="profile-warning wide"><ShieldCheck size={16} />{t("Cada modelo habilitado necesita un alias OpenAI único. Duplicados:")}{" "}{duplicateAliases.join(", ")}.</div>}
             {recommendation?.warning && <div className="profile-warning wide"><ShieldCheck size={16} />{recommendation.warning}</div>}
-            <div className="profile-form-actions wide"><button type="button" className="button secondary" onClick={() => setShowForm(false)}>Cancelar</button><button className="button primary" type="submit" disabled={duplicateAliases.length > 0}>Guardar perfil</button></div>
+            <div className="profile-form-actions wide"><button type="button" className="button secondary" onClick={() => setShowForm(false)}>{t("Cancelar")}</button><button className="button primary" type="submit" disabled={duplicateAliases.length > 0}>{t("Guardar perfil")}</button></div>
           </form>
         </Card>
         </div>
@@ -5526,19 +5525,19 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
 
       {(activeProfiles.length > 0 || availableProfiles.length > 0) && <div className="profile-groups">
         {activeProfiles.length > 0 && <section className="profile-group split-section is-active">
-          <div className="split-section-title"><strong>Activos</strong><span>{activeProfiles.length}</span></div>
+          <div className="split-section-title"><strong>{t("Activos")}</strong><span>{activeProfiles.length}</span></div>
           <div className="profiles-list">{activeProfiles.map(renderProfileCard)}</div>
         </section>}
         {availableProfiles.length > 0 && <section className="profile-group split-section">
-          <div className="split-section-title"><strong>Disponibles</strong><span>{availableProfiles.length}</span></div>
+          <div className="split-section-title"><strong>{t("Disponibles")}</strong><span>{availableProfiles.length}</span></div>
           <div className="profiles-list">{availableProfiles.map(renderProfileCard)}</div>
         </section>}
       </div>}
       {data && !visibleProfiles.length && (
         <Empty
           icon={<SlidersHorizontal />}
-          title={profileSearch ? "No hay coincidencias" : "No hay perfiles"}
-          text={profileSearch ? "Prueba con otro nombre, modelo, motor o tarea." : "Crea una configuración para llama.cpp u Ollama y actívala como predeterminada."}
+          title={profileSearch ? t("No hay coincidencias") : t("No hay perfiles")}
+          text={profileSearch ? t("Prueba con otro nombre, modelo, motor o tarea.") : t("Crea una configuración para llama.cpp u Ollama y actívala como predeterminada.")}
         />
       )}
     </div>
@@ -5612,47 +5611,47 @@ function MemoryModePanel({ notify, onChange }: { notify: (message: string, error
   }
   function releaseAll() {
     const names = [
-      ...(stopProfiles ? profiles.map((profile) => `perfil ${profile.name}`) : []),
+      ...(stopProfiles ? profiles.map((profile) => t("perfil {name}", { name: profile.name })) : []),
       ...active.filter((service) => chosen.has(service.id)).map((service) => service.name),
     ];
-    if (!window.confirm(`Se detendrán: ${names.join(", ") || "ningún servicio"} y se descargarán los modelos de Ollama. Podrás devolverlo todo con «Restaurar». ¿Continuar?`)) return;
+    if (!window.confirm(t("Se detendrán: {value} y se descargarán los modelos de Ollama. Podrás devolverlo todo con «Restaurar». ¿Continuar?", { value: names.join(", ") || t("ningún servicio") }))) return;
     void run("release", "/api/memory-mode/release", {
       services: [...chosen].filter((id) => active.some((service) => service.id === id)),
       release_ollama: true,
       stop_profiles: stopProfiles && profiles.length > 0,
       confirm: "liberar memoria",
     },
-      (result) => `Memoria liberada · ${bytes(result.memory.free ?? 0)} libres`);
+      (result) => t("Memoria liberada · {value} libres", { value: bytes(result.memory.free ?? 0) }));
   }
   function toggleService(service: OptionalService) {
     const action = service.active ? "stop" : "start";
-    if (action === "stop" && !window.confirm(`¿Detener ${service.name}? ${service.impact}`)) return;
+    if (action === "stop" && !window.confirm(t("¿Detener {name}? {impact}", { name: service.name, impact: service.impact }))) return;
     void run(service.id, `/api/memory-mode/services/${encodeURIComponent(service.id)}`, { action, confirm: `${action} ${service.id}` },
-      () => `${service.name} ${action === "stop" ? "detenido" : "arrancado"}`);
+      () => (action === "stop" ? t("{name} detenido", { name: service.name }) : t("{name} arrancado", { name: service.name })));
   }
   if (!status) return null;
   const stoppedNames = [
-    ...status.stopped_profiles.map((profile) => `perfil ${profile.name}`),
+    ...status.stopped_profiles.map((profile) => t("perfil {name}", { name: profile.name })),
     ...status.services.filter((service) => service.stopped_by_memory_mode).map((service) => service.name),
   ];
   return <Card className="memory-mode-card">
     <div className="memory-mode-head">
       <div className="model-icon"><Zap /></div>
       <span>
-        <strong>Memoria máxima para operaciones intensivas</strong>
-        <small>Detén lo opcional para cargar un modelo grande (≈100 GB). La memoria libre real ahora: <b>{bytes(status.memory.free ?? 0)}</b> de {bytes(status.memory.total ?? 0)}.</small>
+        <strong>{t("Memoria máxima para operaciones intensivas")}</strong>
+        <small>{t("Detén lo opcional para cargar un modelo grande (≈100 GB). La memoria libre real ahora:")}{" "}<b>{bytes(status.memory.free ?? 0)}</b> {t("de")} {bytes(status.memory.total ?? 0)}.</small>
       </span>
-      {stoppedNames.length > 0 && <span className="badge running">Modo memoria activo</span>}
+      {stoppedNames.length > 0 && <span className="badge running">{t("Modo memoria activo")}</span>}
     </div>
     <div className="memory-mode-list">
       <div className={`memory-mode-row ${profiles.length ? "" : "is-stopped"}`}>
         <label>
           <input type="checkbox" disabled={!profiles.length || busy !== null} checked={profiles.length > 0 && stopProfiles} onChange={() => setStopProfiles((value) => !value)} />
           <span>
-            <strong>Perfiles llama.cpp</strong>
+            <strong>{t("Perfiles llama.cpp")}</strong>
             <small>{profiles.length
-              ? `${profiles.map((profile) => `${profile.name} (${profile.models.join(", ")})`).join(" · ")}. Incluye el modelo del chat del dashboard si usa un perfil. «Restaurar» los vuelve a levantar.`
-              : status.stopped_profiles.length ? `Detenidos por modo memoria: ${status.stopped_profiles.map((profile) => profile.name).join(", ")}.` : "Ningún perfil cargado."}</small>
+              ? `${profiles.map((profile) => `${profile.name} (${profile.models.join(", ")})`).join(" · ")}. ${t("Incluye el modelo del chat del dashboard si usa un perfil. «Restaurar» los vuelve a levantar.")}`
+              : status.stopped_profiles.length ? t("Detenidos por modo memoria: {join}.", { join: status.stopped_profiles.map((profile) => profile.name).join(", ") }) : t("Ningún perfil cargado.")}</small>
           </span>
         </label>
         <span className="memory-mode-bytes">{profileBytes ? bytes(profileBytes) : "—"}</span>
@@ -5663,23 +5662,23 @@ function MemoryModePanel({ notify, onChange }: { notify: (message: string, error
           <input type="checkbox" disabled={!service.active || busy !== null} checked={service.active && chosen.has(service.id)} onChange={() => toggle(service.id)} />
           <span><strong>{service.name}</strong><small>{service.impact}</small></span>
         </label>
-        <span className="memory-mode-bytes">{service.active ? (service.bytes ? bytes(service.bytes) : "—") : service.stopped_by_memory_mode ? "Detenido por modo memoria" : "Detenido"}</span>
+        <span className="memory-mode-bytes">{service.active ? (service.bytes ? bytes(service.bytes) : "—") : service.stopped_by_memory_mode ? t("Detenido por modo memoria") : t("Detenido")}</span>
         <button className={service.active ? "danger" : "primary-action"} disabled={busy !== null} onClick={() => toggleService(service)}>
-          {service.active ? <Square size={13} /> : <Play size={14} />}{busy === service.id ? "Procesando…" : service.active ? "Detener" : "Arrancar"}
+          {service.active ? <Square size={13} /> : <Play size={14} />}{busy === service.id ? t("Procesando…") : service.active ? t("Detener") : t("Arrancar")}
         </button>
       </div>)}
       <div className="memory-mode-row">
-        <label><input type="checkbox" checked disabled /><span><strong>Modelos en Ollama</strong><small>{status.ollama_models.length ? `Modelo del chat del dashboard y otros: ${status.ollama_models.join(", ")}. Se recargan solos al volver a usarlos.` : "Ninguno cargado."}</small></span></label>
+        <label><input type="checkbox" checked disabled /><span><strong>{t("Modelos en Ollama")}</strong><small>{status.ollama_models.length ? t("Modelo del chat del dashboard y otros: {join}. Se recargan solos al volver a usarlos.", { join: status.ollama_models.join(", ") }) : t("Ninguno cargado.")}</small></span></label>
         <span className="memory-mode-bytes">{status.ollama_bytes ? bytes(status.ollama_bytes) : "—"}</span>
         <span />
       </div>
     </div>
-    <small className="memory-mode-note"><Info size={12} /> Después levanta el modelo grande desde Perfiles: si no cabe en la memoria libre, MyDGX vacía la caché de disco antes de cargarlo. Para restaurar los perfiles anteriores, detén antes el modelo grande.</small>
+    <small className="memory-mode-note"><Info size={12} />{" "}{t("Después levanta el modelo grande desde Perfiles: si no cabe en la memoria libre, MyDGX vacía la caché de disco antes de cargarlo. Para restaurar los perfiles anteriores, detén antes el modelo grande.")}</small>
     <div className="memory-mode-actions">
-      <button className="danger" disabled={busy !== null} onClick={releaseAll}><Zap size={14} />{busy === "release" ? "Liberando…" : `Liberar seleccionados (~${bytes(chosenBytes)} + caché)`}</button>
+      <button className="danger" disabled={busy !== null} onClick={releaseAll}><Zap size={14} />{busy === "release" ? t("Liberando…") : t("Liberar seleccionados (~{chosenBytes} + caché)", { chosenBytes: bytes(chosenBytes) })}</button>
       {stoppedNames.length > 0 && <button className="primary-action" disabled={busy !== null} onClick={() => {
-        if (window.confirm(`¿Volver a arrancar ${stoppedNames.join(", ")}?`)) void run("restore", "/api/memory-mode/restore", { confirm: "restaurar servicios" }, () => "Servicios restaurados");
-      }}><RefreshCw size={14} />{busy === "restore" ? "Restaurando…" : `Restaurar (${stoppedNames.join(", ")})`}</button>}
+        if (window.confirm(t("¿Volver a arrancar {join}?", { join: stoppedNames.join(", ") }))) void run("restore", "/api/memory-mode/restore", { confirm: "restaurar servicios" }, () => t("Servicios restaurados"));
+      }}><RefreshCw size={14} />{busy === "restore" ? t("Restaurando…") : t("Restaurar ({join})", { join: stoppedNames.join(", ") })}</button>}
     </div>
   </Card>;
 }
@@ -5704,14 +5703,14 @@ function EnginesView({ notify }: { notify: (message: string, error?: boolean) =>
     return () => window.clearTimeout(timer);
   }, [load]);
   async function action(engine: ServingEngine, operation: "start" | "stop") {
-    if (operation === "stop" && !window.confirm(`¿Detener ${engine.name}? Los modelos que dependen de este motor dejarán de estar disponibles.`)) return;
+    if (operation === "stop" && !window.confirm(t("¿Detener {name}? Los modelos que dependen de este motor dejarán de estar disponibles.", { name: engine.name }))) return;
     setBusy(engine.id);
     try {
       await api(`/api/engines/${encodeURIComponent(engine.id)}/action`, {
         method: "POST",
         body: JSON.stringify({ action: operation, confirm: `${operation} ${engine.id}` }),
       });
-      notify(`${engine.name} ${operation === "start" ? "arrancado" : "detenido"}`);
+      notify(operation === "start" ? t("{name} arrancado", { name: engine.name }) : t("{name} detenido", { name: engine.name }));
       await load();
     } catch (error) {
       notify((error as Error).message, true);
@@ -5720,25 +5719,25 @@ function EnginesView({ notify }: { notify: (message: string, error?: boolean) =>
     }
   }
   return <div className="view-stack">
-    <SectionHeading eyebrow="RUNTIMES DE INFERENCIA" title="Motores" action={<button className="icon-button" onClick={load}><RefreshCw className={loading ? "spin" : ""} size={16} /></button>} />
+    <SectionHeading eyebrow={t("RUNTIMES DE INFERENCIA")} title={t("Motores")} action={<button className="icon-button" onClick={load}><RefreshCw className={loading ? "spin" : ""} size={16} /></button>} />
     <MemoryModePanel notify={notify} onChange={() => void load()} />
     <div className="engine-grid">
       {engines.map((engine) => <Card className="engine-card" key={engine.id}>
-        <div className="engine-head"><div className="model-icon"><Cpu /></div><span><strong>{engine.name}</strong><small>{engine.version || "Versión no detectada"}</small></span><span className={`badge ${engine.reachable ? "live" : engine.installed ? "running" : ""}`}>{engine.reachable ? "Disponible" : engine.installed ? "Instalado" : "No instalado"}</span></div>
+        <div className="engine-head"><div className="model-icon"><Cpu /></div><span><strong>{engine.name}</strong><small>{engine.version || t("Versión no detectada")}</small></span><span className={`badge ${engine.reachable ? "live" : engine.installed ? "running" : ""}`}>{engine.reachable ? t("Disponible") : engine.installed ? t("Instalado") : t("No instalado")}</span></div>
         <div className="engine-capabilities">{engine.capabilities.map((capability) => <span className="badge" key={capability}>{capability}</span>)}</div>
-        <small>{engine.endpoint || engine.binary || "Sin endpoint configurado"} · {engine.managed ? "Gestionado por MyDGX" : "Solo descubrimiento"}</small>
-        {engine.essential && <small className="engine-protection"><ShieldCheck size={12} /> Protegido: necesario para MyDGX, el gateway, perfiles o chatbot.</small>}
+        <small>{engine.endpoint || engine.binary || t("Sin endpoint configurado")} · {engine.managed ? t("Gestionado por MyDGX") : t("Solo descubrimiento")}</small>
+        {engine.essential && <small className="engine-protection"><ShieldCheck size={12} />{" "}{t("Protegido: necesario para MyDGX, el gateway, perfiles o chatbot.")}</small>}
         {engine.controllable && <div className="engine-actions">
           <small>{engine.running
-            ? "Opcional · al detenerlo queda desactivado también tras reiniciar el DGX, hasta que lo vuelvas a arrancar aquí."
-            : "Desactivado · «Arrancar motor» lo levanta y lo vuelve a activar en el arranque del DGX."}</small>
+            ? t("Opcional · al detenerlo queda desactivado también tras reiniciar el DGX, hasta que lo vuelvas a arrancar aquí.")
+            : t("Desactivado · «Arrancar motor» lo levanta y lo vuelve a activar en el arranque del DGX.")}</small>
           <button
             className={engine.running ? "danger" : "primary-action"}
             disabled={busy === engine.id || (!engine.running && !engine.installed)}
             onClick={() => void action(engine, engine.running ? "stop" : "start")}
           >
             {engine.running ? <Square size={13} /> : <Play size={14} />}
-            {busy === engine.id ? "Procesando…" : engine.running ? "Detener motor" : "Arrancar motor"}
+            {busy === engine.id ? t("Procesando…") : engine.running ? t("Detener motor") : t("Arrancar motor")}
           </button>
         </div>}
         {engine.models.length > 0 && <div className="engine-models">{engine.models.slice(0, 8).map((model) => <span key={model}>{model}</span>)}</div>}
@@ -5771,7 +5770,7 @@ function fileDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("No se pudo leer el archivo"));
+    reader.onerror = () => reject(new Error(t("No se pudo leer el archivo")));
     reader.readAsDataURL(file);
   });
 }
@@ -5813,11 +5812,11 @@ function MultimodalLabView({ notify }: { notify: (message: string, error?: boole
     event.preventDefault();
     if (!selected) return;
     if (needsFile && !file) {
-      notify("Selecciona un archivo compatible", true);
+      notify(t("Selecciona un archivo compatible"), true);
       return;
     }
     if (file && file.size > selected.max_input_mb * 1024 * 1024) {
-      notify(`El archivo supera ${selected.max_input_mb} MiB`, true);
+      notify(t("El archivo supera {max_input_mb} MiB", { max_input_mb: selected.max_input_mb }), true);
       return;
     }
     setBusy(true);
@@ -5840,7 +5839,7 @@ function MultimodalLabView({ notify }: { notify: (message: string, error?: boole
           body: JSON.stringify(payload),
         });
         setResult({ content_type: "application/json", job_id: response.job_id });
-        notify("Generación de vídeo enviada a trabajos");
+        notify(t("Generación de vídeo enviada a trabajos"));
       } else {
         const response = await api<MultimodalResponse>("/api/multimodal/run", {
           method: "POST",
@@ -5860,7 +5859,7 @@ function MultimodalLabView({ notify }: { notify: (message: string, error?: boole
       const jobs = await api<Job[]>("/api/jobs");
       const job = jobs.find((item) => item.id === jobId);
       if (!job) {
-        notify("El trabajo ya no aparece en la actividad reciente", true);
+        notify(t("El trabajo ya no aparece en la actividad reciente"), true);
       } else if (job.status === "completed") {
         const completed = await api<MultimodalResponse>(`/api/jobs/${jobId}/result`);
         setResult(completed);
@@ -5884,39 +5883,39 @@ function MultimodalLabView({ notify }: { notify: (message: string, error?: boole
   const imageUrl = typeof openAIData[0]?.url === "string" ? openAIData[0].url : "";
   const binaryUrl = result?.data_base64 ? `data:${result.content_type};base64,${result.data_base64}` : "";
   const compactResult = result?.result
-    ? JSON.stringify(result.result, (key, value) => key === "b64_json" ? "[contenido base64 omitido]" : value, 2)
+    ? JSON.stringify(result.result, (key, value) => key === "b64_json" ? t("[contenido base64 omitido]") : value, 2)
     : "";
 
   return <div className="view-stack">
-    <SectionHeading eyebrow="IMAGEN · AUDIO · VÍDEO · EMBEDDINGS" title="Laboratorio multimodal" action={<button className="icon-button" onClick={load}><RefreshCw size={16} /></button>} />
+    <SectionHeading eyebrow={t("IMAGEN · AUDIO · VÍDEO · EMBEDDINGS")} title={t("Laboratorio multimodal")} action={<button className="icon-button" onClick={load}><RefreshCw size={16} /></button>} />
     <Card className="multimodal-intro">
       <Sparkles />
-      <div><strong>Prueba el perfil activo y los motores administrados</strong><small>ComfyUI genera imagen y vídeo localmente; las entradas no se guardan en SQLite.</small></div>
+      <div><strong>{t("Prueba el perfil activo y los motores administrados")}</strong><small>{t("ComfyUI genera imagen y vídeo localmente; las entradas no se guardan en SQLite.")}</small></div>
     </Card>
-    {!models.length ? <Empty icon={<Boxes />} title="Sin modelos multimodales" text="Activa un perfil que declare una tarea y arranca sus endpoints." /> :
+    {!models.length ? <Empty icon={<Boxes />} title={t("Sin modelos multimodales")} text={t("Activa un perfil que declare una tarea y arranca sus endpoints.")} /> :
       <div className="multimodal-layout">
         <Card className="multimodal-form-card">
           <form onSubmit={run}>
-            <label>Servicio<select value={modelAlias} onChange={(event) => { setModelAlias(event.target.value); setFile(null); setResult(null); }}>{models.map((model) => <option value={model.alias} key={model.alias}>{model.name} · {model.task} · {model.engine}</option>)}</select></label>
+            <label>{t("Servicio")}<select value={modelAlias} onChange={(event) => { setModelAlias(event.target.value); setFile(null); setResult(null); }}>{models.map((model) => <option value={model.alias} key={model.alias}>{model.name} · {model.task} · {model.engine}</option>)}</select></label>
             <div className="multimodal-capabilities">
               <span className="badge">{selected?.task}</span>
               <small>{selected?.input_modalities.join(" + ")} → {selected?.output_modalities.join(" + ")}</small>
               <small>{selected?.endpoint}</small>
             </div>
-            {selected?.task !== "asr" && <label>Instrucción<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={selected?.task === "image-generation" ? "Describe la imagen que quieres generar" : selected?.task === "tts" ? "Texto que se convertirá en voz" : "Introduce la petición"} required={selected?.task !== "reranking"} /></label>}
-            {selected?.task === "reranking" && <label>Documentos <small>(uno por línea)</small><textarea value={documents} onChange={(event) => setDocuments(event.target.value)} placeholder={"Primer documento\nSegundo documento"} required /></label>}
-            {needsFile && <label className="multimodal-upload">Archivo<input type="file" accept={accept} onChange={(event) => setFile(event.target.files?.[0] || null)} required /><span>{file ? `${file.name} · ${bytes(file.size)}` : `Máximo ${selected.max_input_mb} MiB`}</span></label>}
-            <button className="button primary" type="submit" disabled={busy}>{busy ? "Procesando…" : selected?.task === "video-generation" ? "Crear trabajo" : "Ejecutar"}</button>
+            {selected?.task !== "asr" && <label>{t("Instrucción")}<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={selected?.task === "image-generation" ? t("Describe la imagen que quieres generar") : selected?.task === "tts" ? t("Texto que se convertirá en voz") : t("Introduce la petición")} required={selected?.task !== "reranking"} /></label>}
+            {selected?.task === "reranking" && <label>{t("Documentos")}{" "}<small>{t("(uno por línea)")}</small><textarea value={documents} onChange={(event) => setDocuments(event.target.value)} placeholder={t("Primer documento\nSegundo documento")} required /></label>}
+            {needsFile && <label className="multimodal-upload">{t("Archivo")}<input type="file" accept={accept} onChange={(event) => setFile(event.target.files?.[0] || null)} required /><span>{file ? `${file.name} · ${bytes(file.size)}` : t("Máximo {max_input_mb} MiB", { max_input_mb: selected.max_input_mb })}</span></label>}
+            <button className="button primary" type="submit" disabled={busy}>{busy ? t("Procesando…") : selected?.task === "video-generation" ? t("Crear trabajo") : t("Ejecutar")}</button>
           </form>
         </Card>
         <Card className="multimodal-result">
-          <SectionHeading eyebrow="RESULTADO LOCAL" title={selected?.name || "Salida"} />
-          {!result && <Empty icon={<Sparkles />} title="Esperando una ejecución" text="El resultado aparecerá aquí sin registrar el contenido de tu petición." />}
-          {result?.job_id && <div className="multimodal-job"><strong>Trabajo creado</strong><code>{result.job_id}</code><small>El vídeo se procesa de forma asíncrona.</small><button className="button secondary" onClick={() => void checkVideoJob(result.job_id!)}>Consultar resultado</button></div>}
-          {imageBase64 && <img src={`data:image/png;base64,${imageBase64}`} alt="Resultado generado" />}
-          {imageUrl && <a className="button secondary" href={imageUrl} target="_blank" rel="noreferrer">Abrir {selected?.task === "video-generation" ? "vídeo" : "imagen"} generada <ExternalLink size={14} /></a>}
+          <SectionHeading eyebrow={t("RESULTADO LOCAL")} title={selected?.name || t("Salida")} />
+          {!result && <Empty icon={<Sparkles />} title={t("Esperando una ejecución")} text={t("El resultado aparecerá aquí sin registrar el contenido de tu petición.")} />}
+          {result?.job_id && <div className="multimodal-job"><strong>{t("Trabajo creado")}</strong><code>{result.job_id}</code><small>{t("El vídeo se procesa de forma asíncrona.")}</small><button className="button secondary" onClick={() => void checkVideoJob(result.job_id!)}>{t("Consultar resultado")}</button></div>}
+          {imageBase64 && <img src={`data:image/png;base64,${imageBase64}`} alt={t("Resultado generado")} />}
+          {imageUrl && <a className="button secondary" href={imageUrl} target="_blank" rel="noreferrer">{t("Abrir")}{" "}{selected?.task === "video-generation" ? t("vídeo") : t("imagen")}{" "}{t("generada")} <ExternalLink size={14} /></a>}
           {binaryUrl && result?.content_type.startsWith("audio/") && <audio src={binaryUrl} controls />}
-          {binaryUrl && result?.content_type.startsWith("image/") && <img src={binaryUrl} alt="Resultado generado" />}
+          {binaryUrl && result?.content_type.startsWith("image/") && <img src={binaryUrl} alt={t("Resultado generado")} />}
           {artifactObjectUrl && result?.content_type.startsWith("video/") && <video src={artifactObjectUrl} controls />}
           {compactResult && <pre>{compactResult}</pre>}
         </Card>
@@ -5962,7 +5961,7 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
   const available = [
     ...(config?.assistant_enabled ? [{
       value: "__assistant__",
-      label: `Asistente MyDGX · ${config.assistant_model || "automático"}`,
+      label: t("Asistente MyDGX · {value}", { value: config.assistant_model || t("automático") }),
       active: true,
     }] : []),
     ...profiles.flatMap((profile) => profile.models.filter((model) => ["chat", "vision"].includes(model.task)).map((model) => ({
@@ -6021,7 +6020,7 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
           textarea.select();
           const copied = document.execCommand("copy");
           textarea.remove();
-          if (!copied) throw new Error("Clipboard unavailable");
+          if (!copied) throw new Error(t("Portapapeles no disponible"));
         }
       } else {
         const textarea = document.createElement("textarea");
@@ -6033,23 +6032,23 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
         textarea.select();
         const copied = document.execCommand("copy");
         textarea.remove();
-        if (!copied) throw new Error("Clipboard unavailable");
+        if (!copied) throw new Error(t("Portapapeles no disponible"));
       }
-      notify("Mensaje copiado");
+      notify(t("Mensaje copiado"));
     } catch {
-      notify("No se pudo copiar el mensaje", true);
+      notify(t("No se pudo copiar el mensaje"), true);
     }
   }
 
   function clearChat() {
-    if (!window.confirm("¿Borrar todo el historial de este chat en este navegador?")) return;
+    if (!window.confirm(t("¿Borrar todo el historial de este chat en este navegador?"))) return;
     setMessages([]);
     try {
       localStorage.removeItem(historyStorageKey);
     } catch {
       // El estado en memoria ya se ha eliminado.
     }
-    notify("Historial del chat eliminado");
+    notify(t("Historial del chat eliminado"));
   }
 
   async function send(event: FormEvent) {
@@ -6076,7 +6075,7 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
       });
       setMessages((items) => [...items, {
         role: "assistant",
-        content: response.message.content || "Sin respuesta",
+        content: response.message.content || t("Sin respuesta"),
         model: response.model,
         tools: response.tools_used,
         actions: response.pending_actions,
@@ -6085,7 +6084,7 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
       const detail = (error as Error).message;
       setMessages((items) => [...items, {
         role: "assistant",
-        content: `No pude completar la consulta. ${detail}`,
+        content: t("No pude completar la consulta. {detail}", { detail: detail }),
         model: "MyDGX Copilot",
       }]);
       notify(detail, true);
@@ -6112,7 +6111,7 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
           action.id === actionId ? { ...action, status: confirm ? "confirmed" : "rejected" } : action
         )),
       })));
-      notify(confirm ? "Acción del asistente ejecutada" : "Acción rechazada");
+      notify(confirm ? t("Acción del asistente ejecutada") : t("Acción rechazada"));
     } catch (error) {
       setMessages((items) => items.map((item) => ({
         ...item,
@@ -6127,58 +6126,58 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
   return (
     <div className="chat-layout">
       <div className="chat-header">
-        <div><span className="eyebrow">ASISTENTE LOCAL</span><h2>MyDGX Copilot</h2></div>
+        <div><span className="eyebrow">{t("ASISTENTE LOCAL")}</span><h2>{t("MyDGX Copilot")}</h2></div>
         <div className="chat-header-actions">
-          {messages.length > 0 && <button className="chat-clear" type="button" onClick={clearChat} aria-label="Borrar chat completo" title="Borrar chat completo"><Trash2 size={15} /></button>}
+          {messages.length > 0 && <button className="chat-clear" type="button" onClick={clearChat} aria-label={t("Borrar chat completo")} title={t("Borrar chat completo")}><Trash2 size={15} /></button>}
           <select value={activeModel} onChange={(event) => setModel(event.target.value)}>
-            {available.length ? available.map((item) => <option key={item.value} value={item.value}>{item.label}</option>) : <option value="">Sin modelos</option>}
+            {available.length ? available.map((item) => <option key={item.value} value={item.value}>{item.label}</option>) : <option value="">{t("Sin modelos")}</option>}
           </select>
         </div>
       </div>
       <div className="messages">
         {messages.length === 0 && (
-          <div className="chat-welcome"><Sparkles /><h3>Pregunta o administra tu MyDGX</h3><p>Puede consultar telemetría, sistema, modelos, perfiles y documentación. Las acciones siempre requieren confirmación.</p>
-            {assistantUnavailable && <div className="assistant-unavailable"><TriangleAlert size={14} /><span>{assistantStatus?.remediation || "No hay un modelo local disponible"}</span></div>}
-            {assistantStatus?.ready && <small>{assistantStatus.documentation_chunks} fragmentos · {assistantStatus.read_tools?.length ?? 0} consultas · {assistantStatus.action_tools?.length ?? 0} acciones confirmadas</small>}
+          <div className="chat-welcome"><Sparkles /><h3>{t("Pregunta o administra tu MyDGX")}</h3><p>{t("Puede consultar telemetría, sistema, modelos, perfiles y documentación. Las acciones siempre requieren confirmación.")}</p>
+            {assistantUnavailable && <div className="assistant-unavailable"><TriangleAlert size={14} /><span>{assistantStatus?.remediation || t("No hay un modelo local disponible")}</span></div>}
+            {assistantStatus?.ready && <small>{assistantStatus.documentation_chunks}{" "}{t("fragmentos ·")}{" "}{assistantStatus.read_tools?.length ?? 0}{" "}{t("consultas ·")}{" "}{assistantStatus.action_tools?.length ?? 0}{" "}{t("acciones confirmadas")}</small>}
             {!assistantUnavailable && <div className="assistant-suggestions">
               {[
-                "Recomiéndame tres modelos de código que quepan en este equipo",
-                "Resume el estado del sistema y sus avisos",
-                "¿Qué perfiles y modelos tengo cargados ahora?",
-                "Busca en la documentación cómo funciona el gateway",
+                t("Recomiéndame tres modelos de código que quepan en este equipo"),
+                t("Resume el estado del sistema y sus avisos"),
+                t("¿Qué perfiles y modelos tengo cargados ahora?"),
+                t("Busca en la documentación cómo funciona el gateway"),
               ].map((suggestion) => <button type="button" key={suggestion} onClick={() => setMessage(suggestion)}>{suggestion}</button>)}
             </div>}
           </div>
         )}
         {messages.map((item, index) => (
           <div className={`message ${item.role}`} key={`${item.role}-${index}`}>
-            <span>{item.role === "user" ? "Tú" : item.model || "MyDGX Copilot"}</span>
+            <span>{item.role === "user" ? t("Tú") : item.model || "MyDGX Copilot"}</span>
             {item.role === "assistant"
               ? <MarkdownMessage content={item.content} />
               : <p>{item.content}</p>}
             <div className="message-controls">
-              <button className="message-copy" type="button" onClick={() => void copyMessage(item.content)} aria-label="Copiar mensaje" title="Copiar mensaje"><Copy size={13} /></button>
+              <button className="message-copy" type="button" onClick={() => void copyMessage(item.content)} aria-label={t("Copiar mensaje")} title={t("Copiar mensaje")}><Copy size={13} /></button>
             </div>
             {item.tools && item.tools.length > 0 && <div className="assistant-tools">
               {item.tools.map((tool, toolIndex) => <small key={`${tool.name}-${toolIndex}`} className={tool.status}>{tool.name}</small>)}
             </div>}
             {item.actions?.map((action) => <div className={`assistant-action ${action.status || "pending"}`} key={action.id}>
-              <div><ShieldCheck size={15} /><span><strong>Confirmación requerida</strong><small>{action.label}</small></span></div>
+              <div><ShieldCheck size={15} /><span><strong>{t("Confirmación requerida")}</strong><small>{action.label}</small></span></div>
               {!action.status && <div>
-                <button className="button secondary" type="button" onClick={() => resolveAction(action.id, false)}><X size={14} /> Rechazar</button>
-                <button className="button primary" type="button" onClick={() => resolveAction(action.id, true)}><CheckCircle2 size={14} /> Confirmar</button>
+                <button className="button secondary" type="button" onClick={() => resolveAction(action.id, false)}><X size={14} />{" "}{t("Rechazar")}</button>
+                <button className="button primary" type="button" onClick={() => resolveAction(action.id, true)}><CheckCircle2 size={14} />{" "}{t("Confirmar")}</button>
               </div>}
-              {action.status && <em>{action.status === "running" ? "Ejecutando…" : action.status === "confirmed" ? "Ejecutada" : action.status === "rejected" ? "Rechazada" : "No se pudo ejecutar"}</em>}
+              {action.status && <em>{action.status === "running" ? t("Ejecutando…") : action.status === "confirmed" ? t("Ejecutada") : action.status === "rejected" ? t("Rechazada") : t("No se pudo ejecutar")}</em>}
             </div>)}
           </div>
         ))}
-        {sending && <div className="message assistant"><span>{activeLabel}</span><p className="typing">Pensando<span>.</span><span>.</span><span>.</span></p></div>}
+        {sending && <div className="message assistant"><span>{activeLabel}</span><p className="typing">{t("Pensando")}<span>.</span><span>.</span><span>.</span></p></div>}
       </div>
       <form className="composer" onSubmit={send}>
-        <textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder={assistantUnavailable ? "Instala o carga un modelo para activar el asistente" : activeModel ? `Pregunta a ${activeLabel}` : "Descarga un modelo para comenzar"} disabled={!activeModel || assistantUnavailable} />
-        <button className="button primary" type="submit" disabled={!activeModel || assistantUnavailable || sending}>Enviar <ChevronRight size={16} /></button>
+        <textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder={assistantUnavailable ? t("Instala o carga un modelo para activar el asistente") : activeModel ? t("Pregunta a {activeLabel}", { activeLabel: activeLabel }) : t("Descarga un modelo para comenzar")} disabled={!activeModel || assistantUnavailable} />
+        <button className="button primary" type="submit" disabled={!activeModel || assistantUnavailable || sending}>{t("Enviar")}{" "}<ChevronRight size={16} /></button>
       </form>
-      <a className="openwebui-link" href={config?.openwebui_url} target="_blank" rel="noreferrer">Abrir experiencia avanzada en Open WebUI <ExternalLink size={14} /></a>
+      <a className="openwebui-link" href={config?.openwebui_url} target="_blank" rel="noreferrer">{t("Abrir experiencia avanzada en Open WebUI")}{" "}<ExternalLink size={14} /></a>
     </div>
   );
 }
@@ -6232,18 +6231,18 @@ function StorageView({ notify }: { notify: (message: string, error?: boolean) =>
     const timer = window.setTimeout(() => load(), 2000);
     return () => window.clearTimeout(timer);
   }, [pending, storage, load]);
-  if (!storage) return <Loading label="Leyendo discos" />;
+  if (!storage) return <Loading label={t("Leyendo discos")} />;
   const hasUsage = storage.usage_categories.length > 0;
   return (
     <div className="view-stack">
-      <SectionHeading eyebrow="NVME" title="Unidades y salud SMART" />
+      <SectionHeading eyebrow="NVME" title={t("Unidades y salud SMART")} />
       <div className="storage-grid nvme-grid">
         {storage.nvme_devices.map((device) => {
           const smart = device.smart;
           const healthy = smart.available && (smart.critical_warning ?? 0) === 0;
           const busyTime = smart.controller_busy_time == null
             ? "—"
-            : `${Math.floor(smart.controller_busy_time / 60)} h ${smart.controller_busy_time % 60} min`;
+            : t("{hours} h {minutes} min", { hours: Math.floor(smart.controller_busy_time / 60), minutes: smart.controller_busy_time % 60 });
           return (
             <Card className="storage-card nvme-card" key={device.name}>
               <div className="card-kicker">
@@ -6251,40 +6250,40 @@ function StorageView({ notify }: { notify: (message: string, error?: boolean) =>
                 {device.model || device.name}
                 <StatusDot online={device.state === "live"} />
               </div>
-              <strong>{bytes(device.capacity)} <small>{device.name} · FW {device.firmware || "—"}</small></strong>
+              <strong>{bytes(device.capacity)} <small>{device.name}{" "}{t("· FW")}{" "}{device.firmware || "—"}</small></strong>
               <div className="nvme-summary">
-                <span><Thermometer size={14} /><strong>{device.temperature == null ? "—" : `${device.temperature} °C`}</strong><small>Temperatura</small></span>
-                <span><Activity size={14} /><strong>{smart.percentage_used == null ? "—" : `${smart.percentage_used}%`}</strong><small>Vida utilizada</small></span>
-                <span><ShieldCheck size={14} /><strong>{smart.available ? (healthy ? "Correcto" : "Atención") : "Sin acceso"}</strong><small>{smart.source ?? "SMART"}</small></span>
+                <span><Thermometer size={14} /><strong>{device.temperature == null ? "—" : `${device.temperature} °C`}</strong><small>{t("Temperatura")}</small></span>
+                <span><Activity size={14} /><strong>{smart.percentage_used == null ? "—" : `${smart.percentage_used}%`}</strong><small>{t("Vida utilizada")}</small></span>
+                <span><ShieldCheck size={14} /><strong>{smart.available ? (healthy ? t("Correcto") : t("Atención")) : t("Sin acceso")}</strong><small>{smart.source ?? "SMART"}</small></span>
               </div>
               {smart.available ? (
                 <div className="nvme-details">
-                  <span>Reserva <strong>{smart.available_spare == null ? "—" : `${smart.available_spare}%`}</strong></span>
-                  <span>Horas encendido <strong>{smart.power_on_hours == null ? "—" : `${smart.power_on_hours.toLocaleString()} h`}</strong></span>
-                  <span>Uso activo <strong>{busyTime}</strong></span>
-                  <span>Ciclos encendido <strong>{smart.power_cycles?.toLocaleString() ?? "—"}</strong></span>
-                  <span>Errores de medio <strong>{smart.media_errors ?? "—"}</strong></span>
-                  <span>Entradas de error <strong>{smart.num_err_log_entries?.toLocaleString() ?? "—"}</strong></span>
-                  <span>Apagados inseguros <strong>{smart.unsafe_shutdowns ?? "—"}</strong></span>
-                  <span>Leído <strong>{smart.data_units_read == null ? "—" : bytes(smart.data_units_read * 512000)}</strong></span>
-                  <span>Escrito <strong>{smart.data_units_written == null ? "—" : bytes(smart.data_units_written * 512000)}</strong></span>
+                  <span>{t("Reserva")}{" "}<strong>{smart.available_spare == null ? "—" : `${smart.available_spare}%`}</strong></span>
+                  <span>{t("Horas encendido")}{" "}<strong>{smart.power_on_hours == null ? "—" : `${smart.power_on_hours.toLocaleString(locale)} h`}</strong></span>
+                  <span>{t("Uso activo")}{" "}<strong>{busyTime}</strong></span>
+                  <span>{t("Ciclos encendido")}{" "}<strong>{smart.power_cycles?.toLocaleString(locale) ?? "—"}</strong></span>
+                  <span>{t("Errores de medio")}{" "}<strong>{smart.media_errors ?? "—"}</strong></span>
+                  <span>{t("Entradas de error")}{" "}<strong>{smart.num_err_log_entries?.toLocaleString(locale) ?? "—"}</strong></span>
+                  <span>{t("Apagados inseguros")}{" "}<strong>{smart.unsafe_shutdowns ?? "—"}</strong></span>
+                  <span>{t("Leído")}{" "}<strong>{smart.data_units_read == null ? "—" : bytes(smart.data_units_read * 512000)}</strong></span>
+                  <span>{t("Escrito")}{" "}<strong>{smart.data_units_written == null ? "—" : bytes(smart.data_units_written * 512000)}</strong></span>
                 </div>
               ) : (
-                <small className="nvme-note">La unidad se detecta por sysfs; SMART requiere acceso al dispositivo NVMe.</small>
+                <small className="nvme-note">{t("La unidad se detecta por sysfs; SMART requiere acceso al dispositivo NVMe.")}</small>
               )}
             </Card>
           );
         })}
-        {storage.nvme_devices.length === 0 && <Card className="empty-state"><HardDrive /><strong>No se detectaron controladores NVMe</strong></Card>}
+        {storage.nvme_devices.length === 0 && <Card className="empty-state"><HardDrive /><strong>{t("No se detectaron controladores NVMe")}</strong></Card>}
       </div>
       <StorageMap storage={storage} onRefresh={() => load(true)} />
-      <SectionHeading eyebrow="USO REAL" title="Distribución del almacenamiento" />
+      <SectionHeading eyebrow={t("USO REAL")} title={t("Distribución del almacenamiento")} />
       <Card className="storage-breakdown">
         <div className="storage-breakdown-total">
-          <span><Database size={17} /><strong>Espacio ocupado clasificado</strong></span>
+          <span><Database size={17} /><strong>{t("Espacio ocupado clasificado")}</strong></span>
           <strong>{hasUsage ? bytes(storage.categorized_total) : "—"}</strong>
         </div>
-        {!hasUsage && <small className="storage-pending"><RefreshCw className="spin" size={13} /> Midiendo carpetas; puede tardar si el disco no se ha leído hace poco.</small>}
+        {!hasUsage && <small className="storage-pending"><RefreshCw className="spin" size={13} />{" "}{t("Midiendo carpetas; puede tardar si el disco no se ha leído hace poco.")}</small>}
         {storage.usage_categories.map((category) => {
           const percent = storage.categorized_total > 0
             ? Math.min(100, category.size / storage.categorized_total * 100)
@@ -6292,11 +6291,11 @@ function StorageView({ notify }: { notify: (message: string, error?: boolean) =>
           return <div className="storage-breakdown-row" data-category={category.id} key={category.id}>
             <div><span><strong>{category.label}</strong><small>{category.description}</small></span><strong>{bytes(category.size)}</strong></div>
             <div className="storage-category-bar"><span style={{ width: `${percent}%` }} /></div>
-            <small>{percent.toFixed(1)}% del espacio ocupado</small>
+            <small>{percent.toFixed(1)}{t("% del espacio ocupado")}</small>
           </div>;
         })}
       </Card>
-      <SectionHeading eyebrow="CAPACIDAD" title="Almacenamiento" />
+      <SectionHeading eyebrow={t("CAPACIDAD")} title={t("Almacenamiento")} />
       <div className="storage-grid">
         {storage.partitions.map((partition) => {
           const percent = Number(partition.percent);
@@ -6306,30 +6305,30 @@ function StorageView({ notify }: { notify: (message: string, error?: boolean) =>
             <Card className="storage-card" key={mountpoint}>
               <div className="card-kicker">
                 <HardDrive size={16} />
-                {mountpoint === "/" ? "Disco del sistema" : mountpoint}
-                <span className={`storage-kind ${kind}`}>{kind === "virtual" ? "Virtual" : kind === "physical" ? "Físico" : "Sistema"}</span>
+                {mountpoint === "/" ? t("Disco del sistema") : mountpoint}
+                <span className={`storage-kind ${kind}`}>{kind === "virtual" ? t("Virtual") : kind === "physical" ? t("Físico") : t("Sistema")}</span>
               </div>
-              <strong>{bytes(Number(partition.used))} <small>de {bytes(Number(partition.total))}</small></strong>
+              <strong>{bytes(Number(partition.used))} <small>{t("de")} {bytes(Number(partition.total))}</small></strong>
               <div className="storage-bar"><span style={{ width: `${percent}%` }} /></div>
-              <small>{percent}% utilizado · {String(partition.filesystem)} · {String(partition.device)}</small>
+              <small>{percent}{t("% utilizado ·")}{" "}{String(partition.filesystem)} · {String(partition.device)}</small>
             </Card>
           );
         })}
       </div>
-      <SectionHeading eyebrow="DISTRIBUCIÓN" title="Datos de modelos" />
+      <SectionHeading eyebrow={t("DISTRIBUCIÓN")} title={t("Datos de modelos")} />
       <Card className="storage-list">
         {storage.model_storage.map((item) => (
           <div key={String(item.path)}><div><Database size={17} /><span><strong>{String(item.name)}</strong><small>{String(item.path)}</small></span></div><strong>{bytes(Number(item.size))}</strong></div>
         ))}
       </Card>
-      <SectionHeading eyebrow="APPS DE USUARIO" title="Directorios del home" />
+      <SectionHeading eyebrow={t("APPS DE USUARIO")} title={t("Directorios del home")} />
       <Card className="storage-list">
-        {!hasUsage && <small className="storage-pending"><RefreshCw className="spin" size={13} /> Midiendo el home.</small>}
+        {!hasUsage && <small className="storage-pending"><RefreshCw className="spin" size={13} />{" "}{t("Midiendo el home.")}</small>}
         {(storage.home_directories ?? []).map((item) => (
           <div key={item.path}><div><Folder size={17} /><span><strong>{item.name}</strong><small>{item.path}</small></span></div><strong>{bytes(item.size)}</strong></div>
         ))}
         {hasUsage && (storage.home_directories ?? []).length > 0 && (
-          <small className="storage-home-note">Cada directorio excluye lo que ya cuentan Modelos, Apps y MyDGX; juntos suman «Usuario y otros».</small>
+          <small className="storage-home-note">{t("Cada directorio excluye lo que ya cuentan Modelos, Apps y MyDGX; juntos suman «Usuario y otros».")}</small>
         )}
       </Card>
     </div>
@@ -6367,8 +6366,8 @@ function StorageMap({ storage, onRefresh }: {
         description: category.description,
         ...(STORAGE_SEGMENT_STYLE[category.id] ?? { kind: "system" }),
       })),
-    ...(reserved > 0 ? [{ name: "Reservado", bytes: reserved, kind: "cache", description: "Bloques que ext4 reserva para root; no están ocupados pero tampoco disponibles para el usuario." }] : []),
-    { name: "Libre", bytes: storage.disk_free, kind: "available", description: "Espacio libre en el disco del sistema." },
+    ...(reserved > 0 ? [{ name: t("Reservado"), bytes: reserved, kind: "cache", description: t("Bloques que ext4 reserva para root; no están ocupados pero tampoco disponibles para el usuario.") }] : []),
+    { name: t("Libre"), bytes: storage.disk_free, kind: "available", description: t("Espacio libre en el disco del sistema.") },
   ];
   const updated = storage.usage_updated_at
     ? new Date(storage.usage_updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -6376,9 +6375,9 @@ function StorageMap({ storage, onRefresh }: {
   const badge = (
     <span className="storage-map-status">
       {storage.usage_pending
-        ? <><RefreshCw className="spin" size={12} /> {updated ? "Actualizando" : "Calculando"}</>
-        : updated && <>Medido a las {updated}</>}
-      <button className="icon-button" onClick={onRefresh} disabled={storage.usage_pending} title="Volver a medir las carpetas" aria-label="Volver a medir el almacenamiento">
+        ? <><RefreshCw className="spin" size={12} /> {updated ? t("Actualizando") : t("Calculando")}</>
+        : updated && <>{t("Medido a las")}{" "}{updated}</>}
+      <button className="icon-button" onClick={onRefresh} disabled={storage.usage_pending} title={t("Volver a medir las carpetas")} aria-label={t("Volver a medir el almacenamiento")}>
         <RefreshCw size={13} />
       </button>
     </span>
@@ -6387,8 +6386,8 @@ function StorageMap({ storage, onRefresh }: {
     return (
       <div className="memory-map storage-map">
         <div className="memory-map-heading">
-          <div><strong>Mapa de almacenamiento</strong>{badge}</div>
-          <small>Midiendo sistema, modelos, apps y MyDGX…</small>
+          <div><strong>{t("Mapa de almacenamiento")}</strong>{badge}</div>
+          <small>{t("Midiendo sistema, modelos, apps y MyDGX…")}</small>
         </div>
         <div className="memory-map-bar storage-map-placeholder" aria-busy="true" />
       </div>
@@ -6397,10 +6396,10 @@ function StorageMap({ storage, onRefresh }: {
   return (
     <SegmentedMap
       className="storage-map"
-      title="Mapa de almacenamiento"
+      title={t("Mapa de almacenamiento")}
       badge={badge}
-      summary={`${bytes(storage.categorized_total)} usados · ${bytes(storage.disk_free)} libres · ${bytes(total)} total`}
-      ariaLabel={`Disco del sistema: ${bytes(storage.categorized_total)} usados y ${bytes(storage.disk_free)} libres`}
+      summary={t("{used} usados · {free} libres · {total} total", { used: bytes(storage.categorized_total), free: bytes(storage.disk_free), total: bytes(total) })}
+      ariaLabel={t("Disco del sistema: {categorized_total} usados y {disk_free} libres", { categorized_total: bytes(storage.categorized_total), disk_free: bytes(storage.disk_free) })}
       total={total}
       segments={segments}
     />
@@ -6410,23 +6409,23 @@ function StorageMap({ storage, onRefresh }: {
 type BenchmarkCategoryId = "all" | "text" | "voice" | "image" | "vision" | "retrieval";
 
 const BENCHMARK_CATEGORIES: Array<{ id: BenchmarkCategoryId; label: string; icon: typeof Gauge; color: string; modalities: string[] }> = [
-  { id: "all", label: "Todos", icon: Gauge, color: "var(--accent)", modalities: [] },
-  { id: "text", label: "Texto", icon: MessageSquare, color: "#68b929", modalities: ["text-generation"] },
-  { id: "voice", label: "Voz", icon: Mic, color: "#3e8fdc", modalities: ["automatic-speech-recognition", "text-to-speech"] },
-  { id: "image", label: "Imagen y vídeo", icon: ImageIcon, color: "#c05bd6", modalities: ["image-generation", "video-generation"] },
-  { id: "vision", label: "Visión", icon: Eye, color: "#e09a2b", modalities: ["vision"] },
-  { id: "retrieval", label: "Embeddings y rerank", icon: Layers, color: "#2fb3a3", modalities: ["embeddings", "reranking"] },
+  { id: "all", label: t("Todos"), icon: Gauge, color: "var(--accent)", modalities: [] },
+  { id: "text", label: t("Texto"), icon: MessageSquare, color: "#68b929", modalities: ["text-generation"] },
+  { id: "voice", label: t("Voz"), icon: Mic, color: "#3e8fdc", modalities: ["automatic-speech-recognition", "text-to-speech"] },
+  { id: "image", label: t("Imagen y vídeo"), icon: ImageIcon, color: "#c05bd6", modalities: ["image-generation", "video-generation"] },
+  { id: "vision", label: t("Visión"), icon: Eye, color: "#e09a2b", modalities: ["vision"] },
+  { id: "retrieval", label: t("Embeddings y rerank"), icon: Layers, color: "#2fb3a3", modalities: ["embeddings", "reranking"] },
 ];
 
 const MODALITY_LABELS: Record<string, string> = {
-  "text-generation": "Generación de texto",
-  "automatic-speech-recognition": "Reconocimiento de voz",
-  "text-to-speech": "Síntesis de voz",
-  "image-generation": "Generación de imagen",
-  "video-generation": "Generación de vídeo",
-  vision: "Visión",
-  embeddings: "Embeddings",
-  reranking: "Reranking",
+  "text-generation": t("Generación de texto"),
+  "automatic-speech-recognition": t("Reconocimiento de voz"),
+  "text-to-speech": t("Síntesis de voz"),
+  "image-generation": t("Generación de imagen"),
+  "video-generation": t("Generación de vídeo"),
+  vision: t("Visión"),
+  embeddings: t("Embeddings"),
+  reranking: t("Reranking"),
 };
 
 function benchmarkCategory(modality: string) {
@@ -6453,52 +6452,52 @@ const fmtPct = (value: number) => `${value.toFixed(value >= 99.95 || value === 0
 
 const MODALITY_METRICS: Record<string, BenchmarkMetric[]> = {
   "text-generation": [
-    { key: "tps", label: "Salida", hint: "Tokens generados por segundo · media", better: "higher", value: (s) => finite(s.output_tokens_per_second?.mean), format: (v) => `${v.toFixed(1)} tok/s` },
-    { key: "ttft", label: "Primer token", hint: "TTFT p50 · menor es mejor", better: "lower", value: (s) => finite(s.ttft_ms?.p50), format: fmtMs },
-    { key: "stability", label: "Estabilidad", hint: "Variación entre repeticiones", better: "higher", value: (s) => finite(s.score_dimensions?.stability), format: (v) => `${v.toFixed(0)}/100` },
-    { key: "memory", label: "Memoria pico", hint: "Memoria unificada máxima durante el run", better: "lower", value: (s) => finite(s.resources?.max_memory_bytes), format: (v) => bytes(v) },
+    { key: "tps", label: t("Salida"), hint: t("Tokens generados por segundo · media"), better: "higher", value: (s) => finite(s.output_tokens_per_second?.mean), format: (v) => `${v.toFixed(1)} tok/s` },
+    { key: "ttft", label: t("Primer token"), hint: t("TTFT p50 · menor es mejor"), better: "lower", value: (s) => finite(s.ttft_ms?.p50), format: fmtMs },
+    { key: "stability", label: t("Estabilidad"), hint: t("Variación entre repeticiones"), better: "higher", value: (s) => finite(s.score_dimensions?.stability), format: (v) => `${v.toFixed(0)}/100` },
+    { key: "memory", label: t("Memoria pico"), hint: t("Memoria unificada máxima durante el run"), better: "lower", value: (s) => finite(s.resources?.max_memory_bytes), format: (v) => bytes(v) },
   ],
   "automatic-speech-recognition": [
-    { key: "rtf", label: "Tiempo real", hint: "RTF: proceso / duración del audio · menor es mejor", better: "lower", value: (s) => finite(s.real_time_factor?.mean), format: (v) => `${v.toFixed(3)} RTF` },
-    { key: "wer", label: "Error palabras", hint: "WER frente al fixture · menor es mejor", better: "lower", value: (s) => pct(s.word_error_rate, 100), format: fmtPct },
-    { key: "cer", label: "Error caracteres", hint: "CER · menor es mejor", better: "lower", value: (s) => pct(s.character_error_rate, 100), format: fmtPct },
-    { key: "latency", label: "Latencia p50", hint: "Tiempo total por audio", better: "lower", value: (s) => finite(s.total_ms?.p50), format: fmtMs },
+    { key: "rtf", label: t("Tiempo real"), hint: t("RTF: proceso / duración del audio · menor es mejor"), better: "lower", value: (s) => finite(s.real_time_factor?.mean), format: (v) => `${v.toFixed(3)} RTF` },
+    { key: "wer", label: t("Error palabras"), hint: t("WER frente al fixture · menor es mejor"), better: "lower", value: (s) => pct(s.word_error_rate, 100), format: fmtPct },
+    { key: "cer", label: t("Error caracteres"), hint: t("CER · menor es mejor"), better: "lower", value: (s) => pct(s.character_error_rate, 100), format: fmtPct },
+    { key: "latency", label: t("Latencia p50"), hint: t("Tiempo total por audio"), better: "lower", value: (s) => finite(s.total_ms?.p50), format: fmtMs },
   ],
   "text-to-speech": [
-    { key: "rtf", label: "Tiempo real", hint: "RTF: síntesis / duración del audio · menor es mejor", better: "lower", value: (s) => finite(s.real_time_factor?.mean), format: (v) => `${v.toFixed(3)} RTF` },
-    { key: "intelligibility", label: "Inteligibilidad", hint: "Round-trip con Whisper local", better: "higher", value: (s) => (s.intelligibility?.available ? pct(1 - Number(s.intelligibility.word_error_rate ?? 1), 100) : null), format: fmtPct },
-    { key: "integrity", label: "Audio íntegro", hint: "WAV válido y decodificable", better: "higher", value: (s) => finite(s.audio_validation?.integrity_percent), format: fmtPct },
-    { key: "latency", label: "Latencia p50", hint: "Tiempo total por frase", better: "lower", value: (s) => finite(s.total_ms?.p50), format: fmtMs },
+    { key: "rtf", label: t("Tiempo real"), hint: t("RTF: síntesis / duración del audio · menor es mejor"), better: "lower", value: (s) => finite(s.real_time_factor?.mean), format: (v) => `${v.toFixed(3)} RTF` },
+    { key: "intelligibility", label: t("Inteligibilidad"), hint: t("Round-trip con Whisper local"), better: "higher", value: (s) => (s.intelligibility?.available ? pct(1 - Number(s.intelligibility.word_error_rate ?? 1), 100) : null), format: fmtPct },
+    { key: "integrity", label: t("Audio íntegro"), hint: t("WAV válido y decodificable"), better: "higher", value: (s) => finite(s.audio_validation?.integrity_percent), format: fmtPct },
+    { key: "latency", label: t("Latencia p50"), hint: t("Tiempo total por frase"), better: "lower", value: (s) => finite(s.total_ms?.p50), format: fmtMs },
   ],
   "image-generation": [
-    { key: "seconds", label: "Generación", hint: "Tiempo total p50 · menor es mejor", better: "lower", value: (s) => finite(s.total_ms?.p50 ?? s.total_ms?.mean), format: fmtMs },
-    { key: "repro", label: "Reproducible", hint: "Coincidencia de píxeles con semilla fija", better: "higher", value: (s) => finite(s.image_validation?.pixel_reproducibility_percent), format: fmtPct },
-    { key: "png", label: "PNG íntegro", hint: "Imágenes válidas", better: "higher", value: (s) => finite(s.image_validation?.png_integrity_percent), format: fmtPct },
-    { key: "resolution", label: "Resolución", hint: "Resolución esperada", better: "higher", value: (s) => finite(s.image_validation?.expected_resolution_percent), format: fmtPct },
+    { key: "seconds", label: t("Generación"), hint: t("Tiempo total p50 · menor es mejor"), better: "lower", value: (s) => finite(s.total_ms?.p50 ?? s.total_ms?.mean), format: fmtMs },
+    { key: "repro", label: t("Reproducible"), hint: t("Coincidencia de píxeles con semilla fija"), better: "higher", value: (s) => finite(s.image_validation?.pixel_reproducibility_percent), format: fmtPct },
+    { key: "png", label: t("PNG íntegro"), hint: t("Imágenes válidas"), better: "higher", value: (s) => finite(s.image_validation?.png_integrity_percent), format: fmtPct },
+    { key: "resolution", label: t("Resolución"), hint: t("Resolución esperada"), better: "higher", value: (s) => finite(s.image_validation?.expected_resolution_percent), format: fmtPct },
   ],
   "video-generation": [
-    { key: "seconds", label: "Generación", hint: "Tiempo total p50 · menor es mejor", better: "lower", value: (s) => finite(s.total_ms?.p50 ?? s.total_ms?.mean), format: fmtMs },
-    { key: "repro", label: "Reproducible", hint: "Firma perceptual o exacta con semilla fija", better: "higher", value: (s) => finite(s.video_validation?.perceptual_reproducibility_percent ?? s.video_validation?.exact_reproducibility_percent), format: fmtPct },
-    { key: "container", label: "Contenedor", hint: "Vídeo decodificable", better: "higher", value: (s) => finite(s.video_validation?.container_integrity_percent), format: fmtPct },
-    { key: "size", label: "Tamaño medio", hint: "Tamaño del vídeo generado", better: "lower", value: (s) => finite(s.output_size_bytes?.mean), format: (v) => bytes(v) },
+    { key: "seconds", label: t("Generación"), hint: t("Tiempo total p50 · menor es mejor"), better: "lower", value: (s) => finite(s.total_ms?.p50 ?? s.total_ms?.mean), format: fmtMs },
+    { key: "repro", label: t("Reproducible"), hint: t("Firma perceptual o exacta con semilla fija"), better: "higher", value: (s) => finite(s.video_validation?.perceptual_reproducibility_percent ?? s.video_validation?.exact_reproducibility_percent), format: fmtPct },
+    { key: "container", label: t("Contenedor"), hint: t("Vídeo decodificable"), better: "higher", value: (s) => finite(s.video_validation?.container_integrity_percent), format: fmtPct },
+    { key: "size", label: t("Tamaño medio"), hint: t("Tamaño del vídeo generado"), better: "lower", value: (s) => finite(s.output_size_bytes?.mean), format: (v) => bytes(v) },
   ],
   vision: [
-    { key: "latency", label: "Latencia p50", hint: "Tiempo total · menor es mejor", better: "lower", value: (s) => finite(s.total_ms?.p50), format: fmtMs },
-    { key: "recall", label: "Conceptos", hint: "Recall de conceptos visuales esperados", better: "higher", value: (s) => pct(s.vision_quality?.normalized_concept_recall, 100), format: fmtPct },
-    { key: "reliability", label: "Fiabilidad", hint: "Muestras válidas", better: "higher", value: (s) => finite(s.reliability_percent), format: fmtPct },
-    { key: "tps", label: "Salida", hint: "Tokens por segundo", better: "higher", value: (s) => finite(s.output_tokens_per_second?.mean), format: (v) => `${v.toFixed(1)} tok/s` },
+    { key: "latency", label: t("Latencia p50"), hint: t("Tiempo total · menor es mejor"), better: "lower", value: (s) => finite(s.total_ms?.p50), format: fmtMs },
+    { key: "recall", label: t("Conceptos"), hint: t("Recall de conceptos visuales esperados"), better: "higher", value: (s) => pct(s.vision_quality?.normalized_concept_recall, 100), format: fmtPct },
+    { key: "reliability", label: t("Fiabilidad"), hint: t("Muestras válidas"), better: "higher", value: (s) => finite(s.reliability_percent), format: fmtPct },
+    { key: "tps", label: t("Salida"), hint: t("Tokens por segundo"), better: "higher", value: (s) => finite(s.output_tokens_per_second?.mean), format: (v) => `${v.toFixed(1)} tok/s` },
   ],
   embeddings: [
-    { key: "items", label: "Throughput", hint: "Elementos vectorizados por segundo", better: "higher", value: (s) => finite(s.items_per_second?.mean), format: (v) => `${v.toFixed(1)}/s` },
-    { key: "pairs", label: "Calidad", hint: "Pares positivos separados de negativos", better: "higher", value: (s) => pct(s.semantic_quality?.pair_accuracy, 100), format: fmtPct },
-    { key: "margin", label: "Margen", hint: "Margen semántico medio", better: "higher", value: (s) => finite(s.semantic_quality?.mean_margin), format: (v) => v.toFixed(3) },
-    { key: "latency", label: "Latencia p50", hint: "Tiempo total", better: "lower", value: (s) => finite(s.total_ms?.p50), format: fmtMs },
+    { key: "items", label: t("Throughput"), hint: t("Elementos vectorizados por segundo"), better: "higher", value: (s) => finite(s.items_per_second?.mean), format: (v) => `${v.toFixed(1)}/s` },
+    { key: "pairs", label: t("Calidad"), hint: t("Pares positivos separados de negativos"), better: "higher", value: (s) => pct(s.semantic_quality?.pair_accuracy, 100), format: fmtPct },
+    { key: "margin", label: t("Margen"), hint: t("Margen semántico medio"), better: "higher", value: (s) => finite(s.semantic_quality?.mean_margin), format: (v) => v.toFixed(3) },
+    { key: "latency", label: t("Latencia p50"), hint: t("Tiempo total"), better: "lower", value: (s) => finite(s.total_ms?.p50), format: fmtMs },
   ],
   reranking: [
-    { key: "ndcg", label: "NDCG", hint: "Calidad de ordenación", better: "higher", value: (s) => pct(s.ranking_quality?.ndcg_mean, 100), format: fmtPct },
-    { key: "latency", label: "Latencia p50", hint: "Tiempo total · menor es mejor", better: "lower", value: (s) => finite(s.total_ms?.p50), format: fmtMs },
-    { key: "mrr", label: "MRR", hint: "Primer resultado relevante", better: "higher", value: (s) => pct(s.ranking_quality?.mrr_mean, 100), format: fmtPct },
-    { key: "reliability", label: "Fiabilidad", hint: "Muestras válidas", better: "higher", value: (s) => finite(s.reliability_percent), format: fmtPct },
+    { key: "ndcg", label: "NDCG", hint: t("Calidad de ordenación"), better: "higher", value: (s) => pct(s.ranking_quality?.ndcg_mean, 100), format: fmtPct },
+    { key: "latency", label: t("Latencia p50"), hint: t("Tiempo total · menor es mejor"), better: "lower", value: (s) => finite(s.total_ms?.p50), format: fmtMs },
+    { key: "mrr", label: "MRR", hint: t("Primer resultado relevante"), better: "higher", value: (s) => pct(s.ranking_quality?.mrr_mean, 100), format: fmtPct },
+    { key: "reliability", label: t("Fiabilidad"), hint: t("Muestras válidas"), better: "higher", value: (s) => finite(s.reliability_percent), format: fmtPct },
   ],
 };
 
@@ -6526,7 +6525,7 @@ function shortModelName(run: BenchmarkRun) {
 function parameterLabel(info?: BenchmarkModelInfo) {
   if (!info?.parameters_b) return "";
   const total = info.parameters_b >= 1 ? `${info.parameters_b}B` : `${Math.round(info.parameters_b * 1000)}M`;
-  return info.active_parameters_b ? `${total} · ${info.active_parameters_b}B activos` : total;
+  return info.active_parameters_b ? t("{total} · {active}B activos", { total, active: info.active_parameters_b }) : total;
 }
 
 function compactCount(value?: number | null) {
@@ -6569,7 +6568,7 @@ function BenchmarkModalityChartsView({ modality, runs }: { modality: string; run
             <LabelList dataKey={key} position="right" formatter={(value: unknown) => format(Number(value))} style={{ fontSize: 12, fill: "var(--text-secondary)" }} />
           </Bar>
         </BarChart>
-      </ResponsiveContainer> : <small className="benchmark-chart-empty">Sin datos medidos</small>}
+      </ResponsiveContainer> : <small className="benchmark-chart-empty">{t("Sin datos medidos")}</small>}
     </Card>;
   };
   const scatter = rows.filter((row) => row.primary != null && row.secondary != null);
@@ -6577,15 +6576,15 @@ function BenchmarkModalityChartsView({ modality, runs }: { modality: string; run
     <header>
       <span className="benchmark-modality-icon" style={{ "--category": color } as CSSProperties}><ModalityIcon modality={modality} size={17} /></span>
       <strong>{MODALITY_LABELS[modality] ?? modality}</strong>
-      <small>{runs.length} modelo{runs.length === 1 ? "" : "s"} · último resultado válido por artefacto</small>
+      <small>{runs.length}{" "}{runs.length === 1 ? t("modelo") : t("modelos")}{" "}{t("· último resultado válido por artefacto")}</small>
     </header>
     <div className="benchmark-chart-grid three">
-      {bar("score", "Ranking", "Score MyDGX /100 · mayor es mejor", "higher", (value) => `${value.toFixed(0)}`, color)}
+      {bar("score", t("Ranking"), t("Score MyDGX /100 · mayor es mejor"), "higher", (value) => `${value.toFixed(0)}`, color)}
       {bar("primary", primary.label, primary.hint, primary.better, primary.format, color)}
       {bar("secondary", secondary.label, secondary.hint, secondary.better, secondary.format, "var(--blue)")}
     </div>
     {scatter.length >= 2 && <Card className="benchmark-chart">
-      <div><strong>{primary.label} frente a {secondary.label.toLowerCase()}</strong><small>Cada burbuja es un modelo; su tamaño es el peso en disco. Mejor: {primary.better === "higher" ? "derecha" : "izquierda"} y {secondary.better === "higher" ? "arriba" : "abajo"}.</small></div>
+      <div><strong>{primary.label}{" "}{t("frente a")}{" "}{secondary.label.toLowerCase()}</strong><small>{t("Cada burbuja es un modelo; su tamaño es el peso en disco. Mejor:")}{" "}{primary.better === "higher" ? t("derecha") : t("izquierda")}{" "}{t("y")}{" "}{secondary.better === "higher" ? t("arriba") : t("abajo")}.</small></div>
       <ResponsiveContainer width="100%" height={260}>
         <ScatterChart margin={{ top: 12, right: 24, left: 4, bottom: 12 }}>
           <CartesianGrid stroke="var(--border)" />
@@ -6594,7 +6593,7 @@ function BenchmarkModalityChartsView({ modality, runs }: { modality: string; run
           <ZAxis type="number" dataKey="size" range={[60, 600]} name="GB" />
           <Tooltip cursor={{ strokeDasharray: "3 3" }} content={({ payload }) => {
             const row = payload?.[0]?.payload as typeof rows[number] | undefined;
-            return row ? <div className="benchmark-tooltip"><strong>{row.name}</strong><span>{primary.label}: {primary.format(Number(row.primary))}</span><span>{secondary.label}: {secondary.format(Number(row.secondary))}</span><span>Disco: {row.size.toFixed(1)} GB · score {row.score}</span></div> : null;
+            return row ? <div className="benchmark-tooltip"><strong>{row.name}</strong><span>{primary.label}: {primary.format(Number(row.primary))}</span><span>{secondary.label}: {secondary.format(Number(row.secondary))}</span><span>{t("Disco:")}{" "}{row.size.toFixed(1)}{" "}{t("GB · score")}{" "}{row.score}</span></div> : null;
           }} />
           <Scatter data={scatter} fill={color} fillOpacity={0.7} isAnimationActive={false}>
             <LabelList dataKey="name" position="top" style={{ fontSize: 11, fill: "var(--text-secondary)" }} />
@@ -6635,14 +6634,14 @@ function BenchmarkEfficiencyCharts({ runs }: { runs: BenchmarkRun[] }) {
     const active = minActive * (maxActive / minActive) ** (index / 23);
     return { active, tps: median / active };
   });
-  const params = (row: typeof rows[number]) => `${row.estimated ? "≈" : ""}${row.total}B${row.moe ? ` · ${row.active}B activos (MoE)` : ""}`;
+  const params = (row: typeof rows[number]) => `${row.estimated ? "≈" : ""}${row.total}B${row.moe ? t(" · {active}B activos (MoE)", { active: row.active }) : ""}`;
   const tooltip = ({ payload }: { payload?: ReadonlyArray<{ payload?: unknown }> }) => {
     const row = payload?.[0]?.payload as typeof rows[number] | undefined;
     return row && "perParameter" in row ? <div className="benchmark-tooltip">
       <strong>{row.name}</strong>
       <span>{params(row)} · {row.quantization}</span>
-      <span>{row.tps.toFixed(1)} tok/s · {row.perParameter.toFixed(0)} B·tok/s</span>
-      {row.bandwidthUse != null && <span>{row.bandwidthUse.toFixed(0)} % de {row.bandwidth} GB/s</span>}
+      <span>{row.tps.toFixed(1)}{" "}{t("tok/s ·")}{" "}{row.perParameter.toFixed(0)}{" "}{t("B·tok/s")}</span>
+      {row.bandwidthUse != null && <span>{row.bandwidthUse.toFixed(0)}{" "}{t("% de")}{" "}{row.bandwidth}{" "}{t("GB/s")}</span>}
     </div> : null;
   };
   const ranking = (key: "perParameter" | "bandwidthUse", title: string, hint: string, format: (value: number) => string) => {
@@ -6665,15 +6664,15 @@ function BenchmarkEfficiencyCharts({ runs }: { runs: BenchmarkRun[] }) {
   };
   return <>
     <div className="benchmark-chart-grid">
-      {ranking("perParameter", "Eficiencia por parámetro", "tok/s × miles de millones de parámetros activos: cuánto modelo mueve por segundo. Quita la ventaja de ser pequeño · mayor es mejor", (value) => `${value.toFixed(0)} B·tok/s`)}
-      {ranking("bandwidthUse", "Aprovechamiento de la memoria", "tok/s × GB de pesos leídos por token ÷ ancho de banda del GB10. Descuenta también la cuantización; 100 % es el límite físico", (value) => `${value.toFixed(0)} %`)}
+      {ranking("perParameter", t("Eficiencia por parámetro"), t("tok/s × miles de millones de parámetros activos: cuánto modelo mueve por segundo. Quita la ventaja de ser pequeño · mayor es mejor"), (value) => `${value.toFixed(0)} B·tok/s`)}
+      {ranking("bandwidthUse", t("Aprovechamiento de la memoria"), t("tok/s × GB de pesos leídos por token ÷ ancho de banda del GB10. Descuenta también la cuantización; 100 % es el límite físico"), (value) => `${value.toFixed(0)} %`)}
     </div>
     <Card className="benchmark-chart">
-      <div><strong>Velocidad frente a parámetros activos</strong><small>Escalas logarítmicas. La línea discontinua es la eficiencia mediana ({median.toFixed(0)} B·tok/s): por encima, más rápido de lo que le tocaría por su tamaño. Azul: MoE · verde: denso.</small></div>
+      <div><strong>{t("Velocidad frente a parámetros activos")}</strong><small>{t("Escalas logarítmicas. La línea discontinua es la eficiencia mediana (")}{median.toFixed(0)}{" "}{t("B·tok/s): por encima, más rápido de lo que le tocaría por su tamaño. Azul: MoE · verde: denso.")}</small></div>
       <ResponsiveContainer width="100%" height={300}>
         <ScatterChart margin={{ top: 16, right: 24, left: 4, bottom: 12 }}>
           <CartesianGrid stroke="var(--border)" />
-          <XAxis type="number" dataKey="active" name="Parámetros activos" scale="log" domain={[minActive, maxActive]} allowDataOverflow tickFormatter={(value) => `${Number(value) >= 10 ? Number(value).toFixed(0) : Number(value).toFixed(1)}B`} tick={{ fontSize: 11 }} />
+          <XAxis type="number" dataKey="active" name={t("Parámetros activos")} scale="log" domain={[minActive, maxActive]} allowDataOverflow tickFormatter={(value) => `${Number(value) >= 10 ? Number(value).toFixed(0) : Number(value).toFixed(1)}B`} tick={{ fontSize: 11 }} />
           <YAxis type="number" dataKey="tps" name="tok/s" scale="log" domain={["auto", "auto"]} tickFormatter={(value) => `${Number(value).toFixed(0)}`} width={48} tick={{ fontSize: 11 }} />
           <Tooltip cursor={{ strokeDasharray: "3 3" }} content={tooltip} />
           <Scatter data={curve} line={{ stroke: "var(--text-muted)", strokeDasharray: "5 4" }} shape={() => <g />} isAnimationActive={false} legendType="none" />
@@ -6708,16 +6707,16 @@ function BenchmarkModelCard({
   const metrics = benchmarkMetrics(modality);
   const history = runs.filter((item) => item.id !== run.id);
   const trend = [...runs].filter((item) => item.valid && item.score != null).reverse()
-    .map((item) => ({ date: new Date(item.created_at).toLocaleDateString(), score: Math.round(Number(item.score)) }));
+    .map((item) => ({ date: new Date(item.created_at).toLocaleDateString(locale), score: Math.round(Number(item.score)) }));
   const facts = [
-    { label: "Tamaño", value: bytes(run.artifact_size) },
-    { label: "Parámetros", value: parameterLabel(info) },
-    { label: "Cuantización", value: run.quantization },
-    { label: "Arquitectura", value: run.architecture },
-    { label: "Memoria estimada", value: info?.estimated_memory_mb ? bytes(info.estimated_memory_mb * 1024 * 1024) : "" },
-    { label: "Licencia", value: info?.license },
-    { label: "Idiomas", value: info?.languages.slice(0, 4).join(", ") },
-    { label: "Modelo base", value: info?.base_model },
+    { label: t("Tamaño"), value: bytes(run.artifact_size) },
+    { label: t("Parámetros"), value: parameterLabel(info) },
+    { label: t("Cuantización"), value: run.quantization },
+    { label: t("Arquitectura"), value: run.architecture },
+    { label: t("Memoria estimada"), value: info?.estimated_memory_mb ? bytes(info.estimated_memory_mb * 1024 * 1024) : "" },
+    { label: t("Licencia"), value: info?.license },
+    { label: t("Idiomas"), value: info?.languages.slice(0, 4).join(", ") },
+    { label: t("Modelo base"), value: info?.base_model },
   ].filter((fact) => fact.value);
   return <Card className={`benchmark-model-card-v2 ${run.valid ? "" : "invalid"}`} >
     <div className="bmc-hero" style={{ "--category": category.color } as CSSProperties}>
@@ -6726,11 +6725,11 @@ function BenchmarkModelCard({
         <span className="bmc-kicker">{MODALITY_LABELS[modality] ?? modality}{info?.author ? ` · ${info.author}` : ""}</span>
         <strong title={run.source_id}>{shortModelName(run)}</strong>
         <div className="bmc-badges">
-          <span className={`badge ${run.valid ? "live" : ""}`}>{run.valid ? "Válido" : run.status}</span>
-          {run.summary.score_provisional ? <span className="badge" title="Con una sola repetición no se puede medir la estabilidad">Provisional</span> : null}
+          <span className={`badge ${run.valid ? "live" : ""}`}>{run.valid ? t("Válido") : run.status}</span>
+          {run.summary.score_provisional ? <span className="badge" title={t("Con una sola repetición no se puede medir la estabilidad")}>{t("Provisional")}</span> : null}
           {parameterLabel(info) && <span className="badge">{parameterLabel(info)}</span>}
           {run.quantization && <span className="badge">{run.quantization}</span>}
-          {run.imported ? <span className="badge">Importado</span> : null}
+          {run.imported ? <span className="badge">{t("Importado")}</span> : null}
           {runs.length > 1 && <span className="badge">{runs.length} runs</span>}
         </div>
       </div>
@@ -6747,7 +6746,7 @@ function BenchmarkModelCard({
           <small>{metric.label}</small>
           <strong>{value == null ? "—" : metric.format(value)}</strong>
           <span className="bmc-meter"><i style={{ width: `${(relative ?? 0) * 100}%`, background: category.color }} /></span>
-          <em>{relative == null ? "sin comparación" : relative >= 0.999 ? "mejor de su categoría" : `${Math.round(relative * 100)}% del mejor`}</em>
+          <em>{relative == null ? t("sin comparación") : relative >= 0.999 ? t("mejor de su categoría") : t("{round}% del mejor", { round: Math.round(relative * 100) })}</em>
         </div>;
       })}
     </div>
@@ -6756,10 +6755,10 @@ function BenchmarkModelCard({
         {facts.map((fact) => <span key={fact.label}><dt>{fact.label}</dt><dd title={String(fact.value)}>{fact.value}</dd></span>)}
       </dl>
       {trend.length > 1 && <div className="bmc-trend">
-        <small>Evolución del score</small>
+        <small>{t("Evolución del score")}</small>
         <ResponsiveContainer width="100%" height={56}>
           <AreaChart data={trend} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
-            <Tooltip formatter={(value) => [`${value}/100`, "Score"]} labelFormatter={(label) => String(label)} />
+            <Tooltip formatter={(value) => [`${value}/100`, t("Score")]} labelFormatter={(label) => String(label)} />
             <Area type="monotone" dataKey="score" stroke={category.color} fill={category.color} fillOpacity={0.18} strokeWidth={2} isAnimationActive={false} />
           </AreaChart>
         </ResponsiveContainer>
@@ -6771,19 +6770,19 @@ function BenchmarkModelCard({
       {info?.downloads ? <span className="bmc-tag"><Download size={11} /> {compactCount(info.downloads)}</span> : null}
       {info?.likes ? <span className="bmc-tag"><Star size={11} /> {compactCount(info.likes)}</span> : null}
     </div> : null}
-    {!run.valid && <em className="bmc-invalid">{run.invalid_reason || "Resultado excluido de comparativas"}</em>}
+    {!run.valid && <em className="bmc-invalid">{run.invalid_reason || t("Resultado excluido de comparativas")}</em>}
     <div className="bmc-footer">
-      <small>{run.protocol_name} · {new Date(run.created_at).toLocaleString()} · {run.artifact_hash.slice(0, 10)}…</small>
+      <small>{run.protocol_name} · {new Date(run.created_at).toLocaleString(locale)} · {run.artifact_hash.slice(0, 10)}…</small>
       <div className="benchmark-run-actions">
-        <button className="icon-button" disabled={active || rerunning} title="Ejecutar de nuevo y conservar el histórico" aria-label={`Volver a ejecutar benchmark de ${run.source_id}`} onClick={onRerun}><RefreshCw className={rerunning ? "spin" : ""} size={15} /></button>
-        <button className="button secondary" disabled={detailLoading} onClick={onOpen}><Info size={14} /> Ficha completa</button>
-        <button className="icon-button" aria-label="Exportar benchmark" onClick={onExport}><Download size={15} /></button>
+        <button className="icon-button" disabled={active || rerunning} title={t("Ejecutar de nuevo y conservar el histórico")} aria-label={t("Volver a ejecutar benchmark de {source_id}", { source_id: run.source_id })} onClick={onRerun}><RefreshCw className={rerunning ? "spin" : ""} size={15} /></button>
+        <button className="button secondary" disabled={detailLoading} onClick={onOpen}><Info size={14} />{" "}{t("Ficha completa")}</button>
+        <button className="icon-button" aria-label={t("Exportar benchmark")} onClick={onExport}><Download size={15} /></button>
       </div>
     </div>
     {history.length > 0 && <details className="benchmark-history">
-      <summary>Histórico del artefacto ({history.length})</summary>
+      <summary>{t("Histórico del artefacto (")}{history.length})</summary>
       {history.map((item) => <button key={item.id} type="button" onClick={() => onOpenRun(item.id)}>
-        <span>{new Date(item.created_at).toLocaleString()}</span>
+        <span>{new Date(item.created_at).toLocaleString(locale)}</span>
         <span>{item.valid ? `${Math.round(Number(item.score ?? 0))}/100` : item.status}</span>
         <span>{(() => { const value = metrics[0].value(item.summary); return value == null ? "—" : metrics[0].format(value); })()}</span>
         <span>{item.runtime_hash.slice(0, 8)}</span>
@@ -6870,8 +6869,8 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
 
   async function rerunBenchmark(run: BenchmarkRun) {
     if (!window.confirm(
-      `Se volverá a ejecutar el benchmark de ${run.source_id}. El resultado anterior se conservará `
-      + "en el histórico y la inferencia quedará pausada durante la medición. ¿Continuar?",
+      t("Se volverá a ejecutar el benchmark de {source_id}. El resultado anterior se conservará ", { source_id: run.source_id })
+      + t("en el histórico y la inferencia quedará pausada durante la medición. ¿Continuar?"),
     )) return;
     setRerunningArtifact(run.artifact_hash);
     try {
@@ -6884,7 +6883,7 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
           strict_isolation: strictIsolation,
         }),
       });
-      notify(`Nuevo benchmark encolado: ${run.source_id}`);
+      notify(t("Nuevo benchmark encolado: {source_id}", { source_id: run.source_id }));
       await load();
     } catch (error) {
       notify((error as Error).message, true);
@@ -6904,10 +6903,10 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
       0,
     );
     const confirmed = window.confirm(
-      `La suite medirá ${selectedCandidates.length} modelo(s) (${bytes(totalSize)} en disco). `
-      + "Puede tardar muchas horas. Durante todo el proceso el chat, el gateway y los perfiles "
-      + "no estarán disponibles. MyDGX descargará todos los modelos de memoria, medirá uno por "
-      + "uno y restaurará el estado actual al terminar o al detener la suite. ¿Continuar?",
+      t("La suite medirá {length} modelo(s) ({totalSize} en disco). ", { length: selectedCandidates.length, totalSize: bytes(totalSize) })
+      + t("Puede tardar muchas horas. Durante todo el proceso el chat, el gateway y los perfiles ")
+      + t("no estarán disponibles. MyDGX descargará todos los modelos de memoria, medirá uno por ")
+      + t("uno y restaurará el estado actual al terminar o al detener la suite. ¿Continuar?"),
     );
     if (!confirmed) return;
     setSuiteAction("starting");
@@ -6919,7 +6918,7 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
           candidate_keys: selectedCandidates.map((item) => item.candidate_key),
         }),
       });
-      notify("Suite de benchmarks iniciada");
+      notify(t("Suite de benchmarks iniciada"));
       await load();
     } catch (error) {
       notify((error as Error).message, true);
@@ -6931,13 +6930,13 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
   async function stopSuite() {
     if (!data?.suite) return;
     if (!window.confirm(
-      "Se detendrá la muestra actual y MyDGX restaurará los perfiles y modelos que estaban "
-      + "cargados antes de empezar. La restauración puede tardar unos minutos. ¿Detener la suite?",
+      t("Se detendrá la muestra actual y MyDGX restaurará los perfiles y modelos que estaban ")
+      + t("cargados antes de empezar. La restauración puede tardar unos minutos. ¿Detener la suite?"),
     )) return;
     setSuiteAction("stopping");
     try {
       await api(`/api/benchmarks/suite/${data.suite.id}/stop`, { method: "POST" });
-      notify("Detención solicitada; restaurando el estado anterior");
+      notify(t("Detención solicitada; restaurando el estado anterior"));
       await load();
     } catch (error) {
       notify((error as Error).message, true);
@@ -6949,7 +6948,7 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
   async function skipQueueEntry(entryId: string) {
     try {
       await api(`/api/benchmarks/queue/${entryId}/skip`, { method: "POST" });
-      notify("Benchmark automático descartado");
+      notify(t("Benchmark automático descartado"));
       await load();
     } catch (error) {
       notify((error as Error).message, true);
@@ -6959,7 +6958,7 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
   async function cancelRun(jobId: string) {
     try {
       await api(`/api/jobs/${jobId}/cancel`, { method: "POST" });
-      notify("Cancelación solicitada");
+      notify(t("Cancelación solicitada"));
     } catch (error) {
       notify((error as Error).message, true);
     }
@@ -6986,7 +6985,7 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
       anchor.download = `mydgx-benchmark-${runId}.json`;
       anchor.click();
       URL.revokeObjectURL(url);
-      notify("Benchmark exportado");
+      notify(t("Benchmark exportado"));
     } catch (error) {
       notify((error as Error).message, true);
     }
@@ -6995,32 +6994,32 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
   async function importRun(file: File | undefined) {
     if (!file) return;
     try {
-      if (file.size > 10 * 1024 * 1024) throw new Error("El bundle supera 10 MiB");
+      if (file.size > 10 * 1024 * 1024) throw new Error(t("El bundle supera 10 MiB"));
       const bundle = JSON.parse(await file.text()) as Record<string, unknown>;
       const result = await api<{ imported: boolean; duplicate: boolean }>("/api/benchmarks/import", {
         method: "POST",
         body: JSON.stringify({ bundle }),
       });
-      notify(result.duplicate ? "El benchmark ya existía" : "Benchmark importado");
+      notify(result.duplicate ? t("El benchmark ya existía") : t("Benchmark importado"));
       await load();
     } catch (error) {
       notify((error as Error).message, true);
     }
   }
 
-  if (loading && !data) return <Loading label="Cargando benchmarks" />;
-  if (!data) return <Empty icon={<Gauge />} title="Benchmarks no disponibles" text="No se pudo consultar la base de benchmarks." />;
+  if (loading && !data) return <Loading label={t("Cargando benchmarks")} />;
+  if (!data) return <Empty icon={<Gauge />} title={t("Benchmarks no disponibles")} text={t("No se pudo consultar la base de benchmarks.")} />;
 
   const modalityOf = (run: BenchmarkRun) => data.protocols.find((protocol) => protocol.id === run.protocol_id)?.modality ?? "text-generation";
   const validRuns = data.runs.filter((run) => run.status === "completed" && run.valid);
   // Charts compare one device across software updates (e.g. a new llama.cpp) by default;
   // the selector narrows them to a single exact environment.
-  const deviceOf = (run: BenchmarkRun) => String(run.hardware.device_model || run.hardware.product_name || "Equipo");
+  const deviceOf = (run: BenchmarkRun) => String(run.hardware.device_model || run.hardware.product_name || t("Equipo"));
   const comparisonGroups = Array.from(validRuns.reduce((groups, run) => {
     const device = deviceOf(run);
     for (const [key, label] of [
-      [`device|${device}`, `${device} · todas las versiones`],
-      [`env|${run.environment_hash}`, `${device} · entorno ${run.environment_hash.slice(0, 8)}`],
+      [`device|${device}`, t("{device} · todas las versiones", { device: device })],
+      [`env|${run.environment_hash}`, t("{device} · entorno {hash}", { device, hash: run.environment_hash.slice(0, 8) })],
     ]) {
       const current = groups.get(key);
       if (current) {
@@ -7131,36 +7130,34 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
   return (
     <div className="view-stack benchmarks-view">
       <SectionHeading
-        eyebrow="MEDICIÓN REPRODUCIBLE"
-        title="Benchmarks"
-        action={<button className="icon-button" onClick={() => void load()} aria-label="Actualizar benchmarks"><RefreshCw size={16} /></button>}
+        eyebrow={t("MEDICIÓN REPRODUCIBLE")}
+        title={t("Benchmarks")}
+        action={<button className="icon-button" onClick={() => void load()} aria-label={t("Actualizar benchmarks")}><RefreshCw size={16} /></button>}
       />
 
       <Card className="benchmark-explainer">
         <div className="bx-hero">
           <div className="bx-hero-icon"><Gauge size={26} /></div>
           <div>
-            <span className="card-kicker">QUÉ HACE ESTE MENÚ</span>
-            <h3>Mide cada modelo del DGX con el mismo protocolo y te dice cuál rinde mejor en esta máquina</h3>
+            <span className="card-kicker">{t("QUÉ HACE ESTE MENÚ")}</span>
+            <h3>{t("Mide cada modelo del DGX con el mismo protocolo y te dice cuál rinde mejor en esta máquina")}</h3>
             <p>
-              No son cifras de catálogo: cada número sale de ejecutar el modelo aquí, aislado, con pruebas
-              versionadas por tipo de tarea. Los resultados se guardan para siempre y solo se comparan
-              entre sí cuando el hardware, el protocolo y el algoritmo de score coinciden.
+              {t("No son cifras de catálogo: cada número sale de ejecutar el modelo aquí, aislado, con pruebas versionadas por tipo de tarea. Los resultados se guardan para siempre y solo se comparan entre sí cuando el hardware, el protocolo y el algoritmo de score coinciden.")}
             </p>
           </div>
           <div className="bx-status">
-            <span className={data.active ? "running" : "idle"}><Activity size={13} /> {data.active ? "Benchmark en curso" : "Runner disponible"}</span>
-            <span><Zap size={13} /> {data.auto_new_models ? `Auto con modelos nuevos · calma ${data.quiet_seconds}s` : "Automático desactivado"}</span>
-            <span><ShieldCheck size={13} /> Protocolo v{data.protocols.find((protocol) => protocol.active)?.version ?? "—"}</span>
+            <span className={data.active ? "running" : "idle"}><Activity size={13} /> {data.active ? t("Benchmark en curso") : t("Runner disponible")}</span>
+            <span><Zap size={13} /> {data.auto_new_models ? t("Auto con modelos nuevos · calma {quiet_seconds}s", { quiet_seconds: data.quiet_seconds }) : t("Automático desactivado")}</span>
+            <span><ShieldCheck size={13} />{" "}{t("Protocolo v")}{data.protocols.find((protocol) => protocol.active)?.version ?? "—"}</span>
           </div>
         </div>
 
         <ol className="bx-steps">
           {[
-            { icon: Boxes, title: "Elige", text: "Selecciona en la suite los modelos pendientes o vuelve a medir uno desde su ficha." },
-            { icon: Cpu, title: "Aísla", text: "Libera la memoria, carga solo ese modelo y hace un calentamiento que no cuenta." },
-            { icon: Activity, title: "Mide", text: "Repite las pruebas sin tráfico concurrente y registra velocidad, calidad, memoria y potencia." },
-            { icon: Trophy, title: "Compara", text: "Calcula un score sobre 100, lo ordena por categoría y conserva todo el histórico." },
+            { icon: Boxes, title: t("Elige"), text: t("Selecciona en la suite los modelos pendientes o vuelve a medir uno desde su ficha.") },
+            { icon: Cpu, title: t("Aísla"), text: t("Libera la memoria, carga solo ese modelo y hace un calentamiento que no cuenta.") },
+            { icon: Activity, title: t("Mide"), text: t("Repite las pruebas sin tráfico concurrente y registra velocidad, calidad, memoria y potencia.") },
+            { icon: Trophy, title: t("Compara"), text: t("Calcula un score sobre 100, lo ordena por categoría y conserva todo el histórico.") },
           ].map((step, index) => <li key={step.title}>
             <span className="bx-step-num">{index + 1}</span>
             <span className="bx-step-icon"><step.icon size={18} /></span>
@@ -7171,11 +7168,11 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
 
         <div className="bx-modalities">
           {[
-            { category: "text", title: "Texto", metrics: "tok/s · primer token · estabilidad" },
-            { category: "voice", title: "Voz", metrics: "tiempo real (RTF) · error de palabras · inteligibilidad" },
-            { category: "image", title: "Imagen y vídeo", metrics: "tiempo de generación · integridad · reproducibilidad" },
-            { category: "vision", title: "Visión", metrics: "latencia · conceptos reconocidos" },
-            { category: "retrieval", title: "Embeddings y rerank", metrics: "elementos/s · calidad semántica · NDCG" },
+            { category: "text", title: t("Texto"), metrics: t("tok/s · primer token · estabilidad") },
+            { category: "voice", title: t("Voz"), metrics: t("tiempo real (RTF) · error de palabras · inteligibilidad") },
+            { category: "image", title: t("Imagen y vídeo"), metrics: t("tiempo de generación · integridad · reproducibilidad") },
+            { category: "vision", title: t("Visión"), metrics: t("latencia · conceptos reconocidos") },
+            { category: "retrieval", title: t("Embeddings y rerank"), metrics: t("elementos/s · calidad semántica · NDCG") },
           ].map((item) => {
             const category = BENCHMARK_CATEGORIES.find((entry) => entry.id === item.category) ?? BENCHMARK_CATEGORIES[0];
             const Icon = category.icon;
@@ -7187,10 +7184,10 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
         </div>
 
         <div className="benchmark-policy bx-policy">
-          <span><ShieldCheck size={13} /> Una petición a la vez</span>
-          <span><Database size={13} /> Histórico append-only, nada se sobrescribe</span>
-          <span><RefreshCw size={13} /> Restaura perfiles y modelos al terminar o cancelar</span>
-          <span><Download size={13} /> Exporta e importa resultados en JSON</span>
+          <span><ShieldCheck size={13} />{" "}{t("Una petición a la vez")}</span>
+          <span><Database size={13} />{" "}{t("Histórico append-only, nada se sobrescribe")}</span>
+          <span><RefreshCw size={13} />{" "}{t("Restaura perfiles y modelos al terminar o cancelar")}</span>
+          <span><Download size={13} />{" "}{t("Exporta e importa resultados en JSON")}</span>
         </div>
       </Card>
 
@@ -7198,28 +7195,25 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
         <div className="benchmark-pipeline-hero">
           <div className="benchmark-pipeline-icon"><Boxes size={25} /></div>
           <div>
-            <span className="card-kicker">SUITE MULTIMODAL SECUENCIAL · LARGA DURACIÓN</span>
-            <h3>Completar benchmarks pendientes</h3>
+            <span className="card-kicker">{t("SUITE MULTIMODAL SECUENCIAL · LARGA DURACIÓN")}</span>
+            <h3>{t("Completar benchmarks pendientes")}</h3>
             <p>
-              Descarga todos los modelos de memoria y mide cada artefacto local con su protocolo:
-              texto, reconocimiento de voz o generación de imagen. Entre modelos libera la RAM.
+              {t("Descarga todos los modelos de memoria y mide cada artefacto local con su protocolo: texto, reconocimiento de voz o generación de imagen. Entre modelos libera la RAM.")}
             </p>
           </div>
           <div className="benchmark-pipeline-stat">
             <strong>{activeSuite ? `${activeSuite.completed_models}/${activeSuite.total_models}` : selectedSuiteCandidates.length}</strong>
-            <small>{activeSuite ? "modelos procesados" : `seleccionados · ${pendingSuiteCount} pendientes`}</small>
-            <span>{suiteHasEstimatedSize ? "≈ " : ""}{bytes(suiteTotalSize)}{suiteHasEstimatedSize ? " (incluye estimaciones)" : " en disco"}</span>
+            <small>{activeSuite ? t("modelos procesados") : t("seleccionados · {count} pendientes", { count: pendingSuiteCount })}</small>
+            <span>{suiteHasEstimatedSize ? "≈ " : ""}{bytes(suiteTotalSize)}{suiteHasEstimatedSize ? t(" (incluye estimaciones)") : t(" en disco")}</span>
           </div>
         </div>
 
         <div className="benchmark-pipeline-warning">
           <TriangleAlert size={19} />
           <div>
-            <strong>Puede tardar muchas horas y deja temporalmente el sistema sin inferencia</strong>
+            <strong>{t("Puede tardar muchas horas y deja temporalmente el sistema sin inferencia")}</strong>
             <span>
-              Chat, asistente, perfiles, OpenAI Gateway y Open WebUI no podrán usar modelos
-              durante la suite. Puedes detenerla en cualquier momento: MyDGX cancela la muestra
-              actual y restaura automáticamente los perfiles y modelos residentes anteriores.
+              {t("Chat, asistente, perfiles, OpenAI Gateway y Open WebUI no podrán usar modelos durante la suite. Puedes detenerla en cualquier momento: MyDGX cancela la muestra actual y restaura automáticamente los perfiles y modelos residentes anteriores.")}
             </span>
           </div>
         </div>
@@ -7230,10 +7224,10 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
               <RefreshCw size={15} className={activeSuite.status !== "restoring" ? "spin" : ""} />
               <strong>
                 {activeSuite.status === "restoring"
-                  ? "Restaurando el estado anterior"
+                  ? t("Restaurando el estado anterior")
                   : currentSuiteItem
-                    ? `Midiendo ${currentSuiteItem.model_name}`
-                    : "Preparando la suite"}
+                    ? t("Midiendo {model_name}", { model_name: currentSuiteItem.model_name })
+                    : t("Preparando la suite")}
               </strong>
             </span>
             <b>{Math.round(suiteProgress)}%</b>
@@ -7241,7 +7235,7 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
           <div className="benchmark-pipeline-track">
             <span style={{ width: `${Math.max(1, suiteProgress)}%` }} />
           </div>
-          <small>{suiteJob?.message || "Liberando memoria y preparando el siguiente modelo"}</small>
+          <small>{suiteJob?.message || t("Liberando memoria y preparando el siguiente modelo")}</small>
         </div>}
 
         <details
@@ -7255,16 +7249,16 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
             <span className="benchmark-pipeline-models-toggle">
               <ChevronRight className={Boolean(activeSuite) || suiteInventoryOpen ? "is-open" : ""} size={15} />
               {Boolean(activeSuite) || suiteInventoryOpen
-                ? "Ocultar modelos"
-                : `Mostrar ${suiteInventory.length} modelos`}
+                ? t("Ocultar modelos")
+                : t("Mostrar {length} modelos", { length: suiteInventory.length })}
             </span>
-            <small>{activeSuite ? suiteInventory.length : selectedSuiteCandidates.length} de {suiteInventory.length} · {suiteHasEstimatedSize ? "≈ " : ""}{bytes(suiteTotalSize)}</small>
+            <small>{t("{selected} de {total}", { selected: activeSuite ? suiteInventory.length : selectedSuiteCandidates.length, total: suiteInventory.length })} · {suiteHasEstimatedSize ? "≈ " : ""}{bytes(suiteTotalSize)}</small>
           </summary>
           <div>
             {!activeSuite && suiteInventory.length > 0 && <div className="benchmark-pipeline-selection">
               <span>
-                {selectedSuiteCandidates.length} seleccionados · {pendingSuiteCount} pendientes
-                {blockedSuiteCount ? ` · ${blockedSuiteCount} sin runtime activo` : ""}
+                {selectedSuiteCandidates.length}{" "}{t("seleccionados ·")}{" "}{t("{count} pendientes", { count: pendingSuiteCount })}
+                {blockedSuiteCount ? t(" · {blockedSuiteCount} sin runtime activo", { blockedSuiteCount: blockedSuiteCount }) : ""}
               </span>
               <div>
                 <button type="button" onClick={() => {
@@ -7272,15 +7266,15 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
                   setSelectedCandidateKeys(new Set(
                     selectableCandidates.filter((item) => !item.suite_completed).map((item) => item.candidate_key),
                   ));
-                }}>Pendientes</button>
+                }}>{t("Pendientes")}</button>
                 <button type="button" onClick={() => {
                   selectionTouched.current = true;
                   setSelectedCandidateKeys(new Set(selectableCandidates.map((item) => item.candidate_key)));
-                }}>Seleccionar todo</button>
+                }}>{t("Seleccionar todo")}</button>
                 <button type="button" onClick={() => {
                   selectionTouched.current = true;
                   setSelectedCandidateKeys(new Set());
-                }}>Ninguno</button>
+                }}>{t("Ninguno")}</button>
               </div>
             </div>}
             {suiteInventory.length ? suiteInventory.map((item) => {
@@ -7295,7 +7289,7 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
                   ? <span className="benchmark-pipeline-model-order">{item.position}</span>
                   : <label
                       className="benchmark-pipeline-model-check"
-                      title={blocked ? item.blocked_reason : `Incluir ${item.name}`}
+                      title={blocked ? item.blocked_reason : t("Incluir {name}", { name: item.name })}
                     >
                       <input
                         type="checkbox"
@@ -7311,7 +7305,7 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
                             return next;
                           });
                         }}
-                        aria-label={`Incluir ${item.name} en la suite`}
+                        aria-label={t("Incluir {name} en la suite", { name: item.name })}
                       />
                     </label>}
                 <span>
@@ -7321,31 +7315,31 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
                   </strong>
                   <small>
                     {item.engine} · {item.modality} · {item.artifact_hash.slice(0, 10)}…
-                    {"measured" in item && item.measured ? " · benchmark individual existente" : ""}
+                    {"measured" in item && item.measured ? t(" · benchmark individual existente") : ""}
                   </small>
                   {blocked && <small className="benchmark-pipeline-model-blocked">
                     <TriangleAlert size={11} /> {item.blocked_reason}
                   </small>}
                 </span>
                 <b title={"artifact_size_estimated" in item && item.artifact_size_estimated
-                  ? "Estimación de memoria del perfil; el archivo de pesos no está declarado"
-                  : "Tamaño exacto de los artefactos locales"}>
+                  ? t("Estimación de memoria del perfil; el archivo de pesos no está declarado")
+                  : t("Tamaño exacto de los artefactos locales")}>
                   {"artifact_size_estimated" in item && item.artifact_size_estimated ? "≈ " : ""}
                   {bytes(item.artifact_size)}
                 </b>
                 <em>
-                  {status === "completed" ? "Completado"
-                    : status === "running" ? "Midiendo"
-                      : status === "loading" ? "Cargando"
-                        : status === "failed" ? "Falló"
-                          : status === "cancelled" ? "Cancelado"
-                            : status === "skipped" ? "Omitido"
-                              : blocked ? "No disponible"
-                                : completedBefore ? "Ya medido"
-                                  : "Pendiente"}
+                  {status === "completed" ? t("Completado")
+                    : status === "running" ? t("Midiendo")
+                      : status === "loading" ? t("Cargando")
+                        : status === "failed" ? t("Falló")
+                          : status === "cancelled" ? t("Cancelado")
+                            : status === "skipped" ? t("Omitido")
+                              : blocked ? t("No disponible")
+                                : completedBefore ? t("Ya medido")
+                                  : t("Pendiente")}
                 </em>
               </div>;
-            }) : <div className="benchmark-pipeline-empty"><CheckCircle2 size={18} /> Todos los modelos locales elegibles ya completaron la suite.</div>}
+            }) : <div className="benchmark-pipeline-empty"><CheckCircle2 size={18} />{" "}{t("Todos los modelos locales elegibles ya completaron la suite.")}</div>}
           </div>
         </details>
 
@@ -7355,12 +7349,12 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
               {latestSuiteFailed.length || latestSuiteCancelled.length
                 ? <TriangleAlert size={16} />
                 : <CheckCircle2 size={16} />}
-              <strong>Última ejecución</strong>
+              <strong>{t("Última ejecución")}</strong>
             </span>
             <small>
-              {latestSuiteCompleted.length} correctos · {latestSuiteFailed.length} fallidos
-              {latestSuiteSkipped.length ? ` · ${latestSuiteSkipped.length} omitidos` : ""}
-              {latestSuiteCancelled.length ? ` · ${latestSuiteCancelled.length} cancelados` : ""}
+              {latestSuiteCompleted.length}{" "}{t("correctos ·")}{" "}{latestSuiteFailed.length}{" "}{t("fallidos")}
+              {latestSuiteSkipped.length ? t(" · {count} omitidos", { count: latestSuiteSkipped.length }) : ""}
+              {latestSuiteCancelled.length ? t(" · {count} cancelados", { count: latestSuiteCancelled.length }) : ""}
             </small>
           </summary>
           <div>
@@ -7370,15 +7364,15 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
                 <small>{item.engine} · {item.modality}{item.error ? ` · ${item.error}` : ""}</small>
               </span>
               <em>
-                {item.status === "completed" ? "Correcto"
-                  : item.status === "failed" ? "Falló"
-                    : item.status === "skipped" ? "Omitido"
-                      : item.status === "cancelled" ? "Cancelado"
-                        : "Pendiente"}
+                {item.status === "completed" ? t("Correcto")
+                  : item.status === "failed" ? t("Falló")
+                    : item.status === "skipped" ? t("Omitido")
+                      : item.status === "cancelled" ? t("Cancelado")
+                        : t("Pendiente")}
               </em>
             </div>)}
             {latestSuiteFailed.length + latestSuiteSkipped.length > 0 && <p className="benchmark-pipeline-result-hint">
-              Los modelos fallidos u omitidos siguen en la lista superior y puedes volver a seleccionarlos.
+              {t("Los modelos fallidos u omitidos siguen en la lista superior y puedes volver a seleccionarlos.")}
             </p>}
             {latestSuite.error && <p>{latestSuite.error}</p>}
           </div>
@@ -7387,50 +7381,50 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
         <div className="benchmark-pipeline-actions">
           <span>
             <ShieldCheck size={14} />
-            El estado actual se captura antes de empezar y se restaura al finalizar.
+            {t("El estado actual se captura antes de empezar y se restaura al finalizar.")}
           </span>
           {!activeSuite && <div className="benchmark-pipeline-options">
-            <label title="Repeticiones medidas por caso; con 2 o más se calcula la estabilidad">Repeticiones
+            <label title={t("Repeticiones medidas por caso; con 2 o más se calcula la estabilidad")}>{t("Repeticiones")}
               <input type="number" min={1} max={10} value={repetitions} onChange={(event) => setRepetitions(Math.max(1, Math.min(10, Number(event.target.value))))} />
             </label>
-            <label className="checkbox" title="Detiene el tráfico del resto de servicios durante cada medición"><input type="checkbox" checked={strictIsolation} onChange={(event) => setStrictIsolation(event.target.checked)} /><span>Aislamiento estricto</span></label>
+            <label className="checkbox" title={t("Detiene el tráfico del resto de servicios durante cada medición")}><input type="checkbox" checked={strictIsolation} onChange={(event) => setStrictIsolation(event.target.checked)} /><span>{t("Aislamiento estricto")}</span></label>
           </div>}
           {activeSuite
             ? <button
                 className="button danger"
                 disabled={activeSuite.status === "restoring" || suiteAction === "stopping"}
                 onClick={() => void stopSuite()}
-              ><Square size={14} /> {suiteAction === "stopping" ? "Deteniendo…" : activeSuite.status === "restoring" ? "Restaurando…" : "Detener y restaurar"}</button>
+              ><Square size={14} /> {suiteAction === "stopping" ? t("Deteniendo…") : activeSuite.status === "restoring" ? t("Restaurando…") : t("Detener y restaurar")}</button>
             : <button
                 className="button primary"
                 disabled={!data.enabled || !selectedSuiteCandidates.length || data.active || suiteAction === "starting"}
                 onClick={() => void startSuite()}
-              ><Play size={15} /> {suiteAction === "starting" ? "Iniciando…" : "Ejecutar suite de benchmarks"}</button>}
+              ><Play size={15} /> {suiteAction === "starting" ? t("Iniciando…") : t("Ejecutar suite de benchmarks")}</button>}
         </div>
       </Card>
 
       {activeJob && <Card className="benchmark-active">
         <div><RefreshCw className="spin" size={18} /><span><strong>{activeJob.message}</strong><small>{activeJob.target}</small></span><b>{Math.round(activeJob.progress)}%</b></div>
         <div className="storage-bar"><span style={{ width: `${activeJob.progress}%` }} /></div>
-        <button className="button secondary" onClick={() => void cancelRun(activeJob.id)}>Cancelar</button>
+        <button className="button secondary" onClick={() => void cancelRun(activeJob.id)}>{t("Cancelar")}</button>
       </Card>}
 
       {pendingQueue.length > 0 && <Card className="benchmark-queue">
-        <div><strong>Cola automática</strong><small>Se ejecuta cuando no hay trabajos, ni inferencia activa, ni uso interactivo reciente</small></div>
+        <div><strong>{t("Cola automática")}</strong><small>{t("Se ejecuta cuando no hay trabajos, ni inferencia activa, ni uso interactivo reciente")}</small></div>
         {pendingQueue.map((entry) => <div className="benchmark-queue-row" key={entry.id}>
-          <span><strong>{entry.target.replace(/^ollama:/, "").replace(/^profile:/, "perfil ")}</strong><small>{entry.status === "running" ? "Ejecutando" : entry.last_reason || "Esperando ventana libre"} · intento {entry.attempts}</small></span>
-          {entry.status === "pending" && <button className="button secondary" onClick={() => void skipQueueEntry(entry.id)}>Descartar</button>}
+          <span><strong>{entry.target.replace(/^ollama:/, "").replace(/^profile:/, `${t("perfil")} `)}</strong><small>{entry.status === "running" ? t("Ejecutando") : entry.last_reason || t("Esperando ventana libre")}{" "}{t("· intento")}{" "}{entry.attempts}</small></span>
+          {entry.status === "pending" && <button className="button secondary" onClick={() => void skipQueueEntry(entry.id)}>{t("Descartar")}</button>}
         </div>)}
       </Card>}
 
       <div className="benchmark-summary-grid">
-        <Card><small>Runs históricos</small><strong>{data.runs.length}</strong><span>Locales e importados</span></Card>
-        <Card><small>Runs válidos</small><strong>{validRuns.length}</strong><span>Incluidos en comparativas</span></Card>
-        <Card><small>Artefactos medidos</small><strong>{new Set(data.runs.map((run) => run.artifact_hash)).size}</strong><span>Digest exacto</span></Card>
-        <Card><small>Protocolo activo</small><strong>v{data.protocols.find((protocol) => protocol.active)?.version ?? "—"}</strong><span>{data.score_algorithm}</span></Card>
+        <Card><small>{t("Runs históricos")}</small><strong>{data.runs.length}</strong><span>{t("Locales e importados")}</span></Card>
+        <Card><small>{t("Runs válidos")}</small><strong>{validRuns.length}</strong><span>{t("Incluidos en comparativas")}</span></Card>
+        <Card><small>{t("Artefactos medidos")}</small><strong>{new Set(data.runs.map((run) => run.artifact_hash)).size}</strong><span>{t("Digest exacto")}</span></Card>
+        <Card><small>{t("Protocolo activo")}</small><strong>v{data.protocols.find((protocol) => protocol.active)?.version ?? "—"}</strong><span>{data.score_algorithm}</span></Card>
       </div>
 
-      <div className="benchmark-category-tabs" role="tablist" aria-label="Categorías de benchmark">
+      <div className="benchmark-category-tabs" role="tablist" aria-label={t("Categorías de benchmark")}>
         {BENCHMARK_CATEGORIES.map((category) => {
           const Icon = category.icon;
           const count = categoryCounts[category.id] ?? 0;
@@ -7449,21 +7443,21 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
 
       {chartModalities.length > 0 && <>
         <SectionHeading
-          eyebrow="COMPARACIÓN"
-          title={activeCategory.id === "all" ? "Rendimiento por categoría" : `Rendimiento · ${activeCategory.label}`}
-          action={comparisonGroups.length > 1 ? <select className="benchmark-comparison-select" value={selectedComparison} onChange={(event) => setComparisonKey(event.target.value)} aria-label="Entorno de comparación">
-            {comparisonGroups.map((group) => <option key={group.key} value={group.key}>{group.label}{group.key.startsWith("env|") ? ` · desde ${new Date(group.since).toLocaleDateString()}` : ""} ({group.count})</option>)}
+          eyebrow={t("COMPARACIÓN")}
+          title={activeCategory.id === "all" ? t("Rendimiento por categoría") : t("Rendimiento · {label}", { label: activeCategory.label })}
+          action={comparisonGroups.length > 1 ? <select className="benchmark-comparison-select" value={selectedComparison} onChange={(event) => setComparisonKey(event.target.value)} aria-label={t("Entorno de comparación")}>
+            {comparisonGroups.map((group) => <option key={group.key} value={group.key}>{group.label}{group.key.startsWith("env|") ? t(" · desde {date}", { date: new Date(group.since).toLocaleDateString(locale) }) : ""} ({group.count})</option>)}
           </select> : undefined}
         />
         {selectedGroup && selectedGroup.environments.size > 1 && <small className="benchmark-comparison-note">
-          Combina {selectedGroup.environments.size} entornos de software (por ejemplo, versiones de llama.cpp o del driver). Cada modelo muestra su último resultado; elige un entorno concreto para comparar en igualdad estricta.
+          {t("Combina")}{" "}{selectedGroup.environments.size}{" "}{t("entornos de software (por ejemplo, versiones de llama.cpp o del driver). Cada modelo muestra su último resultado; elige un entorno concreto para comparar en igualdad estricta.")}
         </small>}
         {chartModalities.map((modality) => <BenchmarkModalityCharts key={modality} modality={modality} runs={comparableByModality.get(modality) ?? []} />)}
       </>}
 
       <SectionHeading
-        eyebrow="FICHAS"
-        title="Resultados por modelo"
+        eyebrow={t("FICHAS")}
+        title={t("Resultados por modelo")}
         action={<div className="benchmark-list-actions">
           <label className={`benchmark-search${searchStateClass(benchSearch, visibleGroups.length)}`} data-count={searchCountLabel(benchSearch, visibleGroups.length)}>
             <Search size={14} />
@@ -7472,17 +7466,17 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
               value={benchSearch}
               onChange={(event) => setBenchSearch(event.target.value)}
               onKeyDown={(event) => { if (event.key === "Escape") setBenchSearch(""); }}
-              placeholder="Buscar modelo, autor, tag…"
-              aria-label="Buscar en resultados por modelo"
+              placeholder={t("Buscar modelo, autor, tag…")}
+              aria-label={t("Buscar en resultados por modelo")}
             />
-            {benchSearch && <button type="button" onClick={() => setBenchSearch("")} aria-label="Limpiar búsqueda"><X size={13} /></button>}
+            {benchSearch && <button type="button" onClick={() => setBenchSearch("")} aria-label={t("Limpiar búsqueda")}><X size={13} /></button>}
           </label>
-          <select className="benchmark-comparison-select" value={benchSort} onChange={(event) => setBenchSort(event.target.value as typeof benchSort)} aria-label="Ordenar fichas">
-            <option value="score">Por categoría y score</option>
-            <option value="recent">Más recientes</option>
-            <option value="name">Por nombre</option>
+          <select className="benchmark-comparison-select" value={benchSort} onChange={(event) => setBenchSort(event.target.value as typeof benchSort)} aria-label={t("Ordenar fichas")}>
+            <option value="score">{t("Por categoría y score")}</option>
+            <option value="recent">{t("Más recientes")}</option>
+            <option value="name">{t("Por nombre")}</option>
           </select>
-          <label className="button secondary benchmark-import"><Download size={14} /> Importar JSON<input type="file" accept="application/json,.json" onChange={(event) => { void importRun(event.target.files?.[0]); event.target.value = ""; }} /></label>
+          <label className="button secondary benchmark-import"><Download size={14} />{" "}{t("Importar JSON")}<input type="file" accept="application/json,.json" onChange={(event) => { void importRun(event.target.files?.[0]); event.target.value = ""; }} /></label>
         </div>}
       />
       {visibleGroups.length ? <div className="benchmark-model-grid">
@@ -7500,13 +7494,13 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
           onExport={() => void exportRun(run.id)}
           onOpenRun={(id) => void openRun(id)}
         />)}
-      </div> : <Empty icon={<Gauge />} title={!artifactGroups.length ? "Todavía no hay benchmarks" : searchTerms.length ? `Nada coincide con «${benchSearch.trim()}»` : "Sin modelos en esta categoría"} text={searchTerms.length ? "Prueba con otro término o cambia de categoría." : "Selecciona un modelo y ejecuta la suite reproducible."} />}
+      </div> : <Empty icon={<Gauge />} title={!artifactGroups.length ? t("Todavía no hay benchmarks") : searchTerms.length ? t("Nada coincide con «{trim}»", { trim: benchSearch.trim() }) : t("Sin modelos en esta categoría")} text={searchTerms.length ? t("Prueba con otro término o cambia de categoría.") : t("Selecciona un modelo y ejecuta la suite reproducible.")} />}
 
       {detail && <div className="benchmark-detail-overlay" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setDetail(null); }}>
         <Card className="benchmark-detail" >
           <div className="benchmark-detail-head">
-            <div><span className="eyebrow">FICHA COMPLETA</span><h2>{detail.source_id}</h2><small>{detail.artifact_hash.slice(0, 16)}… · {detail.quantization || detail.filename || detail.source}</small></div>
-            <button className="icon-button" onClick={() => setDetail(null)} aria-label="Cerrar ficha"><X size={17} /></button>
+            <div><span className="eyebrow">{t("FICHA COMPLETA")}</span><h2>{detail.source_id}</h2><small>{detail.artifact_hash.slice(0, 16)}… · {detail.quantization || detail.filename || detail.source}</small></div>
+            <button className="icon-button" onClick={() => setDetail(null)} aria-label={t("Cerrar ficha")}><X size={17} /></button>
           </div>
           <div className="benchmark-detail-body">
             {(() => {
@@ -7520,25 +7514,25 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
               const drafter = detail.runtime?.speculative as { spec_type?: string; draft_filename?: string } | undefined;
               const acceptance = detail.summary.speculative;
               const facts = [
-                ["Tarea", MODALITY_LABELS[detailModality] ?? detailModality],
-                ["Autor", info?.author],
-                ["Parámetros", parameterLabel(info)],
-                ["Tamaño en disco", bytes(detail.artifact_size)],
-                ["Cuantización", detail.quantization],
-                ["Arquitectura", detail.architecture],
-                ["Memoria estimada", runEstimate ? bytes(runEstimate * 1024 * 1024) : ""],
-                ["Pico real vs estimada", peakMemory && runEstimate
-                  ? `${bytes(peakMemory)} del sistema · ${peakMemory > runEstimate * 1024 * 1024 ? "por encima" : "dentro"} de la estimación`
+                [t("Tarea"), MODALITY_LABELS[detailModality] ?? detailModality],
+                [t("Autor"), info?.author],
+                [t("Parámetros"), parameterLabel(info)],
+                [t("Tamaño en disco"), bytes(detail.artifact_size)],
+                [t("Cuantización"), detail.quantization],
+                [t("Arquitectura"), detail.architecture],
+                [t("Memoria estimada"), runEstimate ? bytes(runEstimate * 1024 * 1024) : ""],
+                [t("Pico real vs estimada"), peakMemory && runEstimate
+                  ? t("{peakMemory} del sistema · {value} de la estimación", { peakMemory: bytes(peakMemory), value: peakMemory > runEstimate * 1024 * 1024 ? t("por encima") : t("dentro") })
                   : ""],
-                ["Especulativa", drafter?.spec_type
-                  ? `${SPEC_LABELS[drafter.spec_type] ?? drafter.spec_type}${drafter.draft_filename ? ` · ${drafter.draft_filename}` : " integrado"}${acceptance ? ` · aceptación ${Math.round(acceptance.acceptance_rate * 100)}%` : " · sin datos de aceptación"}`
+                [t("Especulativa"), drafter?.spec_type
+                  ? `${SPEC_LABELS[drafter.spec_type] ?? drafter.spec_type}${drafter.draft_filename ? ` · ${drafter.draft_filename}` : ` · ${t("integrado")}`}${acceptance ? t(" · aceptación {round}%", { round: Math.round(acceptance.acceptance_rate * 100) }) : t(" · sin datos de aceptación")}`
                   : ""],
-                ["Entrada → salida", info?.input_modalities.length ? `${info.input_modalities.join(", ")} → ${info.output_modalities.join(", ") || "—"}` : ""],
-                ["Licencia", info?.license],
-                ["Modelo base", info?.base_model],
-                ["Librería", info?.library],
-                ["Idiomas", info?.languages.slice(0, 8).join(", ")],
-                ["Popularidad", info?.downloads || info?.likes ? `${compactCount(info?.downloads) || "0"} descargas · ${compactCount(info?.likes) || "0"} likes` : ""],
+                [t("Entrada → salida"), info?.input_modalities.length ? `${info.input_modalities.join(", ")} → ${info.output_modalities.join(", ") || "—"}` : ""],
+                [t("Licencia"), info?.license],
+                [t("Modelo base"), info?.base_model],
+                [t("Librería"), info?.library],
+                [t("Idiomas"), info?.languages.slice(0, 8).join(", ")],
+                [t("Popularidad"), info?.downloads || info?.likes ? t("{downloads} descargas · {likes} likes", { downloads: compactCount(info?.downloads) || "0", likes: compactCount(info?.likes) || "0" }) : ""],
               ].filter(([, value]) => value);
               return <div className="benchmark-detail-hero" style={{ "--category": category.color } as CSSProperties}>
                 <div className="bdh-info">
@@ -7563,71 +7557,71 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
                       <Tooltip formatter={(value) => `${Number(value).toFixed(1)}/100`} />
                       <Radar dataKey="value" name="Score" stroke={category.color} fill={category.color} fillOpacity={0.3} isAnimationActive={false} />
                     </RadarChart>
-                  </ResponsiveContainer> : <small className="benchmark-chart-empty">Dimensiones insuficientes para el radar</small>}
+                  </ResponsiveContainer> : <small className="benchmark-chart-empty">{t("Dimensiones insuficientes para el radar")}</small>}
                 </div>
               </div>;
             })()}
             <div className="benchmark-summary-grid">
-              <Card><small>Score medido</small><strong>{detail.summary.score ?? "—"}</strong><span>{detail.score_algorithm}</span></Card>
+              <Card><small>{t("Score medido")}</small><strong>{detail.summary.score ?? "—"}</strong><span>{detail.score_algorithm}</span></Card>
               {detailModality === "automatic-speech-recognition" ? <>
-                <Card><small>RTF / WER</small><strong>{detail.summary.real_time_factor?.mean == null ? "—" : `${Number(detail.summary.real_time_factor.mean).toFixed(3)} / ${((detail.summary.word_error_rate ?? 0) * 100).toFixed(1)}%`}</strong><span>Velocidad / error de palabras</span></Card>
-                <Card><small>CER</small><strong>{detail.summary.character_error_rate == null ? "—" : `${(Number(detail.summary.character_error_rate) * 100).toFixed(1)}%`}</strong><span>Fixture de audio versionado</span></Card>
+                <Card><small>{t("RTF / WER")}</small><strong>{detail.summary.real_time_factor?.mean == null ? "—" : `${Number(detail.summary.real_time_factor.mean).toFixed(3)} / ${((detail.summary.word_error_rate ?? 0) * 100).toFixed(1)}%`}</strong><span>{t("Velocidad / error de palabras")}</span></Card>
+                <Card><small>CER</small><strong>{detail.summary.character_error_rate == null ? "—" : `${(Number(detail.summary.character_error_rate) * 100).toFixed(1)}%`}</strong><span>{t("Fixture de audio versionado")}</span></Card>
               </> : detailModality === "vision" ? <>
-                <Card><small>Latencia p50</small><strong>{detail.summary.total_ms?.p50 == null ? "—" : `${Number(detail.summary.total_ms.p50).toFixed(0)} ms`}</strong><span>Inferencia con imagen local</span></Card>
-                <Card><small>Recall de conceptos</small><strong>{detail.summary.vision_quality?.normalized_concept_recall == null ? "—" : `${(Number(detail.summary.vision_quality.normalized_concept_recall) * 100).toFixed(1)}%`}</strong><span>{detail.summary.vision_quality?.method || "Fixture visual versionado"}</span></Card>
+                <Card><small>{t("Latencia p50")}</small><strong>{detail.summary.total_ms?.p50 == null ? "—" : `${Number(detail.summary.total_ms.p50).toFixed(0)} ms`}</strong><span>{t("Inferencia con imagen local")}</span></Card>
+                <Card><small>{t("Recall de conceptos")}</small><strong>{detail.summary.vision_quality?.normalized_concept_recall == null ? "—" : `${(Number(detail.summary.vision_quality.normalized_concept_recall) * 100).toFixed(1)}%`}</strong><span>{detail.summary.vision_quality?.method || t("Fixture visual versionado")}</span></Card>
               </> : detailModality === "text-to-speech" ? <>
-                <Card><small>RTF medio</small><strong>{detail.summary.real_time_factor?.mean == null ? "—" : Number(detail.summary.real_time_factor.mean).toFixed(3)}</strong><span>Síntesis / duración</span></Card>
-                <Card><small>Inteligibilidad</small><strong>{!detail.summary.intelligibility?.available ? "No medida" : `${((1 - Number(detail.summary.intelligibility.word_error_rate ?? 1)) * 100).toFixed(1)}%`}</strong><span>{detail.summary.intelligibility?.quality_claim || "Sin afirmación de inteligibilidad"}</span></Card>
+                <Card><small>{t("RTF medio")}</small><strong>{detail.summary.real_time_factor?.mean == null ? "—" : Number(detail.summary.real_time_factor.mean).toFixed(3)}</strong><span>{t("Síntesis / duración")}</span></Card>
+                <Card><small>{t("Inteligibilidad")}</small><strong>{!detail.summary.intelligibility?.available ? t("No medida") : `${((1 - Number(detail.summary.intelligibility.word_error_rate ?? 1)) * 100).toFixed(1)}%`}</strong><span>{detail.summary.intelligibility?.quality_claim || t("Sin afirmación de inteligibilidad")}</span></Card>
               </> : detailModality === "image-generation" ? <>
-                <Card><small>Generación p50</small><strong>{detail.summary.total_ms?.p50 == null ? "—" : `${(Number(detail.summary.total_ms.p50) / 1000).toFixed(1)} s`}</strong><span>Workflow y semilla fijos</span></Card>
-                <Card><small>Reproducibilidad</small><strong>{detail.summary.image_validation?.pixel_reproducibility_percent == null ? "—" : `${Number(detail.summary.image_validation.pixel_reproducibility_percent).toFixed(0)}%`}</strong><span>Validación de píxeles</span></Card>
+                <Card><small>{t("Generación p50")}</small><strong>{detail.summary.total_ms?.p50 == null ? "—" : `${(Number(detail.summary.total_ms.p50) / 1000).toFixed(1)} s`}</strong><span>{t("Workflow y semilla fijos")}</span></Card>
+                <Card><small>{t("Reproducibilidad")}</small><strong>{detail.summary.image_validation?.pixel_reproducibility_percent == null ? "—" : `${Number(detail.summary.image_validation.pixel_reproducibility_percent).toFixed(0)}%`}</strong><span>{t("Validación de píxeles")}</span></Card>
               </> : detailModality === "video-generation" ? <>
-                <Card><small>Generación p50</small><strong>{detail.summary.total_ms?.p50 == null ? "—" : `${(Number(detail.summary.total_ms.p50) / 1000).toFixed(1)} s`}</strong><span>Workflow Wan reproducible</span></Card>
-                <Card><small>Reproducibilidad</small><strong>{detail.summary.video_validation?.perceptual_reproducibility_percent == null && detail.summary.video_validation?.exact_reproducibility_percent == null ? "—" : `${Number(detail.summary.video_validation.perceptual_reproducibility_percent ?? detail.summary.video_validation.exact_reproducibility_percent).toFixed(0)}%`}</strong><span>{detail.summary.video_validation?.quality_claim || "Validación objetiva del contenedor"}</span></Card>
+                <Card><small>{t("Generación p50")}</small><strong>{detail.summary.total_ms?.p50 == null ? "—" : `${(Number(detail.summary.total_ms.p50) / 1000).toFixed(1)} s`}</strong><span>{t("Workflow Wan reproducible")}</span></Card>
+                <Card><small>{t("Reproducibilidad")}</small><strong>{detail.summary.video_validation?.perceptual_reproducibility_percent == null && detail.summary.video_validation?.exact_reproducibility_percent == null ? "—" : `${Number(detail.summary.video_validation.perceptual_reproducibility_percent ?? detail.summary.video_validation.exact_reproducibility_percent).toFixed(0)}%`}</strong><span>{detail.summary.video_validation?.quality_claim || t("Validación objetiva del contenedor")}</span></Card>
               </> : detailModality === "embeddings" ? <>
-                <Card><small>Elementos/s</small><strong>{detail.summary.items_per_second?.mean == null ? "—" : Number(detail.summary.items_per_second.mean).toFixed(1)}</strong><span>Throughput vectorial</span></Card>
-                <Card><small>Calidad semántica</small><strong>{detail.summary.semantic_quality?.pair_accuracy == null ? "—" : `${(Number(detail.summary.semantic_quality.pair_accuracy) * 100).toFixed(1)}%`}</strong><span>Margen {detail.summary.semantic_quality?.mean_margin?.toFixed(3) ?? "—"}</span></Card>
+                <Card><small>{t("Elementos/s")}</small><strong>{detail.summary.items_per_second?.mean == null ? "—" : Number(detail.summary.items_per_second.mean).toFixed(1)}</strong><span>{t("Throughput vectorial")}</span></Card>
+                <Card><small>{t("Calidad semántica")}</small><strong>{detail.summary.semantic_quality?.pair_accuracy == null ? "—" : `${(Number(detail.summary.semantic_quality.pair_accuracy) * 100).toFixed(1)}%`}</strong><span>{t("Margen")}{" "}{detail.summary.semantic_quality?.mean_margin?.toFixed(3) ?? "—"}</span></Card>
               </> : detailModality === "reranking" ? <>
-                <Card><small>NDCG</small><strong>{detail.summary.ranking_quality?.ndcg_mean == null ? "—" : `${(Number(detail.summary.ranking_quality.ndcg_mean) * 100).toFixed(1)}%`}</strong><span>Ordenación esperada</span></Card>
-                <Card><small>MRR</small><strong>{detail.summary.ranking_quality?.mrr_mean == null ? "—" : `${(Number(detail.summary.ranking_quality.mrr_mean) * 100).toFixed(1)}%`}</strong><span>Primer resultado relevante</span></Card>
+                <Card><small>NDCG</small><strong>{detail.summary.ranking_quality?.ndcg_mean == null ? "—" : `${(Number(detail.summary.ranking_quality.ndcg_mean) * 100).toFixed(1)}%`}</strong><span>{t("Ordenación esperada")}</span></Card>
+                <Card><small>MRR</small><strong>{detail.summary.ranking_quality?.mrr_mean == null ? "—" : `${(Number(detail.summary.ranking_quality.mrr_mean) * 100).toFixed(1)}%`}</strong><span>{t("Primer resultado relevante")}</span></Card>
               </> : <>
-                <Card><small>TTFT p50 / p95</small><strong>{detail.summary.ttft_ms?.p50 == null ? "—" : `${Number(detail.summary.ttft_ms.p50).toFixed(0)} / ${Number(detail.summary.ttft_ms.p95 ?? 0).toFixed(0)} ms`}</strong><span>Primer token</span></Card>
-                <Card><small>Throughput</small><strong>{detail.summary.output_tokens_per_second?.mean == null ? "—" : `${Number(detail.summary.output_tokens_per_second.mean).toFixed(1)} tok/s`}</strong><span>{detail.summary.characters_per_second?.mean == null ? "Sin normalizar" : `${Number(detail.summary.characters_per_second.mean).toFixed(0)} chars/s`}</span></Card>
+                <Card><small>{t("TTFT p50 / p95")}</small><strong>{detail.summary.ttft_ms?.p50 == null ? "—" : `${Number(detail.summary.ttft_ms.p50).toFixed(0)} / ${Number(detail.summary.ttft_ms.p95 ?? 0).toFixed(0)} ms`}</strong><span>{t("Primer token")}</span></Card>
+                <Card><small>{t("Throughput")}</small><strong>{detail.summary.output_tokens_per_second?.mean == null ? "—" : `${Number(detail.summary.output_tokens_per_second.mean).toFixed(1)} tok/s`}</strong><span>{detail.summary.characters_per_second?.mean == null ? t("Sin normalizar") : `${Number(detail.summary.characters_per_second.mean).toFixed(0)} chars/s`}</span></Card>
               </>}
-              <Card><small>Fiabilidad</small><strong>{detail.summary.reliability_percent ?? 0}%</strong><span>{detail.summary.valid_sample_count ?? 0}/{detail.summary.sample_count ?? 0} muestras</span></Card>
+              <Card><small>{t("Fiabilidad")}</small><strong>{detail.summary.reliability_percent ?? 0}%</strong><span>{t("{valid}/{total} muestras", { valid: detail.summary.valid_sample_count ?? 0, total: detail.summary.sample_count ?? 0 })}</span></Card>
             </div>
             {detail.telemetry.length > 1 && <Card className="benchmark-chart">
-              <div><strong>Telemetría durante el run</strong><small>Utilización GPU y potencia observadas</small></div>
+              <div><strong>{t("Telemetría durante el run")}</strong><small>{t("Utilización GPU y potencia observadas")}</small></div>
               <ResponsiveContainer width="100%" height={220}>
-                <AreaChart data={detail.telemetry.map((point) => ({ time: new Date(point.created_at).toLocaleTimeString(), gpu: point.gpu_utilization, power: point.gpu_power_watts }))}>
+                <AreaChart data={detail.telemetry.map((point) => ({ time: new Date(point.created_at).toLocaleTimeString(locale), gpu: point.gpu_utilization, power: point.gpu_power_watts }))}>
                   <CartesianGrid stroke="var(--border)" vertical={false} />
                   <XAxis dataKey="time" />
                   <YAxis width={42} />
                   <Tooltip />
                   <Legend />
                   <Area type="monotone" dataKey="gpu" name="GPU %" stroke="var(--accent)" fill="var(--accent-soft)" />
-                  <Area type="monotone" dataKey="power" name="Potencia W" stroke="var(--blue)" fill="transparent" />
+                  <Area type="monotone" dataKey="power" name={t("Potencia W")} stroke="var(--blue)" fill="transparent" />
                 </AreaChart>
               </ResponsiveContainer>
             </Card>}
             <div className="benchmark-detail-grid">
-              <div><strong>Artefacto</strong><dl><dt>Fuente</dt><dd>{detail.source}</dd><dt>Revisión</dt><dd>{detail.revision || "—"}</dd><dt>Archivo</dt><dd>{detail.filename || "—"}</dd><dt>Tamaño</dt><dd>{bytes(detail.artifact_size)}</dd><dt>Hash</dt><dd><code>{detail.artifact_hash}</code></dd></dl></div>
-              <div><strong>Entorno</strong><dl>{Object.entries(detail.hardware).slice(0, 10).map(([key, value]) => <span key={key}><dt>{key}</dt><dd>{String(value ?? "—")}</dd></span>)}</dl></div>
-              <div><strong>Runtime efectivo</strong><pre>{JSON.stringify(detail.runtime, null, 2)}</pre></div>
-              <div><strong>Score dimensional{detail.summary.score_provisional ? " · provisional" : ""}</strong><dl>{Object.entries(detail.summary.score_dimensions ?? {}).map(([key, value]) => <span key={key}><dt>{key}</dt><dd>{value == null ? "— (requiere ≥2 repeticiones)" : `${Number(value).toFixed(1)}/100`}</dd></span>)}</dl></div>
+              <div><strong>{t("Artefacto")}</strong><dl><dt>{t("Fuente")}</dt><dd>{detail.source}</dd><dt>{t("Revisión")}</dt><dd>{detail.revision || "—"}</dd><dt>{t("Archivo")}</dt><dd>{detail.filename || "—"}</dd><dt>{t("Tamaño")}</dt><dd>{bytes(detail.artifact_size)}</dd><dt>{t("Hash")}</dt><dd><code>{detail.artifact_hash}</code></dd></dl></div>
+              <div><strong>{t("Entorno")}</strong><dl>{Object.entries(detail.hardware).slice(0, 10).map(([key, value]) => <span key={key}><dt>{key}</dt><dd>{String(value ?? "—")}</dd></span>)}</dl></div>
+              <div><strong>{t("Runtime efectivo")}</strong><pre>{JSON.stringify(detail.runtime, null, 2)}</pre></div>
+              <div><strong>{t("Score dimensional")}{detail.summary.score_provisional ? t(" · provisional") : ""}</strong><dl>{Object.entries(detail.summary.score_dimensions ?? {}).map(([key, value]) => <span key={key}><dt>{key}</dt><dd>{value == null ? t("— (requiere ≥2 repeticiones)") : `${Number(value).toFixed(1)}/100`}</dd></span>)}</dl></div>
             </div>
             {detail.summary.cases && <div className="benchmark-samples benchmark-cases">
-              <strong>Resultado por caso</strong>
-              <div className="benchmark-sample-head"><span>Caso</span><span>Válidas</span><span>TTFT p50</span><span>tok/s</span><span>CV</span><span>Fin temprano</span></div>
+              <strong>{t("Resultado por caso")}</strong>
+              <div className="benchmark-sample-head"><span>{t("Caso")}</span><span>{t("Válidas")}</span><span>{t("TTFT p50")}</span><span>{t("tok/s")}</span><span>CV</span><span>{t("Fin temprano")}</span></div>
               {Object.entries(detail.summary.cases).map(([caseId, item]) => <div key={caseId}><span>{caseId}</span><span>{item.valid_samples}/{item.samples}</span><span>{item.ttft_ms_p50 == null ? "—" : `${item.ttft_ms_p50.toFixed(0)} ms`}</span><span>{item.output_tokens_per_second_mean == null ? "—" : item.output_tokens_per_second_mean.toFixed(1)}</span><span>{item.coefficient_of_variation == null ? "—" : `${(item.coefficient_of_variation * 100).toFixed(1)}%`}</span><span>{item.early_stops}</span></div>)}
             </div>}
             <div className="benchmark-samples">
-              <strong>Muestras</strong>
-              <div className="benchmark-sample-head"><span>Caso</span><span>Fase</span><span>TTFT</span><span>tok/s</span><span>Tokens</span><span>Estado</span></div>
-              {detail.samples.map((sample) => <div key={sample.id}><span>{sample.case_id}</span><span>{sample.phase} {sample.repetition || ""}</span><span>{sample.ttft_ms == null ? "—" : `${sample.ttft_ms.toFixed(0)} ms`}</span><span>{sample.output_tps == null ? "—" : sample.output_tps.toFixed(1)}</span><span>{sample.output_tokens ?? "—"}</span><span className={sample.valid ? "ok" : "error"}>{sample.valid ? "Válida" : sample.error || "Fallida"}</span></div>)}
+              <strong>{t("Muestras")}</strong>
+              <div className="benchmark-sample-head"><span>{t("Caso")}</span><span>{t("Fase")}</span><span>TTFT</span><span>{t("tok/s")}</span><span>{t("Tokens")}</span><span>{t("Estado")}</span></div>
+              {detail.samples.map((sample) => <div key={sample.id}><span>{sample.case_id}</span><span>{sample.phase} {sample.repetition || ""}</span><span>{sample.ttft_ms == null ? "—" : `${sample.ttft_ms.toFixed(0)} ms`}</span><span>{sample.output_tps == null ? "—" : sample.output_tps.toFixed(1)}</span><span>{sample.output_tokens ?? "—"}</span><span className={sample.valid ? "ok" : "error"}>{sample.valid ? t("Válida") : sample.error || t("Fallida")}</span></div>)}
             </div>
-            {detail.card_text && <details className="benchmark-model-card"><summary>Descripción / model card de Hugging Face</summary><MarkdownMessage content={detail.card_text.slice(0, 12_000)} /></details>}
-            <details className="benchmark-raw"><summary>Metadatos completos</summary><pre>{JSON.stringify(detail.metadata, null, 2)}</pre></details>
+            {detail.card_text && <details className="benchmark-model-card"><summary>{t("Descripción / model card de Hugging Face")}</summary><MarkdownMessage content={detail.card_text.slice(0, 12_000)} /></details>}
+            <details className="benchmark-raw"><summary>{t("Metadatos completos")}</summary><pre>{JSON.stringify(detail.metadata, null, 2)}</pre></details>
           </div>
         </Card>
       </div>}
@@ -7674,30 +7668,30 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
   }, [load, maintenanceStatus]);
 
   async function applyUpdates() {
-    if (!window.confirm("Se actualizarán los paquetes del sistema. Guarda todo tu trabajo antes de continuar.")) return;
+    if (!window.confirm(t("Se actualizarán los paquetes del sistema. Guarda todo tu trabajo antes de continuar."))) return;
     try {
       await api("/api/updates/apply", { method: "POST", body: JSON.stringify({ confirm: "ACTUALIZAR MYDGX" }) });
-      notify("Actualización iniciada; al terminar se verificarán kernel, driver, CUDA, DKMS y llama.cpp");
+      notify(t("Actualización iniciada; al terminar se verificarán kernel, driver, CUDA, DKMS y llama.cpp"));
     } catch (error) {
       notify((error as Error).message, true);
     }
   }
 
   async function repairSystem() {
-    if (!window.confirm("Se comprobarán paquetes, DKMS, driver NVIDIA, CUDA y llama.cpp. La reparación puede tardar varios minutos.")) return;
+    if (!window.confirm(t("Se comprobarán paquetes, DKMS, driver NVIDIA, CUDA y llama.cpp. La reparación puede tardar varios minutos."))) return;
     try {
       await api("/api/system/repair", { method: "POST", body: JSON.stringify({ confirm: "REPARAR MYDGX" }) });
-      notify("Comprobación y reparación iniciada");
+      notify(t("Comprobación y reparación iniciada"));
     } catch (error) {
       notify((error as Error).message, true);
     }
   }
 
   async function control(name: string, action: "start" | "stop" | "restart") {
-    if (!window.confirm(`¿${action} el servicio ${name}?`)) return;
+    if (!window.confirm(t("¿{action} el servicio {name}?", { action: action === "start" ? t("Iniciar") : action === "stop" ? t("Detener") : t("Reiniciar"), name: name }))) return;
     try {
       await api("/api/services/action", { method: "POST", body: JSON.stringify({ name, action, confirm: `${action} ${name}` }) });
-      notify(`Servicio ${name}: ${action}`);
+      notify(t("Servicio {name}: {action}", { name: name, action: action === "start" ? t("Iniciar") : action === "stop" ? t("Detener") : t("Reiniciar") }));
       load();
     } catch (error) {
       notify((error as Error).message, true);
@@ -7710,18 +7704,18 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
   );
   const systemBranding = overview ? deviceBranding(overview.host) : null;
   const updateCategoryLabels: Record<SystemUpdatePackage["category"], string> = {
-    kernel: "Kernel",
+    kernel: t("Kernel"),
     nvidia: "NVIDIA / CUDA",
-    containers: "Contenedores",
-    runtime: "Runtime",
-    system: "Sistema",
+    containers: t("Contenedores"),
+    runtime: t("Runtime"),
+    system: t("Sistema"),
   };
 
   return (
     <div className="view-stack">
       <SectionHeading
-        eyebrow={overview?.host.is_dgx_spark ? "PLATAFORMA NVIDIA GB10" : (overview?.host.os_family ?? "SISTEMA").toUpperCase()}
-        title="Sistema y servicios"
+        eyebrow={overview?.host.is_dgx_spark ? t("PLATAFORMA NVIDIA GB10") : t((overview?.host.os_family ?? "SISTEMA").toUpperCase())}
+        title={t("Sistema y servicios")}
         action={<button className="icon-button" onClick={load}><RefreshCw size={17} /></button>}
       />
       {overview && systemBranding && (
@@ -7732,9 +7726,9 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
               <span>{systemBranding.subtitle}</span>
             </div>
             <strong>{systemBranding.label}</strong>
-            <small><StatusDot online /> {overview.host.is_dgx_spark ? "NVIDIA GB10 detectado" : "Equipo detectado"} · {overview.host.hostname}</small>
+            <small><StatusDot online /> {overview.host.is_dgx_spark ? t("NVIDIA GB10 detectado") : t("Equipo detectado")} · {overview.host.hostname}</small>
             <div className="system-device-chips">
-              <span>{overview.host.gpu_name || "GPU no detectada"}</span>
+              <span>{overview.host.gpu_name || t("GPU no detectada")}</span>
               <span>{overview.host.architecture}</span>
               <span>{overview.host.is_dgx_os ? "DGX OS" : overview.host.os_family}</span>
             </div>
@@ -7742,7 +7736,7 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
           <div className="system-device-photo">
             {systemBranding.product
               ? <img src={systemBranding.product} alt={systemBranding.label} />
-              : <Cpu aria-label="Equipo sin fotografía disponible" />}
+              : <Cpu aria-label={t("Equipo sin fotografía disponible")} />}
           </div>
         </Card>
       )}
@@ -7752,14 +7746,14 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
             <div className="readiness-title">
               {readiness.ready ? <CheckCircle2 /> : <TriangleAlert />}
               <span>
-                <strong>{readiness.ready ? "Sistema listo" : "El sistema requiere atención"}</strong>
-                <small>{readiness.ready ? "Todos los requisitos obligatorios están disponibles." : "Revisa los avisos antes de activar perfiles o descargar modelos."}</small>
+                <strong>{readiness.ready ? t("Sistema listo") : t("El sistema requiere atención")}</strong>
+                <small>{readiness.ready ? t("Todos los requisitos obligatorios están disponibles.") : t("Revisa los avisos antes de activar perfiles o descargar modelos.")}</small>
               </span>
             </div>
             <div className="readiness-counts">
-              <span className="ok"><CheckCircle2 size={16} /><strong>{readiness.summary.ok}</strong><small>Correctos</small></span>
-              <span className="warning"><TriangleAlert size={16} /><strong>{readiness.summary.warnings}</strong><small>Avisos</small></span>
-              <span className="info"><Info size={16} /><strong>{readiness.summary.optional}</strong><small>Opcionales</small></span>
+              <span className="ok"><CheckCircle2 size={16} /><strong>{readiness.summary.ok}</strong><small>{t("Correctos")}</small></span>
+              <span className="warning"><TriangleAlert size={16} /><strong>{readiness.summary.warnings}</strong><small>{t("Avisos")}</small></span>
+              <span className="info"><Info size={16} /><strong>{readiness.summary.optional}</strong><small>{t("Opcionales")}</small></span>
             </div>
           </Card>
           <div className="readiness-groups">
@@ -7785,18 +7779,18 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
       )}
       <div className="system-grid">
         <Card>
-          <div className="card-kicker"><Cpu size={16} /> Plataforma y sistema operativo</div>
+          <div className="card-kicker"><Cpu size={16} />{" "}{t("Plataforma y sistema operativo")}</div>
           <div className="system-facts">
-            <div><span>Plataforma</span><strong>{overview ? (overview.host.is_dgx_spark ? overview.host.device_model : "Equipo no DGX Spark") : "Detectando"}</strong></div>
-            <div><span>Familia del SO</span><strong>{overview ? (overview.host.is_dgx_os ? "NVIDIA DGX OS" : overview.host.os_family) : "Detectando"}</strong></div>
-            <div><span>Distribución</span><strong>{overview?.host.os_name ?? "Detectando"}</strong></div>
-            <div><span>Kernel</span><strong>{overview?.host.kernel ?? "—"}</strong></div>
-            <div><span>Arquitectura</span><strong>{overview?.host.architecture ?? "—"}</strong></div>
-            <div><span>CPU</span><strong>{overview?.host.cpu_count ?? "—"} núcleos</strong></div>
+            <div><span>{t("Plataforma")}</span><strong>{overview ? (overview.host.is_dgx_spark ? overview.host.device_model : t("Equipo no DGX Spark")) : t("Detectando")}</strong></div>
+            <div><span>{t("Familia del SO")}</span><strong>{overview ? (overview.host.is_dgx_os ? "NVIDIA DGX OS" : overview.host.os_family) : t("Detectando")}</strong></div>
+            <div><span>{t("Distribución")}</span><strong>{overview?.host.os_name ?? t("Detectando")}</strong></div>
+            <div><span>{t("Kernel")}</span><strong>{overview?.host.kernel ?? "—"}</strong></div>
+            <div><span>{t("Arquitectura")}</span><strong>{overview?.host.architecture ?? "—"}</strong></div>
+            <div><span>CPU</span><strong>{overview?.host.cpu_count ?? "—"}{" "}{t("núcleos")}</strong></div>
           </div>
         </Card>
         <Card>
-          <div className="card-kicker"><Server size={16} /> Servicios administrados</div>
+          <div className="card-kicker"><Server size={16} />{" "}{t("Servicios administrados")}</div>
           <div className="service-list">
             {services.map((service) => {
               const active = ["active", "running"].includes(String(service.status));
@@ -7804,23 +7798,23 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
                 <div className="service-control" key={`${service.type}-${service.name}`}>
                   <StatusDot online={active} />
                   <div><strong>{String(service.name)}</strong><small>{String(service.type)} · {String(service.status)}</small></div>
-                  {service.type === "systemd" && <div><button onClick={() => control(String(service.name), "restart")}>Reiniciar</button><button onClick={() => control(String(service.name), active ? "stop" : "start")}>{active ? "Detener" : "Iniciar"}</button></div>}
+                  {service.type === "systemd" && <div><button onClick={() => control(String(service.name), "restart")}>{t("Reiniciar")}</button><button onClick={() => control(String(service.name), active ? "stop" : "start")}>{active ? t("Detener") : t("Iniciar")}</button></div>}
                 </div>
               );
             })}
-            {!services.length && <p className="muted">No se detectaron servicios administrados.</p>}
+            {!services.length && <p className="muted">{t("No se detectaron servicios administrados.")}</p>}
           </div>
         </Card>
         <Card className="integrity-card">
           <div className="card-kicker">
             {integrity?.healthy ? <CheckCircle2 size={16} /> : <TriangleAlert size={16} />}
-            Integridad después de actualizar
+            {t("Integridad después de actualizar")}
           </div>
           {integrity && (
             <>
               <div className={`integrity-state ${integrity.healthy ? "ok" : "warning"}`}>
-                <strong>{integrity.healthy ? "Sistema coherente" : integrity.reboot_required ? "Reinicio requerido" : "Reparación recomendada"}</strong>
-                <small>Kernel activo {integrity.current_kernel}{integrity.latest_kernel !== integrity.current_kernel ? ` · disponible ${integrity.latest_kernel}` : ""}</small>
+                <strong>{integrity.healthy ? t("Sistema coherente") : integrity.reboot_required ? t("Reinicio requerido") : t("Reparación recomendada")}</strong>
+                <small>{t("Kernel activo")}{" "}{integrity.current_kernel}{integrity.latest_kernel !== integrity.current_kernel ? t(" · disponible {kernel}", { kernel: integrity.latest_kernel }) : ""}</small>
               </div>
               <div className="integrity-checks">
                 {[
@@ -7828,9 +7822,9 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
                   ["dpkg", integrity.dpkg_ok],
                   ["DKMS", integrity.dkms_ok],
                   ["NVIDIA Container", integrity.container_runtime_ok],
-                  ["Driver NVIDIA", integrity.nvidia_ok],
+                  [t("Driver NVIDIA"), integrity.nvidia_ok],
                   ["llama.cpp", integrity.llama_ok],
-                  ["Servicio al arrancar", integrity.service_enabled],
+                  [t("Servicio al arrancar"), integrity.service_enabled],
                 ].map(([label, value]) => (
                   <span key={String(label)} className={value === false ? "warning" : value === true ? "ok" : "info"}>
                     {value === false ? <TriangleAlert /> : value === true ? <CheckCircle2 /> : <Info />}
@@ -7839,30 +7833,30 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
                 ))}
               </div>
               <div className="integrity-actions">
-                <small>{integrity.last_repair ? `Última comprobación ${new Date(integrity.last_repair).toLocaleString()}` : "Sin reparación registrada"}</small>
-                <button className="button secondary" disabled={!config?.system_updates_enabled || !integrity.repair_available || maintenanceActive} onClick={repairSystem}>Comprobar y reparar</button>
+                <small>{integrity.last_repair ? t("Última comprobación {date}", { date: new Date(integrity.last_repair).toLocaleString(locale) }) : t("Sin reparación registrada")}</small>
+                <button className="button secondary" disabled={!config?.system_updates_enabled || !integrity.repair_available || maintenanceActive} onClick={repairSystem}>{t("Comprobar y reparar")}</button>
               </div>
             </>
           )}
         </Card>
         <Card className="updates-card">
-          <div className="card-kicker"><PackageCheck size={16} /> Actualizaciones</div>
+          <div className="card-kicker"><PackageCheck size={16} />{" "}{t("Actualizaciones")}</div>
           <div className="updates-overview">
             <div className="update-total">
               <strong>{updates?.supported ? updates.packages.length : "—"}</strong>
-              <span>{updates?.supported ? "paquetes disponibles" : "APT no disponible"}</span>
+              <span>{updates?.supported ? t("paquetes disponibles") : t("APT no disponible")}</span>
             </div>
             <div className="update-stats">
-              <span className={(updates?.summary.security ?? 0) > 0 ? "warning" : ""}><strong>{updates?.summary.security ?? 0}</strong><small>Seguridad</small></span>
-              <span><strong>{updates?.summary.kernel ?? 0}</strong><small>Kernel</small></span>
-              <span><strong>{updates?.summary.nvidia ?? 0}</strong><small>NVIDIA/CUDA</small></span>
-              <span><strong>{updates?.summary.containers ?? 0}</strong><small>Contenedores</small></span>
+              <span className={(updates?.summary.security ?? 0) > 0 ? "warning" : ""}><strong>{updates?.summary.security ?? 0}</strong><small>{t("Seguridad")}</small></span>
+              <span><strong>{updates?.summary.kernel ?? 0}</strong><small>{t("Kernel")}</small></span>
+              <span><strong>{updates?.summary.nvidia ?? 0}</strong><small>{t("NVIDIA/CUDA")}</small></span>
+              <span><strong>{updates?.summary.containers ?? 0}</strong><small>{t("Contenedores")}</small></span>
             </div>
             <div className="update-actions">
-              {updates?.reboot_required && <span className="update-reboot"><TriangleAlert size={15} /> Hay un reinicio pendiente</span>}
-              <small>{updates?.checked_at ? `Comprobado ${new Date(updates.checked_at).toLocaleString()}` : "Comprobando APT…"}</small>
-              <button className="button primary" disabled={!config?.system_updates_enabled || !updates?.packages.length || maintenanceActive} onClick={applyUpdates}>{maintenanceActive ? "Mantenimiento en curso" : "Actualizar sistema"}</button>
-              {!config?.system_updates_enabled && <small>Activa ENABLE_SYSTEM_UPDATES en .env</small>}
+              {updates?.reboot_required && <span className="update-reboot"><TriangleAlert size={15} />{" "}{t("Hay un reinicio pendiente")}</span>}
+              <small>{updates?.checked_at ? t("Comprobado {date}", { date: new Date(updates.checked_at).toLocaleString(locale) }) : t("Comprobando APT…")}</small>
+              <button className="button primary" disabled={!config?.system_updates_enabled || !updates?.packages.length || maintenanceActive} onClick={applyUpdates}>{maintenanceActive ? t("Mantenimiento en curso") : t("Actualizar sistema")}</button>
+              {!config?.system_updates_enabled && <small>{t("Activa ENABLE_SYSTEM_UPDATES en .env")}</small>}
             </div>
           </div>
           {updates?.message && <div className="update-message">{updates.message}</div>}
@@ -7874,28 +7868,28 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
                     <strong>{item.name}</strong>
                     <small>{updateCategoryLabels[item.category]} · {item.architecture} · {item.repository}</small>
                   </span>
-                  {item.security && <span className="badge warning">Seguridad</span>}
+                  {item.security && <span className="badge warning">{t("Seguridad")}</span>}
                   <code>{item.current_version || "—"} <span>→</span> {item.candidate_version}</code>
                 </div>
               ))}
             </div>
-          ) : updates?.supported ? <p className="updates-empty"><CheckCircle2 size={17} /> El sistema está actualizado.</p> : null}
+          ) : updates?.supported ? <p className="updates-empty"><CheckCircle2 size={17} />{" "}{t("El sistema está actualizado.")}</p> : null}
         </Card>
       </div>
-      <SectionHeading eyebrow="SOFTWARE" title="Versiones instaladas" />
+      <SectionHeading eyebrow={t("SOFTWARE")} title={t("Versiones instaladas")} />
       <Card className="version-list">
         {versions?.components.map((component) => (
           <div key={component.name}>
             <StatusDot online={component.available} />
             <span><strong>{component.name}</strong><small>{component.category ? `${component.category} · ` : ""}{component.detail}</small></span>
-            <code>{component.version ?? "No detectado"}</code>
+            <code>{component.version ?? t("No detectado")}</code>
           </div>
         ))}
         {versions?.packages.map((item) => (
-          <div key={item.name}><StatusDot online /><span><strong>{item.name}</strong><small>Paquete DGX OS</small></span><code>{item.version}</code></div>
+          <div key={item.name}><StatusDot online /><span><strong>{item.name}</strong><small>{t("Paquete DGX OS")}</small></span><code>{item.version}</code></div>
         ))}
       </Card>
-      {jobs.some((job) => ["system.update", "system.repair"].includes(job.kind)) && <Card className="notice"><Terminal /><span>La tarea de mantenimiento se puede seguir en Modelos → Actividad reciente.</span></Card>}
+      {jobs.some((job) => ["system.update", "system.repair"].includes(job.kind)) && <Card className="notice"><Terminal /><span>{t("La tarea de mantenimiento se puede seguir en Modelos → Actividad reciente.")}</span></Card>}
     </div>
   );
 }
@@ -7946,44 +7940,44 @@ function LogsView({ notify }: { notify: (message: string, error?: boolean) => vo
   return (
     <div className="view-stack">
       <SectionHeading
-        eyebrow="DIAGNÓSTICO PERSISTENTE"
-        title="Logs"
+        eyebrow={t("DIAGNÓSTICO PERSISTENTE")}
+        title={t("Logs")}
         action={<div className="logs-heading-actions">
           <button className={`button ${live ? "primary" : "secondary"}`} onClick={() => setLive((current) => !current)}>
-            {live ? <Activity size={14} /> : <Square size={13} />} {live ? "En directo" : "Pausado"}
+            {live ? <Activity size={14} /> : <Square size={13} />} {live ? t("En directo") : t("Pausado")}
           </button>
-          <button className="icon-button" onClick={() => void load()} aria-label="Actualizar logs"><RefreshCw size={16} /></button>
+          <button className="icon-button" onClick={() => void load()} aria-label={t("Actualizar logs")}><RefreshCw size={16} /></button>
         </div>}
       />
       <div className="logs-summary">
-        <Card><small>Últimas 24 h</small><strong>{Object.values(counts).reduce((total, count) => total + (count ?? 0), 0)}</strong></Card>
-        <Card className="warning"><small>Warnings</small><strong>{counts.warning ?? 0}</strong></Card>
-        <Card className="error"><small>Errores</small><strong>{(counts.error ?? 0) + (counts.critical ?? 0)}</strong></Card>
-        <Card><small>Retención</small><strong>{data?.retention_days ?? 30} días</strong></Card>
+        <Card><small>{t("Últimas 24 h")}</small><strong>{Object.values(counts).reduce((total, count) => total + (count ?? 0), 0)}</strong></Card>
+        <Card className="warning"><small>{t("Warnings")}</small><strong>{counts.warning ?? 0}</strong></Card>
+        <Card className="error"><small>{t("Errores")}</small><strong>{(counts.error ?? 0) + (counts.critical ?? 0)}</strong></Card>
+        <Card><small>{t("Retención")}</small><strong>{data?.retention_days ?? 30}{" "}{t("días")}</strong></Card>
       </div>
       <Card className="logs-panel">
         <form className="logs-filters" onSubmit={search}>
-          <label>Nivel
+          <label>{t("Nivel")}
             <select value={level} onChange={(event) => setLevel(event.target.value)}>
-              <option value="">Todos</option>
-              <option value="debug">Debug</option>
-              <option value="info">Info</option>
-              <option value="warning">Warning</option>
-              <option value="error">Error</option>
-              <option value="critical">Critical</option>
+              <option value="">{t("Todos")}</option>
+              <option value="debug">{t("Debug")}</option>
+              <option value="info">{t("Info")}</option>
+              <option value="warning">{t("Warning")}</option>
+              <option value="error">{t("Error")}</option>
+              <option value="critical">{t("Critical")}</option>
             </select>
           </label>
-          <label>Categoría
+          <label>{t("Categoría")}
             <select value={category} onChange={(event) => setCategory(event.target.value)}>
-              <option value="">Todas</option>
+              <option value="">{t("Todas")}</option>
               {(data?.categories ?? []).map((item) => <option value={item} key={item}>{item}</option>)}
             </select>
           </label>
-          <label className={`logs-search${searchStateClass(query, data && appliedQuery === query.trim() ? data.entries.length : null)}`} data-count={searchCountLabel(query, data && appliedQuery === query.trim() ? data.entries.length : null)}>Buscar
-            <span><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="acción, entidad o mensaje" /><button type="submit">Filtrar</button></span>
+          <label className={`logs-search${searchStateClass(query, data && appliedQuery === query.trim() ? data.entries.length : null)}`} data-count={searchCountLabel(query, data && appliedQuery === query.trim() ? data.entries.length : null)}>{t("Buscar")}
+            <span><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("acción, entidad o mensaje")} /><button type="submit">{t("Filtrar")}</button></span>
           </label>
         </form>
-        <div className="logs-table-head"><span>Fecha</span><span>Nivel</span><span>Evento</span><span>Categoría</span></div>
+        <div className="logs-table-head"><span>{t("Fecha")}</span><span>{t("Nivel")}</span><span>{t("Evento")}</span><span>{t("Categoría")}</span></div>
         <div className="logs-list">
           {(data?.entries ?? []).map((entry) => (
             <button
@@ -7991,7 +7985,7 @@ function LogsView({ notify }: { notify: (message: string, error?: boolean) => vo
               key={entry.id}
               onClick={() => setSelected((current) => current === entry.id ? null : entry.id)}
             >
-              <time>{new Date(entry.created_at).toLocaleString()}</time>
+              <time>{new Date(entry.created_at).toLocaleString(locale)}</time>
               <span className={`log-level ${entry.level}`}>{entry.level}</span>
               <span className="log-message">
                 <strong>{entry.message}</strong>
@@ -8001,15 +7995,20 @@ function LogsView({ notify }: { notify: (message: string, error?: boolean) => vo
               <span className="log-category">{entry.category}</span>
             </button>
           ))}
-          {data && data.entries.length === 0 && <Empty icon={<Terminal />} title="Sin resultados" text="No hay logs que coincidan con estos filtros." />}
+          {data && data.entries.length === 0 && <Empty icon={<Terminal />} title={t("Sin resultados")} text={t("No hay logs que coincidan con estos filtros.")} />}
         </div>
-        {data?.has_more && <small className="logs-limit-note">Se muestran los 200 eventos más recientes. Acota los filtros para investigar un caso concreto.</small>}
+        {data?.has_more && <small className="logs-limit-note">{t("Se muestran los 200 eventos más recientes. Acota los filtros para investigar un caso concreto.")}</small>}
       </Card>
     </div>
   );
 }
 
 function SettingsView({ config, themePreference, setThemePreference, notify }: { config: Config | null; themePreference: ThemePreference; setThemePreference: (preference: ThemePreference) => void; notify: (message: string, error?: boolean) => void }) {
+  const [languagePreference, setLanguageChoice] = useState<LanguagePreference>(storedLanguagePreference);
+  const chooseLanguage = (preference: LanguagePreference) => {
+    setLanguageChoice(preference);
+    setLanguagePreference(preference);
+  };
   const [key, setKey] = useState(getApiKey());
   const [gateway, setGateway] = useState<GatewayConfig | null>(null);
   useEffect(() => {
@@ -8019,7 +8018,7 @@ function SettingsView({ config, themePreference, setThemePreference, notify }: {
   function saveKey() {
     if (key) sessionStorage.setItem("mydgx-api-key", key);
     else sessionStorage.removeItem("mydgx-api-key");
-    notify("Clave guardada solo durante esta sesión");
+    notify(t("Clave guardada solo durante esta sesión"));
     window.location.reload();
   }
 
@@ -8038,7 +8037,7 @@ function SettingsView({ config, themePreference, setThemePreference, notify }: {
           web_search: gateway.web_search !== false,
         }),
       });
-      notify("Gateway actualizado. La búsqueda web se aplica al momento y OpenCode la toma al volver a abrirse. Host, puerto o activación requieren ./start.sh restart.");
+      notify(t("Gateway actualizado. La búsqueda web se aplica al momento y OpenCode la toma al volver a abrirse. Host, puerto o activación requieren ./start.sh restart."));
       setGateway(await api<GatewayConfig>("/api/gateway/config"));
     } catch (error) {
       notify((error as Error).message, true);
@@ -8047,43 +8046,44 @@ function SettingsView({ config, themePreference, setThemePreference, notify }: {
 
   return (
     <div className="view-stack settings-view">
-      <SectionHeading eyebrow="PREFERENCIAS" title="Configuración" />
+      <SectionHeading eyebrow={t("PREFERENCIAS")} title={t("Configuración")} />
       <Card>
-        <div className="settings-row"><div><Sun /><span><strong>Apariencia</strong><small>Sigue el modo del sistema o fija día o noche</small></span></div><div className="segmented theme-preference"><button className={themePreference === "system" ? "active" : ""} onClick={() => setThemePreference("system")}>Automático</button><button className={themePreference === "light" ? "active" : ""} onClick={() => setThemePreference("light")}>Día</button><button className={themePreference === "dark" ? "active" : ""} onClick={() => setThemePreference("dark")}>Noche</button></div></div>
-        <div className="settings-row"><div><ShieldCheck /><span><strong>Clave de acceso MyDGX</strong><small>Se guarda únicamente en sessionStorage</small></span></div><div className="inline-form"><input type="password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={config?.api_key_required ? "Clave requerida" : "No configurada"} autoComplete="off" /><button className="button secondary" onClick={saveKey}>Guardar</button></div></div>
+        <div className="settings-row"><div><Sun /><span><strong>{t("Apariencia")}</strong><small>{t("Sigue el modo del sistema o fija día o noche")}</small></span></div><div className="segmented theme-preference"><button className={themePreference === "system" ? "active" : ""} onClick={() => setThemePreference("system")}>{t("Automático")}</button><button className={themePreference === "light" ? "active" : ""} onClick={() => setThemePreference("light")}>{t("Día")}</button><button className={themePreference === "dark" ? "active" : ""} onClick={() => setThemePreference("dark")}>{t("Noche")}</button></div></div>
+        <div className="settings-row"><div><Languages /><span><strong>{t("Idioma")}</strong><small>{languagePreference === "system" ? t("Según el navegador: {language}", { language: language === "es" ? "Español" : "English" }) : t("Idioma fijo para este navegador")}</small></span></div><div className="segmented theme-preference"><button className={languagePreference === "system" ? "active" : ""} onClick={() => chooseLanguage("system")}>{t("Automático")}</button><button className={languagePreference === "es" ? "active" : ""} onClick={() => chooseLanguage("es")}>{t("Español")}</button><button className={languagePreference === "en" ? "active" : ""} onClick={() => chooseLanguage("en")}>{t("English")}</button></div></div>
+        <div className="settings-row"><div><ShieldCheck /><span><strong>{t("Clave de acceso MyDGX")}</strong><small>{t("Se guarda únicamente en sessionStorage")}</small></span></div><div className="inline-form"><input type="password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={config?.api_key_required ? t("Clave requerida") : t("No configurada")} autoComplete="off" /><button className="button secondary" onClick={saveKey}>{t("Guardar")}</button></div></div>
       </Card>
       <Card>
-        <div className="card-kicker"><Activity size={16} /> Integraciones</div>
+        <div className="card-kicker"><Activity size={16} />{" "}{t("Integraciones")}</div>
         <div className="integration-list">
-          <div><span><strong>Hugging Face</strong><small>Token cargado desde .env</small></span><span className={`badge ${config?.hf_token_configured ? "live" : ""}`}>{config?.hf_token_configured ? "Configurado" : "Público"}</span></div>
-          <div><span><strong>Actualizaciones</strong><small>Operación privilegiada controlada</small></span><span className={`badge ${config?.system_updates_enabled ? "live" : ""}`}>{config?.system_updates_enabled ? "Activadas" : "Bloqueadas"}</span></div>
-          <div><span><strong>Servicios</strong><small>systemd con lista permitida</small></span><span className={`badge ${config?.service_control_enabled ? "live" : ""}`}>{config?.service_control_enabled ? "Activado" : "Solo lectura"}</span></div>
+          <div><span><strong>{t("Hugging Face")}</strong><small>{t("Token cargado desde .env")}</small></span><span className={`badge ${config?.hf_token_configured ? "live" : ""}`}>{config?.hf_token_configured ? t("Configurado") : t("Público")}</span></div>
+          <div><span><strong>{t("Actualizaciones")}</strong><small>{t("Operación privilegiada controlada")}</small></span><span className={`badge ${config?.system_updates_enabled ? "live" : ""}`}>{config?.system_updates_enabled ? t("Activadas") : t("Bloqueadas")}</span></div>
+          <div><span><strong>{t("Servicios")}</strong><small>{t("systemd con lista permitida")}</small></span><span className={`badge ${config?.service_control_enabled ? "live" : ""}`}>{config?.service_control_enabled ? t("Activado") : t("Solo lectura")}</span></div>
         </div>
       </Card>
       <Card className="gateway-settings">
         <div className="gateway-settings-head">
-          <div><Bot size={17} /><span><strong>Gateway OpenAI del perfil activo</strong><small>{gateway?.endpoint ?? config?.gateway_url ?? "Cargando…"}</small></span></div>
-          <span className={`badge ${gateway?.running ? "live" : ""}`}>{gateway?.running ? "En línea" : gateway?.enabled ? "Reinicio pendiente" : "Desactivado"}</span>
+          <div><Bot size={17} /><span><strong>{t("Gateway OpenAI del perfil activo")}</strong><small>{gateway?.endpoint ?? config?.gateway_url ?? t("Cargando…")}</small></span></div>
+          <span className={`badge ${gateway?.running ? "live" : ""}`}>{gateway?.running ? t("En línea") : gateway?.enabled ? t("Reinicio pendiente") : t("Desactivado")}</span>
         </div>
         {gateway && <form onSubmit={saveGateway}>
-          <label className="checkbox"><input type="checkbox" checked={gateway.enabled} onChange={(event) => setGateway({ ...gateway, enabled: event.target.checked })} /><span>Activar gateway al arrancar MyDGX</span></label>
-          <label className="checkbox"><input type="checkbox" checked={gateway.web_search !== false} onChange={(event) => setGateway({ ...gateway, web_search: event.target.checked })} /><span>Búsqueda web para OpenCode, con SearXNG local. Activada por defecto; no requiere reiniciar.</span></label>
-          <label>Escucha<select value={gateway.host} onChange={(event) => setGateway({ ...gateway, host: event.target.value as GatewayConfig["host"] })}><option value="127.0.0.1">Solo localhost (recomendado)</option><option value="::1">Solo localhost IPv6</option><option value="0.0.0.0">Toda la red IPv4</option><option value="::">Toda la red IPv6</option></select></label>
-          <label>Puerto<input type="number" min={1024} max={65535} value={gateway.port} onChange={(event) => setGateway({ ...gateway, port: Number(event.target.value) })} /></label>
-          <label>Timeout de inferencia (s)<input type="number" min={10} max={7200} value={gateway.request_timeout_seconds} onChange={(event) => setGateway({ ...gateway, request_timeout_seconds: Number(event.target.value) })} /></label>
-          <label>Petición máxima (MiB)<input type="number" min={1} max={256} value={gateway.max_request_mb} onChange={(event) => setGateway({ ...gateway, max_request_mb: Number(event.target.value) })} /></label>
+          <label className="checkbox"><input type="checkbox" checked={gateway.enabled} onChange={(event) => setGateway({ ...gateway, enabled: event.target.checked })} /><span>{t("Activar gateway al arrancar MyDGX")}</span></label>
+          <label className="checkbox"><input type="checkbox" checked={gateway.web_search !== false} onChange={(event) => setGateway({ ...gateway, web_search: event.target.checked })} /><span>{t("Búsqueda web para OpenCode, con SearXNG local. Activada por defecto; no requiere reiniciar.")}</span></label>
+          <label>{t("Escucha")}<select value={gateway.host} onChange={(event) => setGateway({ ...gateway, host: event.target.value as GatewayConfig["host"] })}><option value="127.0.0.1">{t("Solo localhost (recomendado)")}</option><option value="::1">{t("Solo localhost IPv6")}</option><option value="0.0.0.0">{t("Toda la red IPv4")}</option><option value="::">{t("Toda la red IPv6")}</option></select></label>
+          <label>{t("Puerto")}<input type="number" min={1024} max={65535} value={gateway.port} onChange={(event) => setGateway({ ...gateway, port: Number(event.target.value) })} /></label>
+          <label>{t("Timeout de inferencia (s)")}<input type="number" min={10} max={7200} value={gateway.request_timeout_seconds} onChange={(event) => setGateway({ ...gateway, request_timeout_seconds: Number(event.target.value) })} /></label>
+          <label>{t("Petición máxima (MiB)")}<input type="number" min={1} max={256} value={gateway.max_request_mb} onChange={(event) => setGateway({ ...gateway, max_request_mb: Number(event.target.value) })} /></label>
           <div className="gateway-profile-summary">
-            <span><small>Perfil proxy</small><strong>{gateway.active_profile ?? "Ningún perfil activo"}</strong></span>
-            <span><small>Autenticación</small><strong>{gateway.api_key_configured ? "Bearer configurado en .env" : "Sin clave · solo localhost"}</strong></span>
-            <span><small>Adaptador de protocolos</small><strong>{gateway.protocol_adapter ? `LiteLLM ${gateway.protocol_adapter}` : "No disponible"}</strong></span>
-            <span><small>Búsqueda web</small><strong>{gateway.web_search !== false ? "Activada · SearXNG" : "Desactivada"}</strong></span>
-            <span className="gateway-aliases"><small>Modelos publicados · nombre completo y alias para el campo model</small><GatewayModelList gateway={gateway} empty="Ninguno configurado" /></span>
+            <span><small>{t("Perfil proxy")}</small><strong>{gateway.active_profile ?? t("Ningún perfil activo")}</strong></span>
+            <span><small>{t("Autenticación")}</small><strong>{gateway.api_key_configured ? t("Bearer configurado en .env") : t("Sin clave · solo localhost")}</strong></span>
+            <span><small>{t("Adaptador de protocolos")}</small><strong>{gateway.protocol_adapter ? `LiteLLM ${gateway.protocol_adapter}` : t("No disponible")}</strong></span>
+            <span><small>{t("Búsqueda web")}</small><strong>{gateway.web_search !== false ? t("Activada · SearXNG") : t("Desactivada")}</strong></span>
+            <span className="gateway-aliases"><small>{t("Modelos publicados · nombre completo y alias para el campo model")}</small><GatewayModelList gateway={gateway} empty={t("Ninguno configurado")} /></span>
           </div>
-          <div className="gateway-actions"><small>OpenAI: {gateway.endpoint} · Anthropic: {gateway.anthropic_endpoint}</small></div>
-          <div className="gateway-actions"><small>Los cambios de host, puerto o activación requieren reiniciar MyDGX.</small><button className="button primary" type="submit">Guardar gateway</button></div>
+          <div className="gateway-actions"><small>{t("OpenAI:")}{" "}{gateway.endpoint}{" "}{t("· Anthropic:")}{" "}{gateway.anthropic_endpoint}</small></div>
+          <div className="gateway-actions"><small>{t("Los cambios de host, puerto o activación requieren reiniciar MyDGX.")}</small><button className="button primary" type="submit">{t("Guardar gateway")}</button></div>
         </form>}
       </Card>
-      <div className="security-note"><ShieldCheck /><div><strong>Diseñado para mantener los secretos en el servidor</strong><p>Las claves de Hugging Face y servicios nunca se devuelven al navegador, a los logs ni a SQLite.</p></div></div>
+      <div className="security-note"><ShieldCheck /><div><strong>{t("Diseñado para mantener los secretos en el servidor")}</strong><p>{t("Las claves de Hugging Face y servicios nunca se devuelven al navegador, a los logs ni a SQLite.")}</p></div></div>
     </div>
   );
 }
@@ -8160,10 +8160,10 @@ function FontSizeControl({ onChange }: { onChange: (update: (current: number) =>
   }, [nudge, stop]);
 
   return (
-    <div className="font-scale" role="group" aria-label="Tamaño de letra">
-      <button type="button" aria-label="Reducir tamaño de letra" onPointerDown={(event) => startHolding(-1, event)} onPointerUp={stop} onPointerCancel={stop}>−</button>
+    <div className="font-scale" role="group" aria-label={t("Tamaño de letra")}>
+      <button type="button" aria-label={t("Reducir tamaño de letra")} onPointerDown={(event) => startHolding(-1, event)} onPointerUp={stop} onPointerCancel={stop}>−</button>
       <span className="font-scale-mark" aria-hidden="true"><span>A</span><span>A</span></span>
-      <button type="button" aria-label="Aumentar tamaño de letra" onPointerDown={(event) => startHolding(1, event)} onPointerUp={stop} onPointerCancel={stop}>+</button>
+      <button type="button" aria-label={t("Aumentar tamaño de letra")} onPointerDown={(event) => startHolding(1, event)} onPointerUp={stop} onPointerCancel={stop}>+</button>
     </div>
   );
 }
@@ -8325,8 +8325,8 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   ).size;
   const hasActiveModels = loadedModelTotal > 0 || (models?.running.length ?? 0) > 0;
   const navCounts: Partial<Record<View, { value: number; title: string }>> = {
-    profiles: { value: runningProfileTotal, title: `${runningProfileTotal} ${runningProfileTotal === 1 ? "perfil levantado" : "perfiles levantados"}` },
-    models: { value: loadedModelTotal, title: `${loadedModelTotal} ${loadedModelTotal === 1 ? "modelo cargado" : "modelos cargados"}` },
+    profiles: { value: runningProfileTotal, title: t(runningProfileTotal === 1 ? "{count} perfil levantado" : "{count} perfiles levantados", { count: runningProfileTotal }) },
+    models: { value: loadedModelTotal, title: t(loadedModelTotal === 1 ? "{count} modelo cargado" : "{count} modelos cargados", { count: loadedModelTotal }) },
   };
   const currentLabel = useMemo(() => navItems.find((item) => item.id === view)?.label ?? "MyDGX", [view]);
   const benchmarkSuiteJob = jobs.find(
@@ -8352,21 +8352,21 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   return (
     <div className="app-shell">
       <aside className={menuOpen ? "open" : ""}>
-        <div className="brand"><Logo /><div><strong>MyDGX</strong><span>SPARK CONTROL</span></div><button className="mobile-close" onClick={() => setMenuOpen(false)}><X /></button></div>
+        <div className="brand"><Logo /><div><strong>MyDGX</strong><span>{t("SPARK CONTROL")}</span></div><button className="mobile-close" onClick={() => setMenuOpen(false)}><X /></button></div>
         <nav>
-          <span className="nav-label">MENÚ PRINCIPAL</span>
+          <span className="nav-label">{t("MENÚ PRINCIPAL")}</span>
           {navItems.map((item) => {
             const Icon = item.icon;
-            return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => { setView(item.id); setMenuOpen(false); }}><Icon size={18} /><span>{item.label}</span>{navCounts[item.id]?.value ? <b className="nav-count" title={navCounts[item.id]?.title} aria-label={navCounts[item.id]?.title}>{navCounts[item.id]?.value}</b> : null}{item.id === "benchmarks" && benchmarkSuiteJob ? <b className="nav-running-dot" title={`Suite ${Math.round(benchmarkSuiteJob.progress)}%`} /> : null}{view === item.id && <ChevronRight size={14} />}</button>;
+            return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => { setView(item.id); setMenuOpen(false); }}><Icon size={18} /><span>{item.label}</span>{navCounts[item.id]?.value ? <b className="nav-count" title={navCounts[item.id]?.title} aria-label={navCounts[item.id]?.title}>{navCounts[item.id]?.value}</b> : null}{item.id === "benchmarks" && benchmarkSuiteJob ? <b className="nav-running-dot" title={t("Suite {progress}%", { progress: Math.round(benchmarkSuiteJob.progress) })} /> : null}{view === item.id && <ChevronRight size={14} />}</button>;
           })}
         </nav>
         <div className="sidebar-bottom">
           <div className="device-mini">
             <div className="device-image"><Cpu /></div>
-            <div><strong>{overview ? (overview.host.is_dgx_spark ? overview.host.device_model : overview.host.hostname) : "Detectando equipo"}</strong><span><StatusDot online={Boolean(overview)} /> {overview ? `${overview.host.is_dgx_spark ? "DGX Spark / GB10" : "No DGX Spark"} · ${overview.host.is_dgx_os ? "DGX OS" : overview.host.os_family}` : "Conectando"}</span></div>
+            <div><strong>{overview ? (overview.host.is_dgx_spark ? overview.host.device_model : overview.host.hostname) : t("Detectando equipo")}</strong><span><StatusDot online={Boolean(overview)} /> {overview ? `${overview.host.is_dgx_spark ? "DGX Spark / GB10" : t("No DGX Spark")} · ${overview.host.is_dgx_os ? "DGX OS" : overview.host.os_family}` : t("Conectando")}</span></div>
             {overview?.running_profiles?.length ? (
-              <button className="device-profiles" onClick={() => { setView("profiles"); setMenuOpen(false); }} title="Ver perfiles">
-                <small>{overview.running_profiles.length === 1 ? "Perfil activo" : "Perfiles activos"}</small>
+              <button className="device-profiles" onClick={() => { setView("profiles"); setMenuOpen(false); }} title={t("Ver perfiles")}>
+                <small>{overview.running_profiles.length === 1 ? t("Perfil activo") : t("Perfiles activos")}</small>
                 {overview.running_profiles.map((profile) => (
                   <div key={profile.id}>
                     <span>
@@ -8384,19 +8384,19 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
           <SidebarOperations jobs={jobs} />
         </div>
       </aside>
-      {menuOpen && <button className="backdrop" onClick={() => setMenuOpen(false)} aria-label="Cerrar menú" />}
+      {menuOpen && <button className="backdrop" onClick={() => setMenuOpen(false)} aria-label={t("Cerrar menú")} />}
       <main>
         <header>
           <button className="menu-button" onClick={() => setMenuOpen(true)}><Menu /></button>
           <span>{currentLabel}</span>
           <div className="appearance-row">
             {hasActiveModels && <StopAllModelsButton notify={notify} onDone={() => { void refreshOverview(); void refreshModels(); }} />}
-            <button className="theme-toggle" onClick={toggleTheme} title={themePreference === "system" ? "Tema automático según el sistema" : "Tema fijo"}>{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}<span>Modo {theme === "dark" ? "día" : "noche"}</span></button>
+            <button className="theme-toggle" onClick={toggleTheme} title={themePreference === "system" ? t("Tema automático según el sistema") : t("Tema fijo")}>{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}<span>{theme === "dark" ? t("Modo día") : t("Modo noche")}</span></button>
             <FontSizeControl onChange={setFontScale} />
-            {onLogout && <button className="session-logout" onClick={onLogout} title="Cerrar sesión" aria-label="Cerrar sesión"><LogOut size={16} /></button>}
+            {onLogout && <button className="session-logout" onClick={onLogout} title={t("Cerrar sesión")} aria-label={t("Cerrar sesión")}><LogOut size={16} /></button>}
           </div>
         </header>
-        {error && <div className="error-banner"><ShieldCheck size={18} /><span>{error}</span><button onClick={() => { void refreshOverview(); void refreshCore(); void refreshModels(); }}>Reintentar</button></div>}
+        {error && <div className="error-banner"><ShieldCheck size={18} /><span>{error}</span><button onClick={() => { void refreshOverview(); void refreshCore(); void refreshModels(); }}>{t("Reintentar")}</button></div>}
         <div className="content">{content}</div>
       </main>
       {toast && <div className={`toast ${toast.error ? "error" : ""}`}>{toast.error ? <ShieldCheck /> : <Sparkles />}<span>{toast.message}</span></div>}

@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Cpu, Eye, EyeOff, LockKeyhole, RefreshCw } from "lucide-react";
 import App from "./App";
+import { languageHeader, t } from "./i18n";
 
 type AuthStatus = {
   required: boolean;
@@ -20,13 +21,14 @@ export default function AuthGate() {
     try {
       const response = await fetch("/api/auth/status", {
         cache: "no-store",
+        headers: languageHeader,
         credentials: "same-origin",
       });
-      if (!response.ok) throw new Error("No se pudo comprobar la sesión");
+      if (!response.ok) throw new Error(t("No se pudo comprobar la sesión"));
       setStatus(await response.json() as AuthStatus);
       setError("");
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Dashboard no disponible");
+      setError(requestError instanceof Error ? requestError.message : t("Dashboard no disponible"));
     }
   }, []);
 
@@ -87,15 +89,15 @@ export default function AuthGate() {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...languageHeader },
         body: JSON.stringify({ password }),
       });
       const body = await response.json().catch(() => ({})) as AuthStatus & { detail?: string };
-      if (!response.ok) throw new Error(body.detail || "No se pudo iniciar sesión");
+      if (!response.ok) throw new Error(body.detail || t("No se pudo iniciar sesión"));
       setPassword("");
       setStatus(body);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "No se pudo iniciar sesión");
+      setError(requestError instanceof Error ? requestError.message : t("No se pudo iniciar sesión"));
     } finally {
       setSubmitting(false);
     }
@@ -121,16 +123,16 @@ export default function AuthGate() {
     <section className="auth-card" aria-labelledby="auth-title">
       <div className="auth-brand">
         <div className="auth-logo"><Cpu size={28} /></div>
-        <div><strong>MyDGX</strong><span>SPARK CONTROL</span></div>
+        <div><strong>MyDGX</strong><span>{t("SPARK CONTROL")}</span></div>
       </div>
       <div className="auth-lock"><LockKeyhole size={26} /></div>
       <div className="auth-copy">
-        <span>ACCESO SEGURO</span>
-        <h1 id="auth-title">{status ? "Inicia sesión" : "Conectando…"}</h1>
-        <p>{status ? `Introduce la contraseña del dashboard. La sesión se cerrará automáticamente después de ${status.session_ttl_minutes} minutos.` : "Comprobando el estado del dashboard."}</p>
+        <span>{t("ACCESO SEGURO")}</span>
+        <h1 id="auth-title">{status ? t("Inicia sesión") : t("Conectando…")}</h1>
+        <p>{status ? t("Introduce la contraseña del dashboard. La sesión se cerrará automáticamente después de {session_ttl_minutes} minutos.", { session_ttl_minutes: status.session_ttl_minutes }) : t("Comprobando el estado del dashboard.")}</p>
       </div>
       {status ? <form className="auth-form" onSubmit={login}>
-        <label htmlFor="dashboard-password">Contraseña</label>
+        <label htmlFor="dashboard-password">{t("Contraseña")}</label>
         <div className="auth-password">
           <LockKeyhole size={17} />
           <input
@@ -140,22 +142,22 @@ export default function AuthGate() {
             onChange={(event) => setPassword(event.target.value)}
             autoComplete="current-password"
             autoFocus
-            placeholder="Contraseña del dashboard"
+            placeholder={t("Contraseña del dashboard")}
           />
-          <button type="button" onClick={() => setShowPassword((current) => !current)} aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}>
+          <button type="button" onClick={() => setShowPassword((current) => !current)} aria-label={showPassword ? t("Ocultar contraseña") : t("Mostrar contraseña")}>
             {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
           </button>
         </div>
         {error && <div className="auth-error" role="alert">{error}</div>}
         <button className="auth-submit" disabled={!password || submitting} type="submit">
           {submitting ? <RefreshCw className="spin" size={17} /> : <LockKeyhole size={17} />}
-          {submitting ? "Comprobando…" : "Entrar en MyDGX"}
+          {submitting ? t("Comprobando…") : t("Entrar en MyDGX")}
         </button>
       </form> : <div className="auth-loading">
         <RefreshCw className="spin" size={20} />
-        {error && <><span role="alert">{error}</span><button onClick={() => void refreshStatus()}>Reintentar</button></>}
+        {error && <><span role="alert">{error}</span><button onClick={() => void refreshStatus()}>{t("Reintentar")}</button></>}
       </div>}
-      <footer><span /><small>Sesión privada · Cookie HttpOnly · {status?.session_ttl_minutes || 60} min</small><span /></footer>
+      <footer><span /><small>{t("Sesión privada · Cookie HttpOnly ·")}{" "}{status?.session_ttl_minutes || 60}{" "}{t("min")}</small><span /></footer>
     </section>
     <div className="auth-orb auth-orb-one" />
     <div className="auth-orb auth-orb-two" />

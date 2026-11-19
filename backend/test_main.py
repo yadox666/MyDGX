@@ -24,6 +24,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import backend.main as main_module
+from backend.i18n import Catalog, request_language, translate_payload
 from backend.gateway import (
     active_routes,
     app as gateway_app,
@@ -7154,6 +7155,62 @@ class DocumentationTests(unittest.TestCase):
         reference = (Path(__file__).resolve().parent.parent / "docs" / "configuracion.md").read_text(encoding="utf-8")
         missing = [name.upper() for name in type(settings).model_fields if f"| `{name.upper()}` |" not in reference]
         self.assertEqual(missing, [])
+
+
+class TranslationTests(unittest.TestCase):
+    def test_request_language_prefers_explicit_header_then_accept_language(self) -> None:
+        self.assertEqual(request_language({"x-mydgx-language": "en", "accept-language": "es-ES"}), "en")
+        self.assertEqual(request_language({"accept-language": "fr-FR,en-US;q=0.8"}), "en")
+        self.assertEqual(request_language({"accept-language": "fr-FR"}), "es")
+
+    def test_catalog_translates_templates_and_nested_values(self) -> None:
+        catalog = Catalog({
+            "Perfil no encontrado": "Profile not found",
+            "No se pudo arrancar {0}: {1}": "Could not start {0}: {1}",
+            "Literal {{json}} con {0}": "Literal {{json}} with {0}",
+            "Modelo {0}": "Model {0}",
+        })
+        self.assertEqual(catalog.translate("Modelo qwen3:8b"), "Model qwen3:8b")
+        self.assertEqual(
+            catalog.translate("Modelo de embeddings configurado por la aplicación"),
+            "Modelo de embeddings configurado por la aplicación",
+        )
+        self.assertEqual(catalog.translate("Perfil no encontrado"), "Profile not found")
+        self.assertEqual(
+            catalog.translate("No se pudo arrancar qwen: Perfil no encontrado"),
+            "Could not start qwen: Profile not found",
+        )
+        self.assertEqual(catalog.translate("Literal {json} con 3"), "Literal {json} with 3")
+        self.assertEqual(catalog.translate("Texto desconocido"), "Texto desconocido")
+        self.assertEqual(
+            catalog.translate("Perfil no encontrado: HTTPStatusError: 404"),
+            "Profile not found: HTTPStatusError: 404",
+        )
+
+    def test_payload_keeps_identifier_and_enum_fields(self) -> None:
+        catalog = Catalog({"No recomendado": "Not recommended"})
+        with patch("backend.i18n.catalog", return_value=catalog):
+            payload = translate_payload(
+                {"recommendation_status": "No recomendado", "warnings": ["No recomendado"]}, "en"
+            )
+        self.assertEqual(payload, {"recommendation_status": "No recomendado", "warnings": ["Not recommended"]})
+        catalog = Catalog({"Sistema": "System"})
+        with patch("backend.i18n.catalog", return_value=catalog):
+            profiles = translate_payload({"profiles": [{"name": "Sistema", "note": "Sistema"}]}, "en", "/api/profiles")
+            storage = translate_payload({"home_directories": [{"name": "Sistema"}]}, "en", "/api/storage")
+        self.assertEqual(profiles, {"profiles": [{"name": "Sistema", "note": "System"}]})
+        self.assertEqual(storage, {"home_directories": [{"name": "System"}]})
+
+    def test_api_responses_follow_the_requested_language(self) -> None:
+        catalog = Catalog({main_module.settings.app_name: "Translated", "ok": "fine"})
+        with patch("backend.i18n.catalog", side_effect=lambda language: catalog if language == "en" else None), \
+                TestClient(app) as client:
+            english = client.get("/api/health", headers={"X-MyDGX-Language": "en"})
+            spanish = client.get("/api/health", headers={"X-MyDGX-Language": "es"})
+        self.assertEqual(english.json()["name"], "Translated")
+        self.assertEqual(english.json()["status"], "ok")
+        self.assertEqual(int(english.headers["content-length"]), len(english.content))
+        self.assertEqual(spanish.json()["name"], main_module.settings.app_name)
 
 
 if __name__ == "__main__":

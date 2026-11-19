@@ -50,6 +50,8 @@ from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from backend.i18n import DEFAULT_LANGUAGE, request_language, translate_payload
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_REPAIR_SCRIPT = Path("/usr/local/libexec/mydgx-system-repair")
@@ -4344,6 +4346,34 @@ async def log_http_operations(request: Request, call_next: Any) -> Any:
         except sqlite3.Error:
             pass
     return response
+
+
+TRANSLATABLE_RESPONSE_MAX_BYTES = 4_000_000
+
+
+@app.middleware("http")
+async def translate_api_responses(request: Request, call_next: Any) -> Any:
+    language = request_language(request.headers)
+    response = await call_next(request)
+    if (
+        language == DEFAULT_LANGUAGE
+        or not request.url.path.startswith("/api/")
+        or not response.headers.get("content-type", "").startswith("application/json")
+        or int(response.headers.get("content-length") or 0) > TRANSLATABLE_RESPONSE_MAX_BYTES
+    ):
+        return response
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        translated = body
+    else:
+        translated = json.dumps(translate_payload(payload, language, request.url.path), ensure_ascii=False, separators=(",", ":")).encode()
+    result = Response(content=translated, status_code=response.status_code, background=response.background)
+    result.raw_headers = [
+        (name, value) for name, value in response.raw_headers if name.lower() != b"content-length"
+    ] + [(b"content-length", str(len(translated)).encode())]
+    return result
 
 
 @app.get("/api/auth/status")

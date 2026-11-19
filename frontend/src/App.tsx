@@ -863,7 +863,7 @@ function StopAllModelsButton({ notify, onDone }: { notify: (message: string, err
     onClick={() => void stopAll()}
     title={t("Parar todos los modelos: apaga los perfiles cargados, incluido Quick, y descarga los modelos de Ollama. Se mantienen el modelo del chat, el perfil Default y lo que usan ComfyUI, TTS y Whisper.")}
   >
-    <Square size={13} /> {busy ? t("Parando…") : t("Parar modelos")}
+    <Square size={12} fill="currentColor" /> {busy ? t("Parando…") : t("Parar modelos")}
   </button>;
 }
 
@@ -7997,7 +7997,7 @@ type NotificationsResponse = { unread: number; items: AppNotification[] };
 
 function NotificationBell({ unread, popup, onOpen }: { unread: number; popup: AppNotification | null; onOpen: () => void }) {
   return <div className="notification-bell-wrap">
-    <button className={`notification-bell ${unread ? "has-unread" : ""}`} onClick={onOpen} title={t("Notificaciones")} aria-label={unread ? t("{count} notificación(es) sin leer", { count: unread }) : t("Notificaciones")}>
+    <button className={`header-icon-button notification-bell ${unread ? "has-unread" : ""}`} onClick={onOpen} title={t("Notificaciones")} aria-label={unread ? t("{count} notificación(es) sin leer", { count: unread }) : t("Notificaciones")}>
       <Bell size={16} />
       {unread > 0 && <span className="notification-count">{unread > 99 ? "99+" : unread}</span>}
     </button>
@@ -8726,9 +8726,11 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
           <span>{currentLabel}</span>
           <div className="appearance-row">
             {hasActiveModels && <StopAllModelsButton notify={notify} onDone={() => { void refreshOverview(); void refreshModels(); }} />}
-            <button className="theme-toggle" onClick={toggleTheme} title={themePreference === "system" ? t("Tema automático según el sistema") : t("Tema fijo")}>{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}<span>{theme === "dark" ? t("Modo día") : t("Modo noche")}</span></button>
-            <FontSizeControl onChange={setFontScale} />
-            <button className="theme-toggle language-toggle" onClick={() => setLanguagePreference(language === "es" ? "en" : "es")} title={language === "es" ? t("Switch to English") : t("Cambiar a español")} aria-label={language === "es" ? t("Switch to English") : t("Cambiar a español")}><Languages size={16} /><span>{language.toUpperCase()}</span></button>
+            <div className="header-prefs" role="group" aria-label={t("Apariencia")}>
+              <button className="header-pref theme-toggle" onClick={toggleTheme} title={`${theme === "dark" ? t("Modo día") : t("Modo noche")} · ${themePreference === "system" ? t("Tema automático según el sistema") : t("Tema fijo")}`} aria-label={theme === "dark" ? t("Modo día") : t("Modo noche")}>{theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}</button>
+              <FontSizeControl onChange={setFontScale} />
+              <button className="header-pref language-toggle" onClick={() => setLanguagePreference(language === "es" ? "en" : "es")} title={language === "es" ? t("Switch to English") : t("Cambiar a español")} aria-label={language === "es" ? t("Switch to English") : t("Cambiar a español")}><Languages size={15} /><span>{language.toUpperCase()}</span></button>
+            </div>
             <NotificationBell
               unread={notifications?.unread ?? 0}
               popup={notificationPopup}
@@ -8739,7 +8741,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
                 window.scrollTo({ top: 0 });
               }}
             />
-            {onLogout && <button className="session-logout" onClick={onLogout} title={t("Cerrar sesión")} aria-label={t("Cerrar sesión")}><LogOut size={16} /></button>}
+            {onLogout && <button className="header-icon-button session-logout" onClick={onLogout} title={t("Cerrar sesión")} aria-label={t("Cerrar sesión")}><LogOut size={16} /></button>}
           </div>
         </header>
         {error && <div className="error-banner"><ShieldCheck size={18} /><span>{error}</span><button onClick={() => { void refreshOverview(); void refreshCore(); void refreshModels(); }}>{t("Reintentar")}</button></div>}

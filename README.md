@@ -114,14 +114,38 @@ Spark por SSH. El Spark compila e instala todo lo demás.
   </tr>
 </table>
 
-Desde entonces, MyDGX vive en la barra de menús, junto al reloj:
-- mantiene un túnel SSH, así que el dashboard abre en una dirección local del
-  Mac (`http://127.0.0.1:…`) sin abrir puertos en el router, y se reconecta solo;
-- da acceso a Open WebUI, ComfyUI, la terminal SSH y las apps de los perfiles;
-- para actualizar, instala la nueva versión de la app y pulsa **Preferencias →
-  Despliegue → Guardar y desplegar**. Conserva `.env`, modelos y bases de datos;
-- para añadir otro Spark o un servidor remoto, usa la **varita mágica** de
+### MyDGX Tray: tu Spark desde la barra de menús
+
+**MyDGX Tray** es la suite todo en uno para controlar tu DGX Spark desde el Mac.
+Instala MyDGX, mantiene la conexión y reúne en un solo menú, junto al reloj,
+todo lo que harías con la Terminal. En la barra ves siempre el uso de GPU y RAM
+del Spark (`GPU 4% · RAM 29%`); un clic abre el menú.
+
+![MyDGX Tray: el menú de la barra explicado por bloques](docs/images/mydgx-tray.png)
+
+1. **Estado en vivo.** Qué Spark usas, si llegas por la red local (LAN) o por
+   Internet y cuánta memoria queda libre para modelos.
+2. **Control del equipo.** Cambia entre varios Sparks o servidores, abre o
+   cierra el túnel SSH y apaga el equipo con confirmación. El túnel va cifrado,
+   no abre puertos en el router y se reconecta solo.
+3. **Perfiles de IA.** Muestra los perfiles cargados, cuántos modelos tienen y
+   cuánta memoria ocupan. Detén uno o arranca otro sin entrar en el dashboard.
+4. **Tus apps, a un clic.** Dashboard, Open WebUI, ComfyUI, RAGKit, las apps de
+   tus perfiles y una Terminal SSH ya configurada. Se abren en una dirección
+   local del Mac (`http://127.0.0.1:…`) a través del túnel.
+5. **Agentes de código.** Lanza Claude Code u OpenCode contra tus modelos
+   locales. Si ningún modelo publicado admite tool calling con al menos 32k de
+   contexto, el submenú explica qué falta en lugar de fallar.
+6. **Preferencias.** Perfiles de conexión, claves, copias de seguridad,
+   despliegue y actualizaciones de la app.
+
+Para el día a día:
+- **Actualizar MyDGX:** instala la nueva versión de la app y pulsa
+  **Preferencias → Despliegue → Guardar y desplegar**. Conserva `.env`, modelos y
+  bases de datos.
+- **Añadir otro Spark o un servidor remoto:** usa la **varita mágica** de
   *Preferencias*.
+- **Idioma:** la app está en español e inglés.
 
 Guía completa, con permisos, claves SSH propias, acceso remoto y solución de
 problemas: **[Inicio rápido con MyDGXTray](docs/quickstart.md)**. Sin Mac, o para
@@ -207,6 +231,8 @@ Chat local con cualquier modelo cargado y con el **asistente MyDGX**.
   requieren confirmación en la interfaz;
 - sugerencias de preguntas frecuentes y acceso a Open WebUI para una experiencia
   avanzada.
+
+![Open WebUI en modo oscuro con FLUX.1 Schnell de ComfyUI seleccionado como modelo](docs/images/openwebui-chat.png)
 
 Detalle en [Asistente MyDGX](docs/asistente-mydgx.md).
 
@@ -864,6 +890,8 @@ unificada del GB10. El deployment descarga FLUX.1 Schnell FP8 y Wan 2.1 T2V
 automáticamente imagen y herramientas multimedia en Open WebUI. Puede omitirse
 con `MYDGX_INSTALL_COMFYUI=0`, descargar el runtime sin modelos mediante
 `MYDGX_INSTALL_COMFYUI_MODELS=0` o fijar la revisión con `MYDGX_COMFYUI_REF`.
+
+![Workflow «MyDGX - Imagen Flux» en ComfyUI con FLUX.1 Schnell, imágenes generadas y cola de trabajos](docs/images/comfyui-flux-workflow.png)
 
 Todo lo que se descarga queda fijado: la imagen de SearXNG por digest, ComfyUI y
 llama.cpp por commit, Open WebUI y Ollama por versión, el instalador de Ollama y

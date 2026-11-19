@@ -1,0 +1,212 @@
+<!doctype html>
+<!-- Fuente de docs/images/mydgx-tray.png. Regenerar con:
+     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu \
+       --hide-scrollbars --force-device-scale-factor=2 --window-size=1440,700 \
+       --screenshot=docs/images/mydgx-tray.png "file://$PWD/docs/images/src/mydgx-tray.html"
+     magick docs/images/mydgx-tray.png -strip -colors 256 docs/images/mydgx-tray.png -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --green: #76b900; --green-deep: #4a7a00; --ink: #1d1d1f; --muted: #6e6e73;
+    --dim: #9a9aa0; --line: rgba(0,0,0,.09);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1440px; height: 700px; overflow: hidden; }
+  body {
+    position: relative;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    color: var(--ink); -webkit-font-smoothing: antialiased;
+    background:
+      radial-gradient(900px 600px at 8% 105%, rgba(118,185,0,.20), transparent 60%),
+      radial-gradient(700px 500px at 100% 0%, rgba(118,185,0,.10), transparent 60%),
+      linear-gradient(160deg, #fbfcf8 0%, #f1f4ec 55%, #e9eee2 100%);
+  }
+
+  /* macOS menu bar */
+  .menubar {
+    position: absolute; inset: 0 0 auto 0; height: 30px; padding: 0 18px;
+    display: flex; align-items: center; gap: 18px; font-size: 13.5px;
+    background: rgba(255,255,255,.72); backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(0,0,0,.06);
+  }
+  .menubar .apple { font-size: 16px; }
+  .menubar b { font-weight: 700; }
+  .menubar .spacer { flex: 1; }
+  .tray-item {
+    display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px;
+    border-radius: 6px; background: rgba(0,0,0,.11); font-weight: 500;
+  }
+  .tray-item img { width: 18px; height: 18px; }
+  .menubar svg { width: 17px; height: 17px; }
+
+  /* Left column */
+  .intro { position: absolute; left: 56px; top: 78px; width: 380px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px; padding: 5px 11px;
+    border-radius: 999px; background: rgba(118,185,0,.14); color: var(--green-deep);
+    font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .eyebrow img { width: 16px; height: 16px; }
+  h1 { margin-top: 16px; font-size: 54px; line-height: 1; font-weight: 800; letter-spacing: -.035em; }
+  h1 span { color: var(--green); }
+  .tagline { margin-top: 14px; font-size: 21px; line-height: 1.3; font-weight: 600; letter-spacing: -.01em; }
+  .lead { margin-top: 12px; font-size: 15px; line-height: 1.5; color: var(--muted); }
+  .chips { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 7px; }
+  .chips span {
+    padding: 6px 11px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+    background: rgba(255,255,255,.8); border: 1px solid var(--line);
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  }
+  .spark {
+    position: absolute; left: 24px; bottom: -8px; width: 400px;
+    mix-blend-mode: multiply; filter: drop-shadow(0 24px 30px rgba(60,70,40,.18));
+  }
+
+  /* Callout cards */
+  .cards {
+    position: absolute; left: 455px; top: 50px; width: 430px; height: 700px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .card {
+    position: relative; display: grid; grid-template-columns: 30px 1fr; gap: 12px;
+    padding: 13px 16px; border-radius: 14px;
+    background: rgba(255,255,255,.86); border: 1px solid var(--line);
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(50,60,30,.07);
+  }
+  .card h3 { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+  .card p { margin-top: 3px; font-size: 13px; line-height: 1.42; color: var(--muted); }
+  .num, .badge {
+    display: grid; place-items: center; border-radius: 50%;
+    color: #fff; font-weight: 800; background: var(--green);
+    box-shadow: 0 0 0 3px rgba(118,185,0,.18);
+  }
+  .num { width: 30px; height: 30px; font-size: 14px; }
+
+  /* Tray menu */
+  .menu {
+    position: absolute; left: 950px; top: 36px; width: 450px; padding: 7px;
+    border-radius: 13px; background: rgba(246,246,246,.92); backdrop-filter: blur(30px);
+    border: 1px solid rgba(0,0,0,.12);
+    box-shadow: 0 0 0 .5px rgba(0,0,0,.05), 0 24px 60px rgba(30,40,20,.22), 0 6px 16px rgba(0,0,0,.08);
+    font-size: 15.5px;
+  }
+  .row {
+    position: relative; height: 33px; padding: 0 13px; display: flex; align-items: center;
+    border-radius: 6px; white-space: nowrap;
+  }
+  .row.info { color: var(--dim); }
+  .row.hover { color: #fff; background: #0a84ff; }
+  .row .chev { margin-left: auto; font-size: 13px; opacity: .75; }
+  .row .key { margin-left: auto; color: var(--dim); }
+  .sep { height: 1px; margin: 5px 12px; background: rgba(0,0,0,.1); }
+  .group { position: relative; }
+  .badge {
+    position: absolute; left: -36px; top: 50%; translate: 0 -50%;
+    width: 24px; height: 24px; font-size: 12px;
+  }
+  .bracket {
+    position: absolute; left: -9px; top: 4px; bottom: 4px; width: 3px; border-radius: 3px;
+    background: var(--green);
+  }
+
+  svg.links { position: absolute; inset: 0; width: 1440px; height: 700px; pointer-events: none; }
+</style>
+</head>
+<body>
+  <div class="menubar">
+    <b>Finder</b><span>Archivo</span><span>Edición</span><span>Visualización</span><span>Ir</span>
+    <span class="spacer"></span>
+    <span class="tray-item"><img src="../../../macos/MyDGXTray/Resources/NVIDIAIcon.png" alt="">GPU 4% · RAM 29%</span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="#1d1d1f" stroke-width="2" stroke-linecap="round"><path d="M2 9a15 15 0 0 1 20 0"/><path d="M5.5 12.5a10 10 0 0 1 13 0"/><path d="M9 16a5 5 0 0 1 6 0"/><circle cx="12" cy="19.5" r="1" fill="#1d1d1f"/></svg>
+    <svg viewBox="0 0 28 24" fill="none" stroke="#1d1d1f" stroke-width="1.6"><rect x="1.5" y="6" width="22" height="12" rx="3.5"/><rect x="4" y="8.5" width="14" height="7" rx="1.5" fill="#1d1d1f" stroke="none"/><path d="M26 10v4" stroke-linecap="round"/></svg>
+    <span>jue 19 nov&nbsp;&nbsp;15:00</span>
+  </div>
+
+  <section class="intro">
+    <span class="eyebrow"><img src="../../../macos/MyDGXTray/Resources/NVIDIAIcon.png" alt="">Para NVIDIA DGX Spark</span>
+    <h1>MyDGX <span>Tray</span></h1>
+    <p class="tagline">Tu DGX Spark, a un clic desde la barra de menús del Mac.</p>
+    <p class="lead">Una suite todo en uno: instala MyDGX, conecta por túnel seguro, vigila la memoria y controla modelos y apps sin abrir la Terminal.</p>
+    <div class="chips">
+      <span>Instalador guiado</span><span>Túnel SSH automático</span><span>Varios Sparks</span><span>Actualizaciones</span><span>ES · EN</span>
+    </div>
+  </section>
+  <img class="spark" src="../../dgx.png" alt="">
+
+  <section class="cards">
+    <div class="card" data-link="1"><span class="num">1</span><div><h3>Estado en vivo</h3><p>Qué Spark usas, si llegas por la red local o por Internet y cuánta memoria queda libre. La barra muestra GPU y RAM al momento.</p></div></div>
+    <div class="card" data-link="2"><span class="num">2</span><div><h3>Control del equipo</h3><p>Cambia entre varios Sparks, abre o cierra el túnel SSH cifrado y apaga el equipo con confirmación.</p></div></div>
+    <div class="card" data-link="3"><span class="num">3</span><div><h3>Perfiles de IA</h3><p>Ve qué modelos están cargados y cuánta memoria ocupan. Detén un perfil o arranca otro en segundos.</p></div></div>
+    <div class="card" data-link="4"><span class="num">4</span><div><h3>Tus apps, a un clic</h3><p>Dashboard, Open WebUI, ComfyUI, RAGKit y Terminal SSH, servidos por el túnel en tu Mac. Sin abrir puertos en el router.</p></div></div>
+    <div class="card" data-link="5"><span class="num">5</span><div><h3>Agentes de código</h3><p>Claude Code y OpenCode con tus modelos locales. Si ninguno sirve (tool calling y 32k de contexto), te dice qué falta.</p></div></div>
+    <div class="card" data-link="6"><span class="num">6</span><div><h3>Preferencias</h3><p>Perfiles de conexión, claves, despliegue y actualizaciones de MyDGX desde la propia app.</p></div></div>
+  </section>
+
+  <div class="menu">
+    <div class="group" data-anchor="1"><span class="badge">1</span><span class="bracket"></span>
+      <div class="row info">DGX Spark 2757 · Conectado a spark-2757 · LAN</div>
+      <div class="row info">RAM libre: 86.7 GB / 121.7 GB</div>
+    </div>
+    <div class="group" data-anchor="2"><span class="badge">2</span><span class="bracket"></span>
+      <div class="row">Cambiar equipo<span class="chev">❯</span></div>
+      <div class="row">Detener conexión y túnel</div>
+      <div class="row">Apagar equipo…</div>
+    </div>
+    <div class="sep"></div>
+    <div class="group" data-anchor="3"><span class="badge">3</span><span class="bracket"></span>
+      <div class="row info">Perfiles cargados: 1/2 · 3 modelo(s)</div>
+      <div class="row info">RAGKit · Paramita · predeterminado · 27.2 GB</div>
+      <div class="row">Detener RAGKit · Paramita</div>
+      <div class="row">Arrancar otro perfil<span class="chev">❯</span></div>
+    </div>
+    <div class="sep"></div>
+    <div class="group" data-anchor="4"><span class="badge">4</span><span class="bracket"></span>
+      <div class="row hover">Abrir Dashboard</div>
+      <div class="row">Abrir Open WebUI</div>
+      <div class="row">Abrir ComfyUI</div>
+      <div class="row">Abrir RAGKit</div>
+      <div class="row">Abrir Terminal SSH</div>
+    </div>
+    <div class="group" data-anchor="5"><span class="badge">5</span><span class="bracket"></span>
+      <div class="row">Agentes de código · sin modelo adecuado<span class="chev">❯</span></div>
+    </div>
+    <div class="sep"></div>
+    <div class="group" data-anchor="6"><span class="badge">6</span><span class="bracket"></span>
+      <div class="row">Preferencias…</div>
+      <div class="row">Salir de MyDGX<span class="key">⌘Q</span></div>
+    </div>
+  </div>
+
+  <svg class="links" id="links"></svg>
+  <script>
+    const svg = document.getElementById("links");
+    const menuBox = document.querySelector(".menu").getBoundingClientRect();
+    const cards = document.querySelector(".cards");
+    cards.style.top = `${menuBox.top + 4}px`;
+    cards.style.height = `${menuBox.height - 8}px`;
+    for (const card of document.querySelectorAll(".card")) {
+      const id = card.dataset.link;
+      const badge = document.querySelector(`.group[data-anchor="${id}"] .badge`);
+      const a = card.getBoundingClientRect();
+      const b = badge.getBoundingClientRect();
+      const x1 = a.right, y1 = a.top + a.height / 2;
+      const x2 = b.left, y2 = b.top + b.height / 2;
+      const mid = (x1 + x2) / 2;
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "#76b900");
+      path.setAttribute("stroke-width", "1.6");
+      path.setAttribute("stroke-dasharray", "4 4");
+      path.setAttribute("opacity", ".75");
+      svg.appendChild(path);
+      const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      dot.setAttribute("cx", x1); dot.setAttribute("cy", y1); dot.setAttribute("r", "3.5");
+      dot.setAttribute("fill", "#76b900");
+      svg.appendChild(dot);
+    }
+  </script>
+</body>
+</html>

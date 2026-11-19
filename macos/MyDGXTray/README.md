@@ -8,7 +8,10 @@ apagado remoto confirmado.
 
 ### Menú de la barra
 
-![Menú contextual de MyDGXTray](../../docs/images/mydgx-menu.svg)
+![MyDGX Tray: el menú de la barra explicado por bloques](../../docs/images/mydgx-tray.png)
+
+El [README principal](../../README.md#mydgx-tray-tu-spark-desde-la-barra-de-menús)
+explica cada bloque del menú.
 
 ### Preferencias y perfiles
 

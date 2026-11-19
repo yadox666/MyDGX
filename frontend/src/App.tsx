@@ -7714,7 +7714,7 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
   return (
     <div className="view-stack">
       <SectionHeading
-        eyebrow={overview?.host.is_dgx_spark ? t("PLATAFORMA NVIDIA GB10") : t((overview?.host.os_family ?? "SISTEMA").toUpperCase())}
+        eyebrow={overview?.host.is_dgx_spark ? t("PLATAFORMA NVIDIA GB10") : (overview?.host.os_family ? overview.host.os_family.toUpperCase() : t("SISTEMA"))}
         title={t("Sistema y servicios")}
         action={<button className="icon-button" onClick={load}><RefreshCw size={17} /></button>}
       />

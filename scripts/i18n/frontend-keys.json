@@ -1169,6 +1169,7 @@
   "Runtime requerido",
   "Runtime y formato optimizados para Apple Silicon. No es la opción nativa para un DGX Spark con CUDA.",
   "Rutas seguras, archivos permitidos y mydgx.json",
+  "SISTEMA",
   "SOFTWARE",
   "SPARK CONTROL",
   "SUITE MULTIMODAL SECUENCIAL · LARGA DURACIÓN",

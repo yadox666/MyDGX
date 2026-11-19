@@ -66,6 +66,28 @@ final class AppModel: ObservableObject {
         let host: String
         let port: Int
         let isPublic: Bool
+
+        /// The primary endpoint can itself be an internet address (a VPS, a NAT'd host),
+        /// so "LAN" is decided by the address, not by which endpoint answered.
+        var isLocalNetwork: Bool { !isPublic && Self.isLocalNetworkHost(host) }
+
+        static func isLocalNetworkHost(_ value: String) -> Bool {
+            let host = value.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            let octets = host.split(separator: ".", omittingEmptySubsequences: false).compactMap { UInt8($0) }
+            if octets.count == 4, host.split(separator: ".").count == 4 {
+                switch (octets[0], octets[1]) {
+                case (10, _), (127, _), (192, 168), (169, 254): return true
+                case (172, 16...31): return true
+                default: return false
+                }
+            }
+            if host.contains(":") {
+                return host == "::1" || host.hasPrefix("fc") || host.hasPrefix("fd")
+                    || ["fe8", "fe9", "fea", "feb"].contains { host.hasPrefix($0) }
+            }
+            if host == "localhost" || !host.contains(".") { return true }
+            return [".local", ".lan", ".home", ".internal", ".home.arpa"].contains { host.hasSuffix($0) }
+        }
     }
 
     private enum ConnectionState: Equatable {
@@ -408,7 +430,10 @@ final class AppModel: ObservableObject {
             return
         }
         let unusable = !profile.tunnel.enabled || profile.ssh.host.isEmpty || profile.ssh.user.isEmpty
-        if (unusable || connectionAvailability[profile.id] != true) && Date() >= manualSelectionUntil {
+        // An open SSH port is not a working connection (wrong key, other server), so while
+        // disconnected a reachable LAN device also wins over a remote one that answers.
+        let offLAN = selectedSSHEndpoints[profile.id]?.isLocalNetwork != true
+        if (unusable || connectionAvailability[profile.id] != true || offLAN) && Date() >= manualSelectionUntil {
             let previous = profile
             if selectReachableProfile() {
                 await discardStaleTunnel(previous)
@@ -474,7 +499,7 @@ final class AppModel: ObservableObject {
             $0.tunnel.enabled && !$0.ssh.host.isEmpty && !$0.ssh.user.isEmpty
         }
         func onLAN(_ profile: ConnectionProfile) -> Bool {
-            selectedSSHEndpoints[profile.id]?.isPublic == false
+            selectedSSHEndpoints[profile.id]?.isLocalNetwork == true
         }
         func online(_ profile: ConnectionProfile) -> Bool {
             selectedSSHEndpoints[profile.id] != nil
@@ -788,7 +813,7 @@ final class AppModel: ObservableObject {
         if wasActive {
             stopManagedTunnel()
             updated.activeConnectionID = (
-                updated.connections.first { selectedSSHEndpoints[$0.id]?.isPublic == false }
+                updated.connections.first { selectedSSHEndpoints[$0.id]?.isLocalNetwork == true }
                     ?? updated.connections.first { selectedSSHEndpoints[$0.id] != nil }
                     ?? updated.connections[0]
             ).id

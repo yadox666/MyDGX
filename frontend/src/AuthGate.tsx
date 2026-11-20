@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Cpu, Eye, EyeOff, LockKeyhole, RefreshCw } from "lucide-react";
 import App from "./App";
 import { languageHeader, t } from "./i18n";
@@ -8,7 +8,10 @@ type AuthStatus = {
   authenticated: boolean;
   expires_in_seconds: number;
   session_ttl_minutes: number;
+  session_max_hours?: number;
 };
+
+const ACTIVITY_EVENTS = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"] as const;
 
 export default function AuthGate() {
   const [status, setStatus] = useState<AuthStatus | null>(null);
@@ -16,6 +19,8 @@ export default function AuthGate() {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const lastActivity = useRef(0);
+  const lastRenewal = useRef(0);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -80,6 +85,33 @@ export default function AuthGate() {
     };
   }, [refreshStatus, status]);
 
+  const sessionRequired = Boolean(status?.required && status.authenticated);
+  const ttlMinutes = status?.session_ttl_minutes || 60;
+  useEffect(() => {
+    if (!sessionRequired) return;
+    lastRenewal.current = Date.now();
+    const markActive = () => { lastActivity.current = Date.now(); };
+    ACTIVITY_EVENTS.forEach((name) => window.addEventListener(name, markActive, { passive: true }));
+    // Background polling must not count as activity, or an unattended tab would never expire.
+    const renewEveryMs = Math.min(5 * 60_000, ttlMinutes * 60_000 / 3);
+    const timer = window.setInterval(async () => {
+      if (lastActivity.current <= lastRenewal.current) return;
+      lastRenewal.current = Date.now();
+      try {
+        const response = await fetch("/api/auth/refresh", { method: "POST", credentials: "same-origin", headers: languageHeader });
+        if (response.ok) setStatus(await response.json() as AuthStatus);
+        else if (response.status === 401) window.dispatchEvent(new Event("mydgx-auth-required"));
+      } catch {
+        // Offline for a moment: the next interval retries while there is activity.
+        lastRenewal.current = 0;
+      }
+    }, renewEveryMs);
+    return () => {
+      window.clearInterval(timer);
+      ACTIVITY_EVENTS.forEach((name) => window.removeEventListener(name, markActive));
+    };
+  }, [sessionRequired, ttlMinutes]);
+
   async function login(event: FormEvent) {
     event.preventDefault();
     if (!password || submitting) return;
@@ -129,7 +161,7 @@ export default function AuthGate() {
       <div className="auth-copy">
         <span>{t("ACCESO SEGURO")}</span>
         <h1 id="auth-title">{status ? t("Inicia sesión") : t("Conectando…")}</h1>
-        <p>{status ? t("Introduce la contraseña del dashboard. La sesión se cerrará automáticamente después de {session_ttl_minutes} minutos.", { session_ttl_minutes: status.session_ttl_minutes }) : t("Comprobando el estado del dashboard.")}</p>
+        <p>{status ? t("Introduce la contraseña del dashboard. La sesión se cierra tras {session_ttl_minutes} minutos sin actividad y, como máximo, {session_max_hours} horas después de entrar.", { session_ttl_minutes: status.session_ttl_minutes, session_max_hours: status.session_max_hours ?? 12 }) : t("Comprobando el estado del dashboard.")}</p>
       </div>
       {status ? <form className="auth-form" onSubmit={login}>
         <label htmlFor="dashboard-password">{t("Contraseña")}</label>

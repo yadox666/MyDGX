@@ -49,7 +49,11 @@ Cada rechazo queda en los logs como `http.cross_site_blocked`.
   (`stop comfyui`, `liberar memoria`...).
 - Actualizar o reparar el sistema exige `ENABLE_SYSTEM_UPDATES=true` y
   `ACTUALIZAR MYDGX` o `REPARAR MYDGX`. Controlar servicios exige
-  `ENABLE_SERVICE_CONTROL=true`. Ambas opciones están desactivadas por defecto.
+  `ENABLE_SERVICE_CONTROL=true`. Instalar firmware exige
+  `ENABLE_FIRMWARE_UPDATES=true` y `ACTUALIZAR FIRMWARE`. Todas están
+  desactivadas por defecto. Las de actualización se pueden activar desde
+  Configuración, pero solo escribiendo `ACTIVAR ACTUALIZACIONES` o
+  `ACTIVAR FIRMWARE`; el cambio queda auditado y genera un aviso.
 - `/etc/sudoers.d/mydgx` concede solo una lista cerrada: las órdenes APT de
   actualización, el script de reparación, `systemctl` sobre los servicios de
   MyDGX y el apagado. **Nunca** `NOPASSWD: ALL`. El navegador no puede enviar
@@ -119,7 +123,7 @@ procesos completo.
 - Mantén dashboard y gateway en localhost y usa el túnel SSH.
 - Define `MYDGX_DASHBOARD_PASSWORD`, `MYDGX_API_KEY` y `GATEWAY_API_KEY` con
   valores distintos y aleatorios, directamente en el `.env` del DGX.
-- Activa `ENABLE_SYSTEM_UPDATES` y `ENABLE_SERVICE_CONTROL` solo si los vas a
-  usar.
+- Activa `ENABLE_SYSTEM_UPDATES`, `ENABLE_FIRMWARE_UPDATES` y
+  `ENABLE_SERVICE_CONTROL` solo cuando los vayas a usar, y desactívalos después.
 - No confirmes en Git `.env`, bases de datos, cachés de modelos ni claves
   privadas.

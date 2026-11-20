@@ -49,7 +49,11 @@ Each rejection is recorded in the logs as `http.cross_site_blocked`.
   (`stop comfyui`, `liberar memoria`...).
 - Updating or repairing the system requires `ENABLE_SYSTEM_UPDATES=true` and
   `ACTUALIZAR MYDGX` or `REPARAR MYDGX`. Controlling services requires
-  `ENABLE_SERVICE_CONTROL=true`. Both options are disabled by default.
+  `ENABLE_SERVICE_CONTROL=true`. Installing firmware requires
+  `ENABLE_FIRMWARE_UPDATES=true` and `ACTUALIZAR FIRMWARE`. All are disabled
+  by default. The update switches can be turned on from Settings, but only by
+  typing `ACTIVAR ACTUALIZACIONES` or `ACTIVAR FIRMWARE`; the change is audited
+  and posts a notification.
 - `/etc/sudoers.d/mydgx` grants only a closed list: the APT update
   commands, the repair script, `systemctl` on the MyDGX services
   and shutdown. **Never** `NOPASSWD: ALL`. The browser cannot send
@@ -119,7 +123,7 @@ group is stopped.
 - Keep dashboard and gateway on localhost and use the SSH tunnel.
 - Set `MYDGX_DASHBOARD_PASSWORD`, `MYDGX_API_KEY` and `GATEWAY_API_KEY` to
   distinct random values, directly in the DGX's `.env`.
-- Enable `ENABLE_SYSTEM_UPDATES` and `ENABLE_SERVICE_CONTROL` only if you are going to
-  use them.
+- Enable `ENABLE_SYSTEM_UPDATES`, `ENABLE_FIRMWARE_UPDATES` and
+  `ENABLE_SERVICE_CONTROL` only when you are going to use them, and turn them off afterwards.
 - Do not commit `.env`, databases, model caches or private
   keys to Git.

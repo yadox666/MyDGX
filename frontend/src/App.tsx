@@ -30,9 +30,11 @@ import {
   PackageCheck,
   Pencil,
   Play,
+  Plug,
   Plus,
   RefreshCw,
   Rocket,
+  RotateCw,
   Search,
   Server,
   Settings,
@@ -203,6 +205,7 @@ type Config = {
   hf_token_configured: boolean;
   api_key_required: boolean;
   system_updates_enabled: boolean;
+  firmware_updates_enabled?: boolean;
   service_control_enabled: boolean;
   gateway_enabled: boolean;
   gateway_url: string;
@@ -406,9 +409,13 @@ type Models = {
   }>;
 };
 
-type ModelHealth = { status: "defective" | "incomplete"; reason: string; file?: string; at?: string };
+type ModelHealth = { status: "healthy" | "defective" | "incomplete"; reason: string; file?: string; at?: string };
 
 function ModelHealthBadge({ health }: { health: ModelHealth }) {
+  if (health.status === "healthy") {
+    const tested = health.at ? new Date(health.at).toLocaleString(locale) : "";
+    return <span className="badge model-health healthy" title={t("Benchmark válido{file}{date}", { file: health.file ? ` · ${health.file}` : "", date: tested ? ` · ${tested}` : "" })}><CheckCircle2 size={11} />{" "}{t("SANO")}</span>;
+  }
   const label = health.status === "incomplete" ? t("INCOMPLETO") : t("DEFECTUOSO");
   const detail = health.file ? `${health.file}: ${health.reason}` : health.reason;
   return <span className={`badge model-health ${health.status}`} title={detail}><TriangleAlert size={11} />{" "}{label}</span>;
@@ -1548,6 +1555,8 @@ function useDownloadTracker(jobs: Job[], onFinished?: () => void) {
 function jobLabel(kind: string): string {
   return ({
     "profile.prepare-start": t("Preparando perfil"),
+    "model.quick.start": t("Encendiendo modelo"),
+    "model.default.start": t("Cargando modelo en Default"),
     "profile.download": t("Descargando modelo del perfil"),
     "ollama.pull": t("Descargando modelo Ollama"),
     "ollama.update": t("Actualizando modelo Ollama"),
@@ -2935,6 +2944,17 @@ function Dashboard({
             <div className="quick-resource-copy"><small>{t("Temperatura GPU")}</small><strong>{m.gpu_temperature == null ? "—" : `${m.gpu_temperature} °C`}</strong></div>
             {m.gpu_temperature != null && <QuickScale value={m.gpu_temperature} min={30} max={100} />}
           </div>
+          <div className="quick-resource-row traffic">
+            <div className="quick-icon"><Plug /></div>
+            <div className="quick-resource-copy"><small>{t("Consumo GPU")}</small><strong>{m.gpu_power_watts == null ? "—" : `${m.gpu_power_watts.toFixed(1)} W`}{m.gpu_power_limit_watts ? <b>{t("de {value} W", { value: m.gpu_power_limit_watts.toFixed(0) })}</b> : null}</strong></div>
+            <div className="quick-sparkline" aria-label={t("Histórico reciente de consumo de la GPU")}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={telemetryData.slice(-40)}>
+                  <Line type="monotone" dataKey="power" stroke="var(--amber)" strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
           <div className="quick-resource-row">
             <div className="quick-icon"><Database /></div>
             <div className="quick-resource-copy"><small>{t("Memoria unificada usada")}</small><strong>{bytes(m.memory_used)} <b>{Math.round(m.memory_percent)}%</b></strong></div>
@@ -4308,7 +4328,7 @@ function ModelsView({
                     {model.assistant && <span className="badge assistant"><Bot size={11} />{" "}{t("Chatbot")}</span>}
                     {model.persistent && <span className="badge">{t("Default")}</span>}
                     <UncensoredBadge name={model.repo_id} flagged={model.uncensored} />
-                    {model.health ? <ModelHealthBadge health={model.health} /> : incomplete && <span className="badge warning">{t("Incompleto")}</span>}
+                    {model.health && !(incomplete && model.health.status === "healthy") ? <ModelHealthBadge health={model.health} /> : incomplete && <span className="badge warning">{t("Incompleto")}</span>}
                     {cardOnly && <span className="badge warning" title={t("Solo está la ficha del modelo; no hay archivos de pesos")}>{t("Sin pesos")}</span>}
                     {model.speculative && <span className="badge" title={t("Decodificación especulativa con {value}", { value: model.speculative.draft_filename || t("el MTP integrado en el GGUF") })}><Zap size={11} /> {SPEC_LABELS[model.speculative.spec_type] ?? model.speculative.spec_type}</span>}
                     {model.manual_settings && <span className="badge" title={t("Tiene ajustes manuales que mandan sobre la ficha y la cabecera GGUF")}><SlidersHorizontal size={11} />{" "}{t("Manual")}</span>}
@@ -4328,7 +4348,7 @@ function ModelsView({
                   total={totalMemory}
                   memory={model.memory_estimate}
                   extra={<>
-                    {model.health && <div className={`model-health-note ${model.health.status}`}>
+                    {model.health && model.health.status !== "healthy" && <div className={`model-health-note ${model.health.status}`}>
                       <TriangleAlert size={13} />
                       <div><strong>{model.health.status === "incomplete" ? t("Modelo incompleto") : t("Modelo defectuoso")}</strong><small>{model.health.file ? `${model.health.file}: ${model.health.reason}` : model.health.reason}</small></div>
                     </div>}
@@ -5928,7 +5948,76 @@ function EnginesView({ notify }: { notify: (message: string, error?: boolean) =>
         {engine.models.length > 0 && <div className="engine-models">{engine.models.slice(0, 8).map((model) => <span key={model}>{model}</span>)}</div>}
       </Card>)}
     </div>
+    <ProfileAppsPanel notify={notify} />
   </div>;
+}
+
+type ProfileAppsOverview = {
+  root: string;
+  available: string[];
+  states: Record<string, ProfileAppState>;
+  web: Record<string, { alias: string; port: number; url: string }>;
+};
+
+function ProfileAppsPanel({ notify }: { notify: (message: string, error?: boolean) => void }) {
+  const [apps, setApps] = useState<ProfileAppsOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setApps(await api<ProfileAppsOverview>("/api/profile-apps"));
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setLoading(false);
+    }
+  }, [notify]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+  async function action(name: string, operation: "start" | "stop" | "restart") {
+    if (operation === "stop" && !window.confirm(t("¿Detener {name}? Se ejecutará su start.sh stop y dejará de estar disponible hasta que lo arranques.", { name }))) return;
+    setBusy(name);
+    try {
+      const result = await api<ProfileAppState & { exit_code: number }>(`/api/profile-apps/${encodeURIComponent(name)}/${operation}`, { method: "POST" });
+      notify(`${name}: ${profileAppStateLabels[result.state]}`, result.state === "error");
+      await load();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  }
+  return <>
+    <SectionHeading eyebrow={t("APLICACIONES CON START.SH")} title={t("Apps de perfil")} action={<button className="icon-button" onClick={load} title={t("Comprobar estado")}><RefreshCw className={loading ? "spin" : ""} size={16} /></button>} />
+    {apps && apps.available.length === 0 && <Card className="engine-card"><small>{t("No hay apps en {root}: cada app es una carpeta con un start.sh que acepte start, stop, restart y status.", { root: apps.root })}</small></Card>}
+    <div className="engine-grid">
+      {(apps?.available ?? []).map((name) => {
+        const state = apps?.states[name];
+        const web = apps?.web[name];
+        const running = state?.state === "running";
+        const stopped = state?.state === "stopped";
+        const pending = busy === name || state?.state === "starting" || state?.state === "stopping";
+        return <Card className="engine-card" key={name}>
+          <div className="engine-head">
+            <div className="model-icon"><Boxes /></div>
+            <span><strong>{web?.alias || name}</strong><small>{apps?.root}/{name}/start.sh</small></span>
+            <span className={`badge ${running ? "live" : state?.state === "error" ? "warning" : ""}`}>{state ? profileAppStateLabels[state.state] : t("Sin comprobar")}</span>
+          </div>
+          {state?.message && <small>{state.message}</small>}
+          {(state?.profiles.length ?? 0) > 0 && <small>{t("Usada por el perfil: {value}", { value: state?.profiles.join(", ") })}</small>}
+          {web && <small>{running ? <a href={web.url} target="_blank" rel="noreferrer">{web.url} <ExternalLink size={11} /></a> : web.url}</small>}
+          <div className="engine-actions app-actions">
+            <button className="primary-action" disabled={pending || running} onClick={() => void action(name, "start")}><Play size={14} />{" "}{t("Arrancar")}</button>
+            <button className="secondary" disabled={pending || stopped} onClick={() => void action(name, "restart")}><RotateCw size={13} />{" "}{t("Reiniciar")}</button>
+            <button className="danger" disabled={pending || stopped} onClick={() => void action(name, "stop")}><Square size={13} />{" "}{busy === name ? t("Procesando…") : t("Detener")}</button>
+          </div>
+        </Card>;
+      })}
+    </div>
+  </>;
 }
 
 type MultimodalCapability = {
@@ -6123,6 +6212,7 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
     model?: string;
     tools?: Array<{ name: string; status: string }>;
     actions?: AssistantAction[];
+    truncated?: boolean;
   };
   type AssistantStatus = {
     enabled: boolean;
@@ -6247,6 +6337,7 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
     try {
       const response = await api<{
         message: { content?: string };
+        truncated?: boolean;
         model: string;
         tools_used: Array<{ name: string; status: string }>;
         pending_actions: AssistantAction[];
@@ -6264,6 +6355,7 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
         model: response.model,
         tools: response.tools_used,
         actions: response.pending_actions,
+        truncated: response.truncated,
       }]);
     } catch (error) {
       const detail = (error as Error).message;
@@ -6343,6 +6435,7 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
             <div className="message-controls">
               <button className="message-copy" type="button" onClick={() => void copyMessage(item.content)} aria-label={t("Copiar mensaje")} title={t("Copiar mensaje")}><Copy size={13} /></button>
             </div>
+            {item.truncated && <div className="assistant-truncated"><TriangleAlert size={13} />{t("Respuesta cortada al llegar al límite de longitud. El modelo puede haber entrado en bucle; prueba con otro modelo o reformula la pregunta.")}</div>}
             {item.tools && item.tools.length > 0 && <div className="assistant-tools">
               {item.tools.map((tool, toolIndex) => <small key={`${tool.name}-${toolIndex}`} className={tool.status}>{tool.name}</small>)}
             </div>}
@@ -8086,7 +8179,7 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
               {updates?.reboot_required && <span className="update-reboot"><TriangleAlert size={15} />{" "}{t("Hay un reinicio pendiente")}</span>}
               <small>{updates?.checked_at ? t("Comprobado {date}", { date: new Date(updates.checked_at).toLocaleString(locale) }) : t("Comprobando APT…")}</small>
               <button className="button primary" disabled={!config?.system_updates_enabled || !updates?.packages.length || maintenanceActive} onClick={applyUpdates}>{maintenanceActive ? t("Mantenimiento en curso") : t("Actualizar sistema")}</button>
-              {!config?.system_updates_enabled && <small>{t("Activa ENABLE_SYSTEM_UPDATES en .env")}</small>}
+              {!config?.system_updates_enabled && <small>{t("Actívalo en Configuración → Mantenimiento del sistema")}</small>}
             </div>
           </div>
           {updates?.message && <div className="update-message">{updates.message}</div>}
@@ -8116,7 +8209,8 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
               {firmware?.reboot_pending && <span className="update-reboot"><TriangleAlert size={15} />{" "}{t("Firmware preparado; reinicia para aplicarlo")}</span>}
               <small>{firmwareChecking ? t("Comprobando firmware…") : firmware?.checked_at ? t("Comprobado {date}", { date: new Date(firmware.checked_at).toLocaleString(locale) }) : ""}</small>
               <button className="button secondary" disabled={firmwareChecking} onClick={() => loadFirmware(true)}>{t("Buscar firmware")}</button>
-              <button className="button primary" disabled={!config?.system_updates_enabled || !firmware?.updates.length || maintenanceActive} onClick={applyFirmware}>{maintenanceActive ? t("Mantenimiento en curso") : t("Instalar firmware")}</button>
+              <button className="button primary" disabled={!config?.firmware_updates_enabled || !firmware?.updates.length || maintenanceActive} onClick={applyFirmware}>{maintenanceActive ? t("Mantenimiento en curso") : t("Instalar firmware")}</button>
+              {!config?.firmware_updates_enabled && <small>{t("Actívalo en Configuración → Mantenimiento del sistema")}</small>}
             </div>
           </div>
           {firmware?.message && <div className="update-message">{firmware.message}</div>}
@@ -8333,12 +8427,16 @@ function LogsView({ notify, notifications, onReadNotifications }: { notify: (mes
   );
 }
 
-type EnvSetting = { key: string; type: "bool" | "int" | "str"; value: boolean | number | string; default: boolean | number | string | null; min: number | null; max: number | null; restart: boolean };
+type EnvSetting = { key: string; type: "bool" | "int" | "str"; value: boolean | number | string; default: boolean | number | string | null; min: number | null; max: number | null; restart: boolean; confirm?: string | null };
 type EnvSettings = { env_file: boolean; hf_token_configured: boolean; settings: EnvSetting[] };
 type EnvSettingsUpdate = EnvSettings & { updated: string[]; restart_required: string[]; hf_user?: string };
 
 function envSettingGroups(): Array<{ title: string; items: Record<string, { label: string; hint: string }> }> {
   return [
+    { title: t("Mantenimiento del sistema"), items: {
+      ENABLE_SYSTEM_UPDATES: { label: t("Actualizar el sistema"), hint: t("Permite instalar paquetes APT y reparar kernel, driver y runtimes desde Sistema. Pide confirmación para activarlo") },
+      ENABLE_FIRMWARE_UPDATES: { label: t("Actualizar firmware"), hint: t("Permite instalar firmware con fwupd desde Sistema → Actualizaciones. Pide confirmación para activarlo") },
+    } },
     { title: t("Descargas"), items: {
       HF_DOWNLOAD_WORKERS: { label: t("Descargas en paralelo"), hint: t("Archivos o shards simultáneos al bajar de Hugging Face") },
       MODEL_IMPORT_MAX_GB: { label: t("ZIP de importación máximo (GB)"), hint: t("Tamaño máximo de un modelo importado desde un ZIP") },
@@ -8357,7 +8455,8 @@ function envSettingGroups(): Array<{ title: string; items: Record<string, { labe
       PROFILE_START_TIMEOUT_SECONDS: { label: t("Tiempo máximo de arranque (s)"), hint: t("Espera máxima a que un modelo responda al encenderlo") },
     } },
     { title: t("Sesión y retención"), items: {
-      MYDGX_SESSION_TTL_MINUTES: { label: t("Duración de la sesión (min)"), hint: t("Se aplica a los nuevos inicios de sesión") },
+      MYDGX_SESSION_TTL_MINUTES: { label: t("Cierre por inactividad (min)"), hint: t("La sesión se renueva mientras usas el dashboard; se cierra tras este tiempo sin actividad") },
+      MYDGX_SESSION_MAX_HOURS: { label: t("Duración máxima de la sesión (h)"), hint: t("Tras este tiempo desde que entras hay que volver a escribir la contraseña, aunque sigas trabajando") },
       METRICS_RETENTION_HOURS: { label: t("Retención de métricas (h)"), hint: t("Telemetría que se conserva en la base de datos") },
       LOG_RETENTION_DAYS: { label: t("Retención de logs (días)"), hint: t("Eventos y auditoría que se conservan") },
     } },
@@ -8370,12 +8469,14 @@ function ServerSettingsCard({ notify }: { notify: (message: string, error?: bool
   const [token, setToken] = useState("");
   const [tokenStatus, setTokenStatus] = useState("");
   const [busy, setBusy] = useState<"" | "save" | "token" | "verify" | "clear">("");
+  const [typedConfirmations, setTypedConfirmations] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     try {
       const result = await api<EnvSettings>("/api/settings/env");
       setEnv(result);
       setDraft(Object.fromEntries(result.settings.map((item) => [item.key, item.value])));
+      setTypedConfirmations({});
     } catch (error) {
       notify((error as Error).message, true);
     }
@@ -8383,6 +8484,7 @@ function ServerSettingsCard({ notify }: { notify: (message: string, error?: bool
   useEffect(() => { void load(); }, [load]);
 
   const changed = env ? env.settings.filter((item) => draft[item.key] !== item.value) : [];
+  const needsConfirmation = (item: EnvSettings["settings"][number]) => Boolean(item.confirm) && draft[item.key] === true && item.value !== true;
 
   async function submit(body: Record<string, unknown>, mode: typeof busy) {
     setBusy(mode);
@@ -8390,6 +8492,7 @@ function ServerSettingsCard({ notify }: { notify: (message: string, error?: bool
       const result = await api<EnvSettingsUpdate>("/api/settings/env", { method: "PUT", body: JSON.stringify(body) });
       setEnv(result);
       setDraft(Object.fromEntries(result.settings.map((item) => [item.key, item.value])));
+      setTypedConfirmations({});
       return result;
     } catch (error) {
       notify((error as Error).message, true);
@@ -8402,7 +8505,16 @@ function ServerSettingsCard({ notify }: { notify: (message: string, error?: bool
   async function saveValues(event: FormEvent) {
     event.preventDefault();
     if (!changed.length) return;
-    const result = await submit({ values: Object.fromEntries(changed.map((item) => [item.key, draft[item.key]])) }, "save");
+    const confirmations: Record<string, string> = {};
+    for (const item of changed) {
+      if (!item.confirm || !needsConfirmation(item)) continue;
+      if ((typedConfirmations[item.key] ?? "").trim() !== item.confirm) {
+        notify(t("Para activar {key} escribe {phrase} en el campo de confirmación", { key: item.key, phrase: item.confirm }), true);
+        return;
+      }
+      confirmations[item.key] = item.confirm;
+    }
+    const result = await submit({ values: Object.fromEntries(changed.map((item) => [item.key, draft[item.key]])), confirmations }, "save");
     if (!result) return;
     notify(result.restart_required.length
       ? t("Guardado en .env. {keys} se aplicará al reiniciar MyDGX", { keys: result.restart_required.join(", ") })
@@ -8442,7 +8554,7 @@ function ServerSettingsCard({ notify }: { notify: (message: string, error?: bool
   const byKey = new Map((env?.settings ?? []).map((item) => [item.key, item]));
   return <Card className="server-settings">
     <div className="card-kicker"><SlidersHorizontal size={16} />{" "}{t("Servidor · .env")}</div>
-    <p className="server-settings-intro">{t("Se guardan en el .env del equipo. La autenticación, la exposición en red y las operaciones privilegiadas solo se cambian a mano en ese archivo.")}</p>
+    <p className="server-settings-intro">{t("Se guardan en el .env del equipo. La autenticación y la exposición en red solo se cambian a mano en ese archivo; activar una operación privilegiada pide escribir una confirmación y queda auditado.")}</p>
     <form className="server-settings-token" onSubmit={saveToken}>
       <div><KeyRound size={16} /><span><strong>{t("Token de Hugging Face")}</strong><small>{env?.hf_token_configured ? t("Configurado · no se muestra nunca") : t("Sin token · solo modelos públicos")}{tokenStatus ? ` · ${tokenStatus}` : ""}</small></span></div>
       <div className="inline-form">
@@ -8459,14 +8571,31 @@ function ServerSettingsCard({ notify }: { notify: (message: string, error?: bool
           const item = byKey.get(key);
           if (!item) return null;
           const value = draft[key];
-          return <label key={key} className={`server-setting ${item.type === "bool" ? "is-toggle" : ""}`}>
-            <span><strong>{meta.label}{item.restart && <em>{t("requiere reinicio")}</em>}</strong><small>{meta.hint}</small></span>
-            {item.type === "bool"
-              ? <input type="checkbox" checked={Boolean(value)} onChange={(event) => setDraft({ ...draft, [key]: event.target.checked })} />
-              : item.type === "int"
-                ? <input type="number" min={item.min ?? undefined} max={item.max ?? undefined} value={Number(value)} onChange={(event) => setDraft({ ...draft, [key]: Math.trunc(Number(event.target.value)) })} />
-                : <input type="text" value={String(value ?? "")} spellCheck={false} onChange={(event) => setDraft({ ...draft, [key]: event.target.value.trim() })} />}
-          </label>;
+          const confirmPending = needsConfirmation(item);
+          const confirmMatches = (typedConfirmations[key] ?? "").trim() === item.confirm;
+          return <div key={key} className="server-setting-wrap">
+            <label className={`server-setting ${item.type === "bool" ? "is-toggle" : ""}`}>
+              <span><strong>{meta.label}{item.restart && <em>{t("requiere reinicio")}</em>}</strong><small>{meta.hint}</small></span>
+              {item.type === "bool"
+                ? <input type="checkbox" checked={Boolean(value)} onChange={(event) => setDraft({ ...draft, [key]: event.target.checked })} />
+                : item.type === "int"
+                  ? <input type="number" min={item.min ?? undefined} max={item.max ?? undefined} value={Number(value)} onChange={(event) => setDraft({ ...draft, [key]: Math.trunc(Number(event.target.value)) })} />
+                  : <input type="text" value={String(value ?? "")} spellCheck={false} onChange={(event) => setDraft({ ...draft, [key]: event.target.value.trim() })} />}
+            </label>
+            {confirmPending && <div className={`server-setting-confirm ${confirmMatches ? "ok" : ""}`}>
+              <TriangleAlert size={14} />
+              <span>{t("Se ejecuta como root. Escribe {phrase} para confirmarlo:", { phrase: item.confirm })}</span>
+              <input
+                type="text"
+                value={typedConfirmations[key] ?? ""}
+                onChange={(event) => setTypedConfirmations({ ...typedConfirmations, [key]: event.target.value })}
+                placeholder={item.confirm ?? ""}
+                autoComplete="off"
+                spellCheck={false}
+                aria-label={t("Confirmación para activar {key}", { key })}
+              />
+            </div>}
+          </div>;
         })}
       </fieldset>)}
       <div className="gateway-actions">
@@ -8531,6 +8660,7 @@ function SettingsView({ config, themePreference, setThemePreference, notify }: {
         <div className="card-kicker"><Activity size={16} />{" "}{t("Integraciones")}</div>
         <div className="integration-list">
           <div><span><strong>{t("Actualizaciones")}</strong><small>{t("Operación privilegiada controlada")}</small></span><span className={`badge ${config?.system_updates_enabled ? "live" : ""}`}>{config?.system_updates_enabled ? t("Activadas") : t("Bloqueadas")}</span></div>
+          <div><span><strong>{t("Firmware")}</strong><small>{t("fwupd con orden permitida")}</small></span><span className={`badge ${config?.firmware_updates_enabled ? "live" : ""}`}>{config?.firmware_updates_enabled ? t("Activado") : t("Bloqueado")}</span></div>
           <div><span><strong>{t("Servicios")}</strong><small>{t("systemd con lista permitida")}</small></span><span className={`badge ${config?.service_control_enabled ? "live" : ""}`}>{config?.service_control_enabled ? t("Activado") : t("Solo lectura")}</span></div>
         </div>
       </Card>
@@ -8804,6 +8934,22 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
     return () => window.clearTimeout(timer);
   }, [loadedSignature, refreshModels, view]);
 
+  const [pendingBenchmarks, setPendingBenchmarks] = useState(0);
+  const benchmarkInventorySignature = jobs
+    .filter((job) => (job.kind.startsWith("benchmark.") || downloadJobKinds.has(job.kind) || job.kind.startsWith("models.")) && !activeJobStatuses.has(job.status))
+    .map((job) => job.id)
+    .join("|");
+  useEffect(() => {
+    const load = () => {
+      api<{ pending: number }>("/api/benchmarks/pending").then((data) => setPendingBenchmarks(data.pending)).catch(() => undefined);
+    };
+    load();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [benchmarkInventorySignature]);
+
   useEffect(() => {
     localStorage.setItem("mydgx-view", view);
     const scrollKey = `mydgx-scroll-${view}`;
@@ -8849,6 +8995,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   const navCounts: Partial<Record<View, { value: number; title: string }>> = {
     profiles: { value: runningProfileTotal, title: t(runningProfileTotal === 1 ? "{count} perfil levantado" : "{count} perfiles levantados", { count: runningProfileTotal }) },
     models: { value: loadedModelTotal, title: t(loadedModelTotal === 1 ? "{count} modelo cargado" : "{count} modelos cargados", { count: loadedModelTotal }) },
+    benchmarks: { value: pendingBenchmarks, title: t(pendingBenchmarks === 1 ? "{count} benchmark pendiente" : "{count} benchmarks pendientes", { count: pendingBenchmarks }) },
   };
   const currentLabel = useMemo(() => navItems.find((item) => item.id === view)?.label ?? "MyDGX", [view]);
   const benchmarkSuiteJob = jobs.find(

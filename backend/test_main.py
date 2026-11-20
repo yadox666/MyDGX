@@ -295,6 +295,44 @@ class DatabaseTests(unittest.TestCase):
                 self.assertIsNone(main_module.memory_pressure_full_avg10())
                 self.assertFalse(tick(2000))
 
+    def test_model_load_job_reports_progress_and_outcome(self) -> None:
+        updates: list[tuple[str, str, float, str]] = []
+        record = lambda job_id, status, progress, message: updates.append((job_id, status, progress, message))
+
+        async def load(fail: bool) -> None:
+            async with main_module.model_load_job("model.quick.start", "org/Model-GGUF", "Model-GGUF", 8192):
+                await asyncio.sleep(0.05)
+                if fail:
+                    raise HTTPException(status_code=409, detail="no cabe")
+
+        with (
+            patch("backend.main.db.create_job", return_value="job-1") as created,
+            patch("backend.main.db.update_job", side_effect=record),
+            patch.object(main_module, "MODEL_LOAD_PROGRESS_INTERVAL_SECONDS", 0.01),
+        ):
+            asyncio.run(load(False))
+            created.assert_called_once_with("model.quick.start", "org/Model-GGUF")
+            running = [item for item in updates if item[1] == "running"]
+            self.assertTrue(running)
+            self.assertTrue(all(5 <= item[2] <= 95 and item[3] == "Cargando Model-GGUF en memoria" for item in running))
+            self.assertEqual(updates[-1][1:3], ("completed", 100))
+            updates.clear()
+            with self.assertRaises(HTTPException):
+                asyncio.run(load(True))
+            self.assertEqual(updates[-1][1:], ("failed", 100, "No se pudo cargar Model-GGUF: no cabe"))
+
+    def test_assistant_chat_caps_reply_length_and_flags_truncation(self) -> None:
+        ollama = AsyncMock(return_value={"message": {"content": "bucle bucle"}, "done_reason": "length"})
+        with patch("backend.main.ollama_payload", new=ollama):
+            message, model = asyncio.run(main_module.call_assistant_model(
+                "llama3.2:3b", [{"role": "user", "content": "hola"}], tools_enabled=False,
+            ))
+        self.assertEqual(model, "llama3.2:3b")
+        self.assertTrue(message["truncated"])
+        self.assertEqual(ollama.call_args.args[2]["options"]["num_predict"], main_module.CHAT_MAX_REPLY_TOKENS)
+        provider = main_module.assistant_provider_messages([message], "ollama")
+        self.assertNotIn("truncated", provider[0])
+
     def test_quick_models_count_toward_loaded_llm_limit(self) -> None:
         models = {
             main_module.DEFAULT_PROFILE_ID: [{"task": "chat"}, {"task": "chat"}],
@@ -2769,6 +2807,11 @@ class BenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(candidate["protocol_id"], main_module.EMBEDDINGS_BENCHMARK_PROTOCOL_ID)
 
+    def test_pending_benchmarks_counts_only_runnable_candidates(self) -> None:
+        candidates = [{"target": "a"}, {"target": "b", "runnable": True}, {"target": "c", "runnable": False}]
+        with patch("backend.main.benchmark_suite_candidates", new=AsyncMock(return_value=candidates)):
+            self.assertEqual(asyncio.run(main_module.benchmarks_pending()), {"pending": 2})
+
     def test_embeddings_sample_measures_cosine_margin_without_persisting_text(self) -> None:
         case = main_module.EMBEDDINGS_BENCHMARK_PROTOCOL["cases"][0]
         vectors = [
@@ -4479,11 +4522,13 @@ class ProfileApiTests(unittest.TestCase):
         original = (
             settings.mydgx_dashboard_password,
             settings.mydgx_session_ttl_minutes,
+            settings.mydgx_session_max_hours,
             settings.mydgx_api_key,
             settings.host,
         )
         settings.mydgx_dashboard_password = "test-only-dashboard-password"
         settings.mydgx_session_ttl_minutes = 60
+        settings.mydgx_session_max_hours = 12
         settings.mydgx_api_key = None
         settings.host = "127.0.0.1"
         main_module._dashboard_login_failures.clear()
@@ -4498,14 +4543,24 @@ class ProfileApiTests(unittest.TestCase):
                 )
                 allowed = client.get("/api/config")
                 authenticated = client.get("/api/auth/status")
+                refreshed = client.post("/api/auth/refresh")
+                allowed_after_refresh = client.get("/api/config")
                 logout = client.post("/api/auth/logout")
                 denied_again = client.get("/api/config")
+                refresh_denied = client.post("/api/auth/refresh")
             self.assertEqual(status.json(), {
                 "required": True,
                 "authenticated": False,
                 "expires_in_seconds": 0,
                 "session_ttl_minutes": 60,
+                "session_max_hours": 12,
             })
+            self.assertEqual(refreshed.status_code, 200)
+            self.assertIn("HttpOnly", refreshed.headers["set-cookie"])
+            self.assertIn("SameSite=strict", refreshed.headers["set-cookie"])
+            self.assertEqual(allowed_after_refresh.status_code, 200)
+            self.assertEqual(refresh_denied.status_code, 401)
+            self.assertEqual(refresh_denied.headers["x-mydgx-auth-required"], "password")
             self.assertEqual((denied.status_code, wrong.status_code), (401, 401))
             self.assertEqual(denied.headers["x-mydgx-auth-required"], "password")
             self.assertEqual(login.status_code, 200)
@@ -4522,6 +4577,7 @@ class ProfileApiTests(unittest.TestCase):
             (
                 settings.mydgx_dashboard_password,
                 settings.mydgx_session_ttl_minutes,
+                settings.mydgx_session_max_hours,
                 settings.mydgx_api_key,
                 settings.host,
             ) = original
@@ -4531,9 +4587,11 @@ class ProfileApiTests(unittest.TestCase):
         original = (
             settings.mydgx_dashboard_password,
             settings.mydgx_session_ttl_minutes,
+            settings.mydgx_session_max_hours,
         )
         settings.mydgx_dashboard_password = "test-only-session-password"
         settings.mydgx_session_ttl_minutes = 60
+        settings.mydgx_session_max_hours = 2
         try:
             token, expires_at = main_module.create_dashboard_session(now=1_000)
             self.assertEqual(expires_at, 4_600)
@@ -4549,10 +4607,19 @@ class ProfileApiTests(unittest.TestCase):
                 main_module.dashboard_session_remaining(f"{token}x", now=1_600),
                 0,
             )
+            renewed, renewed_expiry = main_module.create_dashboard_session(now=4_000, issued_at=1_000)
+            self.assertEqual(renewed_expiry, 7_600)
+            self.assertEqual(main_module.dashboard_session_times(renewed, now=4_000), (1_000, 7_600))
+            capped, capped_expiry = main_module.create_dashboard_session(now=7_000, issued_at=1_000)
+            self.assertEqual(capped_expiry, 8_200)
+            self.assertEqual(main_module.dashboard_session_remaining(capped, now=8_200), 0)
+            settings.mydgx_session_ttl_minutes = 10
+            self.assertEqual(main_module.dashboard_session_remaining(renewed, now=4_000), 0)
         finally:
             (
                 settings.mydgx_dashboard_password,
                 settings.mydgx_session_ttl_minutes,
+                settings.mydgx_session_max_hours,
             ) = original
 
     def test_dashboard_login_rate_limits_repeated_failures(self) -> None:
@@ -5533,6 +5600,43 @@ class ProfileApiTests(unittest.TestCase):
                 self.assertIn("HF_TOKEN=\n", env_file.read_text(encoding="utf-8"))
         db.path = original_path
 
+    def test_privileged_switches_need_confirmation_only_to_turn_on(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            db.path = Path(directory) / "privileged.db"
+            env_file = Path(directory) / ".env"
+            env_file.write_text("ENABLE_SYSTEM_UPDATES=false\n", encoding="utf-8")
+            with (
+                patch.object(main_module, "ENV_FILE", env_file),
+                patch.object(settings, "enable_system_updates", False),
+                patch.object(settings, "enable_firmware_updates", False),
+                TestClient(app) as client,
+            ):
+                unconfirmed = client.put("/api/settings/env", json={"values": {"ENABLE_FIRMWARE_UPDATES": True}})
+                self.assertEqual(unconfirmed.status_code, 400)
+                wrong = client.put("/api/settings/env", json={
+                    "values": {"ENABLE_FIRMWARE_UPDATES": True},
+                    "confirmations": {"ENABLE_FIRMWARE_UPDATES": "ACTIVAR ACTUALIZACIONES"},
+                })
+                self.assertEqual(wrong.status_code, 400)
+                self.assertFalse(settings.enable_firmware_updates)
+
+                enabled = client.put("/api/settings/env", json={
+                    "values": {"ENABLE_SYSTEM_UPDATES": True, "ENABLE_FIRMWARE_UPDATES": True},
+                    "confirmations": {"ENABLE_SYSTEM_UPDATES": "ACTIVAR ACTUALIZACIONES", "ENABLE_FIRMWARE_UPDATES": "ACTIVAR FIRMWARE"},
+                })
+                self.assertEqual(enabled.status_code, 200)
+                self.assertTrue(settings.enable_system_updates and settings.enable_firmware_updates)
+                self.assertIn("ENABLE_FIRMWARE_UPDATES=true", env_file.read_text(encoding="utf-8"))
+                notices = db.rows("SELECT kind,level FROM notifications WHERE kind='settings.privileged.enabled'")
+                self.assertEqual([(item["kind"], item["level"]) for item in notices], [("settings.privileged.enabled", "warning")])
+
+                disabled = client.put("/api/settings/env", json={"values": {"ENABLE_FIRMWARE_UPDATES": False}})
+                self.assertEqual(disabled.status_code, 200)
+                self.assertFalse(settings.enable_firmware_updates)
+                self.assertIn("ENABLE_FIRMWARE_UPDATES=false", env_file.read_text(encoding="utf-8"))
+        db.path = original_path
+
     def test_gated_access_probe_distinguishes_token_states(self) -> None:
         files = ["README.md", "model-Q4_K_M.gguf"]
         response = httpx.Response(401, request=httpx.Request("GET", "https://huggingface.co/org/model"))
@@ -5668,19 +5772,19 @@ class ProfileApiTests(unittest.TestCase):
             self.assertEqual([item["kind"] for item in notices], ["system.firmware.available"] * 2)
         db.path = original_path
 
-    def test_firmware_apply_requires_updates_enabled_and_no_running_jobs(self) -> None:
+    def test_firmware_apply_requires_firmware_switch_and_no_running_jobs(self) -> None:
         original_path = db.path
         with tempfile.TemporaryDirectory() as directory:
             db.path = Path(directory) / "firmware-apply.db"
             db.initialize()
             request = main_module.FirmwareUpdateRequest(confirm="ACTUALIZAR FIRMWARE")
-            with patch.object(settings, "enable_system_updates", False):
+            with patch.object(settings, "enable_firmware_updates", False):
                 with self.assertRaises(HTTPException) as disabled:
                     asyncio.run(main_module.apply_firmware_updates(request, main_module.BackgroundTasks()))
             self.assertEqual(disabled.exception.status_code, 403)
             job_id = db.create_job("huggingface.download", "org/model")
             db.update_job(job_id, "running", 10, "descargando")
-            with patch.object(settings, "enable_system_updates", True), \
+            with patch.object(settings, "enable_firmware_updates", True), \
                  patch("backend.main.shutil.which", return_value="/usr/bin/fwupdmgr"):
                 with self.assertRaises(HTTPException) as busy:
                     asyncio.run(main_module.apply_firmware_updates(request, main_module.BackgroundTasks()))
@@ -5727,12 +5831,46 @@ class ProfileApiTests(unittest.TestCase):
             self.assertIn("org/model-gguf", main_module.model_health_marks())
             main_module.clear_model_health("org/model-GGUF", "model-Q4_K_M.gguf")
             self.assertNotIn("org/model-gguf", main_module.model_health_marks())
+            main_module.mark_model_health_from_benchmark(model, "model loading error", "job")
+            main_module.mark_model_healthy("org/model-GGUF", "model-Q4_K_M.gguf", "job2")
+            healthy = main_module.model_health_marks()["org/model-gguf"]
+            self.assertEqual((healthy["status"], healthy["file"], healthy["job_id"]), ("healthy", "model-Q4_K_M.gguf", "job2"))
+            self.assertEqual(main_module.mark_model_health_from_benchmark(model, "model loading error", "job3"), "defective")
+            main_module.mark_model_healthy("", "x.gguf", "job4")
+            self.assertEqual(set(main_module.model_health_marks()), {"org/model-gguf"})
             files = [
                 {"name": "mmproj-model-BF16.gguf", "complete": True},
                 {"name": "Model-DSpark-Q8_0.gguf", "complete": True},
             ]
             self.assertEqual(main_module.local_hf_health("org/drafter-only", files, {})["status"], "incomplete")
         db.path = original_path
+
+    def test_profile_apps_listing_refreshes_status_and_skips_busy_apps(self) -> None:
+        codes = {"ragkit": 0, "stopped-app": 3}
+        calls: list[tuple[str, str]] = []
+
+        async def fake_action(name: str, action: str) -> int:
+            calls.append((name, action))
+            return codes[name]
+
+        async def scenario() -> dict[str, object]:
+            busy = asyncio.Lock()
+            await busy.acquire()
+            with patch.dict(main_module._profile_app_locks, {"busy-app": busy}, clear=True), \
+                    patch.dict(main_module._profile_app_state, {}, clear=True):
+                main_module.set_profile_app_state("busy-app", "starting", "start.sh start manual")
+                result = await main_module.list_profile_apps()
+                return {"states": {name: dict(state) for name, state in result["states"].items()}}
+
+        with patch.object(main_module, "discover_profile_apps", return_value=["busy-app", "ragkit", "stopped-app"]), \
+                patch.object(main_module, "run_profile_app_action", side_effect=fake_action), \
+                patch.object(main_module, "profile_app_web_configs", return_value={}):
+            result = asyncio.run(scenario())
+        states = result["states"]
+        self.assertEqual(sorted(calls), [("ragkit", "status"), ("stopped-app", "status")])
+        self.assertEqual(states["ragkit"]["state"], "running")
+        self.assertEqual(states["stopped-app"]["state"], "stopped")
+        self.assertEqual(states["busy-app"]["state"], "starting")
 
     def test_huggingface_favorites_are_persisted(self) -> None:
         original_path = db.path
@@ -7652,6 +7790,10 @@ class TranslationTests(unittest.TestCase):
             storage = translate_payload({"home_directories": [{"name": "Sistema"}]}, "en", "/api/storage")
         self.assertEqual(profiles, {"profiles": [{"name": "Sistema", "note": "System"}]})
         self.assertEqual(storage, {"home_directories": [{"name": "System"}]})
+        catalog = Catalog({"ACTIVAR FIRMWARE": "ENABLE FIRMWARE"})
+        with patch("backend.i18n.catalog", return_value=catalog):
+            setting = translate_payload({"settings": [{"key": "ENABLE_FIRMWARE_UPDATES", "confirm": "ACTIVAR FIRMWARE"}]}, "en")
+        self.assertEqual(setting["settings"][0]["confirm"], "ACTIVAR FIRMWARE")
 
     def test_api_responses_follow_the_requested_language(self) -> None:
         catalog = Catalog({main_module.settings.app_name: "Translated", "ok": "fine"})

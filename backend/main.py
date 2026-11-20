@@ -33,7 +33,7 @@ from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Iterable, Literal
+from typing import Any, AsyncIterator, Callable, Iterable, Literal
 from urllib.parse import quote, urlparse
 
 # huggingface_hub 1.x sustituye hf_transfer por el cliente Xet. Esta variable
@@ -88,7 +88,9 @@ class Settings(BaseSettings):
     mydgx_api_key: str | None = None
     mydgx_dashboard_password: str | None = None
     mydgx_session_ttl_minutes: int = 60
+    mydgx_session_max_hours: int = 12
     enable_system_updates: bool = False
+    enable_firmware_updates: bool = False
     enable_service_control: bool = False
     managed_services: str = "mydgx,mydgx-gateway,mydgx-searxng,mydgx-comfyui,mydgx-whisper,ollama,docker,open-webui"
     llama_cpp_server_path: str = "llama-server"
@@ -1583,7 +1585,14 @@ def dashboard_password() -> str:
 
 
 def dashboard_session_ttl_seconds() -> int:
+    """Inactivity timeout: the dashboard renews the session while the user is active."""
     return max(60, min(24 * 60 * 60, int(settings.mydgx_session_ttl_minutes) * 60))
+
+
+def dashboard_session_max_seconds() -> int:
+    """Absolute limit since login; renewals never extend a session past it."""
+    hours = max(1, min(7 * 24, int(settings.mydgx_session_max_hours)))
+    return max(dashboard_session_ttl_seconds(), hours * 60 * 60)
 
 
 def _dashboard_session_key() -> bytes:
@@ -1592,9 +1601,10 @@ def _dashboard_session_key() -> bytes:
     ).digest()
 
 
-def create_dashboard_session(now: int | None = None) -> tuple[str, int]:
-    issued_at = int(time.time() if now is None else now)
-    expires_at = issued_at + dashboard_session_ttl_seconds()
+def create_dashboard_session(now: int | None = None, issued_at: int | None = None) -> tuple[str, int]:
+    current = int(time.time() if now is None else now)
+    issued_at = current if issued_at is None else int(issued_at)
+    expires_at = min(current + dashboard_session_ttl_seconds(), issued_at + dashboard_session_max_seconds())
     payload = f"v1:{issued_at}:{expires_at}:{uuid.uuid4().hex}".encode("ascii")
     encoded = base64.urlsafe_b64encode(payload).rstrip(b"=")
     signature = hmac.new(_dashboard_session_key(), encoded, hashlib.sha256).digest()
@@ -1606,8 +1616,14 @@ def create_dashboard_session(now: int | None = None) -> tuple[str, int]:
 
 
 def dashboard_session_remaining(token: str, now: int | None = None) -> int:
+    times = dashboard_session_times(token, now)
+    return times[1] - int(time.time() if now is None else now) if times else 0
+
+
+def dashboard_session_times(token: str, now: int | None = None) -> tuple[int, int] | None:
+    """(issued_at, expires_at) of a valid, unexpired session token, or None."""
     if not token or not dashboard_password():
-        return 0
+        return None
     try:
         encoded_text, supplied_text = token.split(".", 1)
         encoded = encoded_text.encode("ascii")
@@ -1616,25 +1632,26 @@ def dashboard_session_remaining(token: str, now: int | None = None) -> int:
         )
         expected = hmac.new(_dashboard_session_key(), encoded, hashlib.sha256).digest()
         if not hmac.compare_digest(supplied, expected):
-            return 0
+            return None
         payload = base64.urlsafe_b64decode(
             encoded + b"=" * (-len(encoded) % 4)
         ).decode("ascii")
         version, issued_text, expires_text, nonce = payload.split(":", 3)
         issued_at, expires_at = int(issued_text), int(expires_text)
         current = int(time.time() if now is None else now)
-        ttl = dashboard_session_ttl_seconds()
+        # Lowering the timeout or the limit in .env also shortens sessions already issued.
         if (
             version != "v1"
             or len(nonce) != 32
             or issued_at > current + 30
-            or expires_at - issued_at != ttl
             or expires_at <= current
+            or expires_at - current > dashboard_session_ttl_seconds() + 30
+            or expires_at - issued_at > dashboard_session_max_seconds()
         ):
-            return 0
-        return expires_at - current
+            return None
+        return issued_at, expires_at
     except (ValueError, UnicodeError, binascii.Error):
-        return 0
+        return None
 
 
 def dashboard_session_valid(request: Request) -> bool:
@@ -4775,12 +4792,32 @@ async def dashboard_auth_status(request: Request, response: Response) -> dict[st
     response.headers["Cache-Control"] = "no-store"
     if required and not remaining and request.cookies.get(DASHBOARD_SESSION_COOKIE):
         response.delete_cookie(DASHBOARD_SESSION_COOKIE, path="/", samesite="strict")
+    return dashboard_auth_body(required, not required or remaining > 0, remaining)
+
+
+def dashboard_auth_body(required: bool, authenticated: bool, remaining: int) -> dict[str, Any]:
     return {
         "required": required,
-        "authenticated": not required or remaining > 0,
+        "authenticated": authenticated,
         "expires_in_seconds": remaining,
         "session_ttl_minutes": dashboard_session_ttl_seconds() // 60,
+        "session_max_hours": dashboard_session_max_seconds() // 3600,
     }
+
+
+def dashboard_session_response(request: Request, token: str, expires_at: int) -> JSONResponse:
+    remaining = max(1, expires_at - int(time.time()))
+    response = JSONResponse(dashboard_auth_body(True, True, remaining), headers={"Cache-Control": "no-store"})
+    response.set_cookie(
+        DASHBOARD_SESSION_COOKIE,
+        token,
+        max_age=remaining,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        path="/",
+    )
+    return response
 
 
 @app.post("/api/auth/login")
@@ -4790,15 +4827,7 @@ async def dashboard_auth_login(
 ) -> JSONResponse:
     expected = dashboard_password()
     if not expected:
-        return JSONResponse(
-            {
-                "required": False,
-                "authenticated": True,
-                "expires_in_seconds": 0,
-                "session_ttl_minutes": dashboard_session_ttl_seconds() // 60,
-            },
-            headers={"Cache-Control": "no-store"},
-        )
+        return JSONResponse(dashboard_auth_body(False, True, 0), headers={"Cache-Control": "no-store"})
     client = dashboard_login_client(request)
     retry_after = dashboard_login_retry_after(client)
     if retry_after:
@@ -4814,26 +4843,23 @@ async def dashboard_auth_login(
         raise HTTPException(status_code=401, detail="Contraseña incorrecta")
     _dashboard_login_failures.pop(client, None)
     token, expires_at = create_dashboard_session()
-    remaining = max(1, expires_at - int(time.time()))
-    response = JSONResponse(
-        {
-            "required": True,
-            "authenticated": True,
-            "expires_in_seconds": remaining,
-            "session_ttl_minutes": dashboard_session_ttl_seconds() // 60,
-        },
-        headers={"Cache-Control": "no-store"},
-    )
-    response.set_cookie(
-        DASHBOARD_SESSION_COOKIE,
-        token,
-        max_age=remaining,
-        httponly=True,
-        secure=request.url.scheme == "https",
-        samesite="strict",
-        path="/",
-    )
-    return response
+    return dashboard_session_response(request, token, expires_at)
+
+
+@app.post("/api/auth/refresh")
+async def dashboard_auth_refresh(request: Request) -> JSONResponse:
+    """Extend a valid session after user activity, up to the absolute limit since login."""
+    if not dashboard_password():
+        return JSONResponse(dashboard_auth_body(False, True, 0), headers={"Cache-Control": "no-store"})
+    times = dashboard_session_times(request.cookies.get(DASHBOARD_SESSION_COOKIE, ""))
+    if times is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Autenticación requerida",
+            headers={"X-MyDGX-Auth-Required": "password"},
+        )
+    token, expires_at = create_dashboard_session(issued_at=times[0])
+    return dashboard_session_response(request, token, expires_at)
 
 
 @app.post("/api/auth/logout")
@@ -4886,6 +4912,7 @@ async def public_config() -> dict[str, Any]:
         "hf_token_configured": bool(settings.hf_token),
         "api_key_required": bool(settings.mydgx_api_key),
         "system_updates_enabled": settings.enable_system_updates,
+        "firmware_updates_enabled": settings.enable_firmware_updates,
         "service_control_enabled": settings.enable_service_control,
         "gateway_enabled": gateway["enabled"],
         "gateway_url": f"http://{gateway_host}:{gateway['port']}/v1",
@@ -4900,8 +4927,11 @@ async def public_config() -> dict[str, Any]:
 ENV_FILE = ROOT / ".env"
 ENV_MANAGED_HEADER = "# Ajustes gestionados desde Configuración de MyDGX"
 HF_TOKEN_PATTERN = re.compile(r"^hf_[A-Za-z0-9_-]{16,200}$")
-# Authentication, network exposure and privileged switches stay out on purpose: they are only changed by hand in .env.
+# Authentication and network exposure stay out on purpose: they are only changed by hand in .env.
+# Privileged switches can be turned off freely, but turning them on requires their typed confirmation phrase.
 EDITABLE_ENV_SETTINGS: dict[str, dict[str, Any]] = {
+    "ENABLE_SYSTEM_UPDATES": {"attr": "enable_system_updates", "type": "bool", "restart": False, "confirm": "ACTIVAR ACTUALIZACIONES"},
+    "ENABLE_FIRMWARE_UPDATES": {"attr": "enable_firmware_updates", "type": "bool", "restart": False, "confirm": "ACTIVAR FIRMWARE"},
     "HF_DOWNLOAD_WORKERS": {"attr": "hf_download_workers", "type": "int", "min": 1, "max": 16, "restart": False},
     "BENCHMARK_ENABLED": {"attr": "benchmark_enabled", "type": "bool", "restart": False},
     "BENCHMARK_AUTO_NEW_MODELS": {"attr": "benchmark_auto_new_models", "type": "bool", "restart": False},
@@ -4913,6 +4943,7 @@ EDITABLE_ENV_SETTINGS: dict[str, dict[str, Any]] = {
     "DEFAULT_PROFILE_ID": {"attr": "default_profile_id", "type": "str", "pattern": r"^[A-Za-z0-9._-]{0,120}$", "restart": True},
     "PROFILE_START_TIMEOUT_SECONDS": {"attr": "profile_start_timeout_seconds", "type": "int", "min": 30, "max": 1800, "restart": False},
     "MYDGX_SESSION_TTL_MINUTES": {"attr": "mydgx_session_ttl_minutes", "type": "int", "min": 5, "max": 1440, "restart": False},
+    "MYDGX_SESSION_MAX_HOURS": {"attr": "mydgx_session_max_hours", "type": "int", "min": 1, "max": 168, "restart": False},
     "METRICS_RETENTION_HOURS": {"attr": "metrics_retention_hours", "type": "int", "min": 1, "max": 8760, "restart": False},
     "LOG_RETENTION_DAYS": {"attr": "log_retention_days", "type": "int", "min": 1, "max": 365, "restart": False},
     "MODEL_IMPORT_MAX_GB": {"attr": "model_import_max_gb", "type": "int", "min": 1, "max": 4096, "restart": False},
@@ -4990,6 +5021,7 @@ class EnvSettingsPayload(BaseModel):
     values: dict[str, bool | int | str] = Field(default_factory=dict, max_length=len(EDITABLE_ENV_SETTINGS))
     hf_token: str | None = Field(default=None, max_length=256)
     clear_hf_token: bool = False
+    confirmations: dict[str, str] = Field(default_factory=dict, max_length=len(EDITABLE_ENV_SETTINGS))
 
 
 def env_settings_snapshot() -> dict[str, Any]:
@@ -5005,6 +5037,7 @@ def env_settings_snapshot() -> dict[str, Any]:
                 "min": spec.get("min"),
                 "max": spec.get("max"),
                 "restart": spec["restart"],
+                "confirm": spec.get("confirm"),
             }
             for key, spec in EDITABLE_ENV_SETTINGS.items()
         ],
@@ -5029,6 +5062,15 @@ async def update_env_settings(payload: EnvSettingsPayload) -> dict[str, Any]:
             parsed[key] = env_setting_value(key, spec, raw)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+    privileged_enabled = sorted(
+        key for key, value in parsed.items()
+        if EDITABLE_ENV_SETTINGS[key].get("confirm") and value is True
+        and not getattr(settings, EDITABLE_ENV_SETTINGS[key]["attr"])
+    )
+    for key in privileged_enabled:
+        phrase = EDITABLE_ENV_SETTINGS[key]["confirm"]
+        if payload.confirmations.get(key) != phrase:
+            raise HTTPException(status_code=400, detail=f"Para activar {key} escribe {phrase}")
     updates = {key: env_serialize(value) for key, value in parsed.items()}
     hf_user = ""
     if payload.hf_token is not None:
@@ -5052,6 +5094,15 @@ async def update_env_settings(payload: EnvSettingsPayload) -> dict[str, Any]:
     if "HF_TOKEN" in updates:
         settings.hf_token = updates["HF_TOKEN"] or None
     db.audit("settings.env", ",".join(sorted(updates)), True, "hf_token changed" if "HF_TOKEN" in updates else "")
+    if privileged_enabled:
+        keys = ", ".join(privileged_enabled)
+        db.audit("settings.privileged.enable", keys, True)
+        notify_safely(
+            "settings.privileged.enabled",
+            "Operaciones privilegiadas activadas",
+            f"Se activó {keys} desde Configuración. Si no fuiste tú, desactívalo y cambia la clave o contraseña de MyDGX.",
+            level="warning",
+        )
     return {
         "updated": sorted(updates),
         "restart_required": sorted(key for key in parsed if EDITABLE_ENV_SETTINGS[key]["restart"]),
@@ -6818,6 +6869,21 @@ def clear_model_health(repo_id: str, filename: str | None = None) -> None:
     save_model_health_marks(marks)
 
 
+def mark_model_healthy(repo_id: str, filename: str, job_id: str) -> None:
+    """Record that a downloaded GGUF passed a valid benchmark, replacing any earlier failure mark."""
+    if not repo_id:
+        return
+    marks = model_health_marks()
+    marks[repo_id.casefold()] = {
+        "status": "healthy",
+        "reason": "Benchmark válido",
+        "file": filename,
+        "job_id": job_id,
+        "at": utc_now(),
+    }
+    save_model_health_marks(marks)
+
+
 def hf_repo_lacks_complete_files(repo_id: str) -> bool:
     directory = hf_repo_cache_dir(repo_id)
     if not directory or not directory.is_dir():
@@ -7469,8 +7535,18 @@ async def update_model_persistence(payload: ModelPersistencePayload) -> dict[str
     async with _profile_start_lock:
         values = [item for item in persistent_models() if model_identity(item) != identity]
         if payload.enabled:
-            values.append(await managed_model_config(payload.source, payload.model_id, payload.context_size))
-        loaded = await apply_managed_models(DEFAULT_PROFILE_ID, values)
+            config = await managed_model_config(payload.source, payload.model_id, payload.context_size)
+            values.append(config)
+            if DEFAULT_PROFILE_ID in _runtime_profile_ids:
+                async with model_load_job(
+                    "model.default.start", payload.model_id, payload.model_id.rsplit("/", 1)[-1],
+                    model_load_estimate_mb(config),
+                ):
+                    loaded = await apply_managed_models(DEFAULT_PROFILE_ID, values)
+            else:
+                loaded = await apply_managed_models(DEFAULT_PROFILE_ID, values)
+        else:
+            loaded = await apply_managed_models(DEFAULT_PROFILE_ID, values)
     db.audit("model.persistence", payload.model_id, True, "enabled" if payload.enabled else "disabled")
     return {"persistent": payload.enabled, "profile_id": DEFAULT_PROFILE_ID, "applied": loaded, "models": len(values)}
 
@@ -8154,6 +8230,45 @@ def loaded_model_owner(identity: str) -> str | None:
     return None
 
 
+MODEL_LOAD_BASE_SECONDS = 8.0
+MODEL_LOAD_SECONDS_PER_GB = 0.6
+MODEL_LOAD_PROGRESS_INTERVAL_SECONDS = 2.0
+
+
+def model_load_estimate_mb(config: dict[str, Any]) -> int:
+    """Only paces the progress bar, so a config the estimator cannot read must never block a start."""
+    try:
+        return int(estimate_model_memory_mb({"id": "", "name": "", "port": 0, **config})["estimated_memory_mb"])
+    except Exception:
+        return 0
+
+
+@asynccontextmanager
+async def model_load_job(kind: str, target: str, label: str, estimated_mb: int) -> AsyncIterator[str]:
+    """Show a synchronous model load as a job; llama-server reports no load progress, so it is estimated."""
+    job_id = db.create_job(kind, target)
+    started = time.monotonic()
+    expected = MODEL_LOAD_BASE_SECONDS + max(0, estimated_mb) / 1024 * MODEL_LOAD_SECONDS_PER_GB
+    message = f"Cargando {label} en memoria"
+
+    async def advance() -> None:
+        while True:
+            elapsed = time.monotonic() - started
+            db.update_job(job_id, "running", min(95.0, 5 + 90 * elapsed / expected), message)
+            await asyncio.sleep(MODEL_LOAD_PROGRESS_INTERVAL_SECONDS)
+
+    progress = asyncio.create_task(advance())
+    try:
+        yield job_id
+    except BaseException as exc:
+        progress.cancel()
+        detail = redact_log_text(str(getattr(exc, "detail", exc)), 500)
+        db.update_job(job_id, "failed", 100, f"No se pudo cargar {label}: {detail}")
+        raise
+    progress.cancel()
+    db.update_job(job_id, "completed", 100, f"{label} cargado en {time.monotonic() - started:.0f} s")
+
+
 @app.post("/api/models/quick/start", dependencies=secure)
 async def quick_start_model(payload: QuickModelPayload) -> dict[str, Any]:
     ensure_benchmark_inference_available()
@@ -8170,10 +8285,14 @@ async def quick_start_model(payload: QuickModelPayload) -> dict[str, Any]:
         )
         save_managed_models(QUICK_PROFILE_ID, [*current, config])
         try:
-            runtime = await start_profile_process(
-                db.rows("SELECT * FROM profiles WHERE id=?", (QUICK_PROFILE_ID,))[0],
-                persist_desired=False,
-            )
+            async with model_load_job(
+                "model.quick.start", payload.model_id, payload.model_id.rsplit("/", 1)[-1],
+                model_load_estimate_mb(config),
+            ):
+                runtime = await start_profile_process(
+                    db.rows("SELECT * FROM profiles WHERE id=?", (QUICK_PROFILE_ID,))[0],
+                    persist_desired=False,
+                )
         except Exception as exc:
             save_managed_models(QUICK_PROFILE_ID, current)
             message = redact_log_text(str(getattr(exc, "detail", exc)), 500)
@@ -11931,6 +12050,25 @@ async def stop_one_profile(profile_id: str, request: Request) -> dict[str, bool]
     await stop_runtime_profile(profile_id)
     db.audit("profile.stop", profile_id, True, request_origin(request))
     return {"stopped": True}
+
+
+async def refresh_profile_app_status(name: str) -> None:
+    lock = _profile_app_locks.setdefault(name, asyncio.Lock())
+    if lock.locked():
+        return
+    async with lock:
+        try:
+            code = await run_profile_app_action(name, "status")
+        except RuntimeError as exc:
+            set_profile_app_state(name, "error", redact_log_text(str(exc), 500))
+            return
+        set_profile_app_state(name, "running" if code == 0 else "stopped")
+
+
+@app.get("/api/profile-apps", dependencies=secure)
+async def list_profile_apps() -> dict[str, Any]:
+    await asyncio.gather(*(refresh_profile_app_status(name) for name in discover_profile_apps()))
+    return profile_apps_overview()
 
 
 @app.post("/api/profile-apps/{name}/{action}", dependencies=secure)
@@ -17263,7 +17401,7 @@ async def run_benchmark_job(
             db.audit("benchmark.run", request.target, valid, run_id)
             if downloaded_gguf and valid:
                 await asyncio.to_thread(
-                    clear_model_health, str(model.get("model_repo") or ""), str(model.get("model_filename") or ""),
+                    mark_model_healthy, str(model.get("model_repo") or ""), str(model.get("model_filename") or ""), job_id,
                 )
             outcome = "completed"
         except BenchmarkCancelled:
@@ -18229,6 +18367,12 @@ def benchmark_model_info(run: dict[str, Any], metadata: dict[str, Any]) -> dict[
     }
 
 
+@app.get("/api/benchmarks/pending", dependencies=secure)
+async def benchmarks_pending() -> dict[str, int]:
+    candidates = await benchmark_suite_candidates()
+    return {"pending": sum(1 for item in candidates if item.get("runnable") is not False)}
+
+
 @app.get("/api/benchmarks", dependencies=secure)
 async def benchmarks(
     limit: int = Query(default=100, ge=1, le=500),
@@ -18769,6 +18913,10 @@ class ChatRequest(BaseModel):
     history: list[dict[str, str]] = Field(default_factory=list, max_length=40)
 
 
+# A looping small model never emits its end token; without a cap a non-streamed reply hangs until the timeout.
+CHAT_MAX_REPLY_TOKENS = 4096
+
+
 @app.post("/api/chat", dependencies=secure)
 async def chat(payload: ChatRequest) -> dict[str, Any]:
     ensure_interactive_inference_available()
@@ -18799,6 +18947,7 @@ async def chat(payload: ChatRequest) -> dict[str, Any]:
                         "messages": messages,
                         "temperature": model["temperature"],
                         "top_p": model["top_p"],
+                        "max_tokens": CHAT_MAX_REPLY_TOKENS,
                         "stream": False,
                     }
                     if model.get("repeat_penalty", 0) > 0:
@@ -18814,8 +18963,13 @@ async def chat(payload: ChatRequest) -> dict[str, Any]:
                     )
                     response.raise_for_status()
                     completion = response.json()
-                content = completion.get("choices", [{}])[0].get("message", {}).get("content", "")
-                return {"message": {"role": "assistant", "content": content}, "metrics": {}}
+                choice = completion.get("choices", [{}])[0]
+                content = choice.get("message", {}).get("content", "")
+                return {
+                    "message": {"role": "assistant", "content": content},
+                    "truncated": choice.get("finish_reason") == "length",
+                    "metrics": {},
+                }
             except httpx.HTTPError as exc:
                 raise HTTPException(status_code=503, detail="El servicio de chat no está disponible") from exc
         model_name = model["model_ref"]
@@ -18824,10 +18978,10 @@ async def chat(payload: ChatRequest) -> dict[str, Any]:
     result = await ollama_payload(
         "/api/chat",
         "POST",
-        {"model": model_name, "messages": messages, "stream": False},
+        {"model": model_name, "messages": messages, "stream": False, "options": {"num_predict": CHAT_MAX_REPLY_TOKENS}},
         timeout=600,
     )
-    return {"message": result.get("message", {}), "metrics": {
+    return {"message": result.get("message", {}), "truncated": result.get("done_reason") == "length", "metrics": {
         "total_duration": result.get("total_duration"),
         "eval_count": result.get("eval_count"),
         "eval_duration": result.get("eval_duration"),
@@ -19997,7 +20151,7 @@ def assistant_profile_model(reference: str) -> dict[str, Any] | None:
 def assistant_provider_messages(messages: list[dict[str, Any]], provider: str) -> list[dict[str, Any]]:
     converted = []
     for message in messages:
-        item = {key: value for key, value in message.items() if value is not None}
+        item = {key: value for key, value in message.items() if value is not None and key != "truncated"}
         if item.get("role") == "assistant" and item.get("tool_calls"):
             calls = []
             for call in item["tool_calls"]:
@@ -20061,7 +20215,7 @@ async def call_assistant_model(
             "model": model_name,
             "messages": assistant_provider_messages(messages, "ollama"),
             "stream": False,
-            "options": {"temperature": 0.2},
+            "options": {"temperature": 0.2, "num_predict": CHAT_MAX_REPLY_TOKENS},
         }
         if tools_enabled:
             ollama_request["tools"] = assistant_tools_for_messages(messages)
@@ -20076,6 +20230,7 @@ async def call_assistant_model(
             "role": "assistant",
             "content": str(response_message.get("content") or ""),
             "tool_calls": normalize_assistant_tool_calls(response_message.get("tool_calls")),
+            "truncated": result.get("done_reason") == "length",
         }, model_name
     if str(model.get("api_protocol") or "openai") != "openai":
         raise HTTPException(status_code=409, detail="El modelo no ofrece un protocolo compatible con herramientas")
@@ -20083,6 +20238,7 @@ async def call_assistant_model(
         "model": model.get("model_alias") or model["model_ref"],
         "messages": assistant_provider_messages(messages, "openai"),
         "temperature": 0.2,
+        "max_tokens": CHAT_MAX_REPLY_TOKENS,
         "stream": False,
     }
     if tools_enabled:
@@ -20095,11 +20251,13 @@ async def call_assistant_model(
             result = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(status_code=503, detail="El modelo de asistente no está disponible") from exc
-    response_message = (result.get("choices") or [{}])[0].get("message") or {}
+    choice = (result.get("choices") or [{}])[0]
+    response_message = choice.get("message") or {}
     return {
         "role": "assistant",
         "content": str(response_message.get("content") or ""),
         "tool_calls": normalize_assistant_tool_calls(response_message.get("tool_calls")),
+        "truncated": choice.get("finish_reason") == "length",
     }, candidate
 
 
@@ -20436,6 +20594,7 @@ async def assistant_chat(payload: AssistantChatRequest, request: Request) -> dic
     db.audit("assistant.chat", selected, True, ",".join(item["name"] for item in tools_used))
     return {
         "message": {"role": "assistant", "content": content},
+        "truncated": bool(response_message.get("truncated")),
         "model": selected,
         "tools_used": tools_used,
         "pending_actions": pending_actions,
@@ -22055,8 +22214,8 @@ async def run_firmware_update(job_id: str) -> None:
 
 @app.post("/api/updates/firmware/apply", dependencies=secure)
 async def apply_firmware_updates(payload: FirmwareUpdateRequest, background: BackgroundTasks) -> dict[str, str]:
-    if not settings.enable_system_updates:
-        raise HTTPException(status_code=403, detail="Actualizaciones desactivadas en .env")
+    if not settings.enable_firmware_updates:
+        raise HTTPException(status_code=403, detail="Actualizaciones de firmware desactivadas en Configuración")
     if not shutil.which("fwupdmgr"):
         raise HTTPException(status_code=409, detail="fwupd no está instalado en este sistema")
     if db.rows("SELECT id FROM jobs WHERE status IN ('queued','running','cancelling') LIMIT 1"):

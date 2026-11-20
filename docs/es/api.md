@@ -60,6 +60,7 @@ curl -s -H "X-MyDGX-Key: $MYDGX_API_KEY" http://127.0.0.1:8088/api/overview
 | GET | `/api/health` | Salud del dashboard (`status`, `name`, `version`). Sin autenticación. |
 | GET | `/api/auth/status` | Si el dashboard pide contraseña (`required`), si la sesión actual es válida (`authenticated`), los segundos que le quedan y la duración de sesión. Sin autenticación; no se cachea. |
 | POST | `/api/auth/login` | Recibe `{"password": "…"}` y, si coincide, abre una sesión con una cookie `httponly` y `samesite=strict`. Devuelve `401` si la contraseña es incorrecta y `429` con `Retry-After` tras demasiados intentos. |
+| POST | `/api/auth/refresh` | Renueva una cookie de sesión válida otros `MYDGX_SESSION_TTL_MINUTES`, sin pasar nunca de `MYDGX_SESSION_MAX_HOURS` desde que entraste. El dashboard solo la llama tras actividad del usuario. Devuelve `401` si la sesión ha caducado. |
 | POST | `/api/auth/logout` | Cierra la sesión borrando la cookie. |
 | GET | `/api/config` | Configuración pública: URLs de servicios, si hay token HF o claves configuradas (solo booleanos), funciones activadas. |
 | GET | `/api/overview` | Telemetría actual, identidad del equipo, servicios, suite de benchmarks en curso, mapa de memoria, perfiles cargados (`running_profiles`) y apps web activas (`web_apps`: `name`, `alias`, `port`, `url`, `state`, `reachable`). |
@@ -130,6 +131,7 @@ arranque informan de las plazas ocupadas en `llm_slots` y `max_llm_slots`.
 | DELETE | `/api/profiles/{profile_id}` | Borra el perfil. `?confirm=` el nombre exacto del perfil. |
 | GET | `/api/profiles/model-defaults` | Parámetros con los que arrancaría un modelo descargado (los mismos de *Encender*: contexto, muestreo de la ficha o del GGUF, caché KV, `mmproj`), para rellenar un modelo de un perfil. Parámetros: `source` (`huggingface` u `ollama`) y `model_id`. |
 | GET | `/api/profiles/recommend/{repo_id}` | Recomienda motor, archivo GGUF, contexto y parámetros para un repositorio. Parámetros: `task`, `runtime`. |
+| GET | `/api/profile-apps` | Lista las apps de la carpeta de apps que tienen `start.sh`, ejecuta `start.sh status` en cada una (salvo las que tienen una acción en curso) y devuelve `root`, `available`, `states` y `web`. |
 | POST | `/api/profile-apps/{name}/{action}` | Ejecuta `start.sh` de una app de perfil. `action`: `start`, `stop`, `restart` o `status`. |
 | PUT | `/api/profile-apps/{name}/web` | Fija el alias y el puerto web de una app (`alias`, `port` 1024-65535; `port: null` lo quita). `409` si el alias o el puerto ya están en uso (MyDGX, gateway, servicios, modelos de perfiles, túneles del systray, rangos de Default/Quick u otra app). Devuelve `restart_required` si la app está en marcha. |
 
@@ -164,6 +166,7 @@ Detalle de tareas y formatos en [Laboratorio IA](laboratorio-ia.md).
 | Método | Ruta | Para qué |
 |---|---|---|
 | GET | `/api/benchmarks` | Ejecuciones, cola, suite en curso y algoritmo de puntuación. Parámetro: `limit`. |
+| GET | `/api/benchmarks/pending` | Número de modelos instalados ejecutables que aún no han completado la suite (`pending`). Lo usa el contador del menú lateral. |
 | POST | `/api/benchmarks/runs` | Mide un objetivo. Cuerpo: `target`, `protocol_id`, `repetitions`, `strict_isolation`. |
 | POST | `/api/benchmarks/suite` | Lanza una suite sobre varios candidatos. Cuerpo: `repetitions`, `candidate_keys`. |
 | POST | `/api/benchmarks/suite/{suite_id}/stop` | Detiene la suite y restaura el estado previo. |
@@ -221,7 +224,7 @@ Detalle en [Asistente MyDGX](asistente-mydgx.md).
 | GET | `/api/updates` | Paquetes APT actualizables, con categoría y si son de seguridad. |
 | POST | `/api/updates/apply` | Aplica actualizaciones APT. Requiere `ENABLE_SYSTEM_UPDATES=true`, 5 GB libres. Cuerpo: `confirm` = `"ACTUALIZAR MYDGX"`. Devuelve `job_id`. |
 | GET | `/api/updates/firmware` | Firmware pendiente según fwupd (dispositivo, versión actual y nueva, notas, si requiere reinicio), reinicio pendiente y estado de la ConnectX-7. Caché de 10 minutos; `?refresh=true` fuerza la consulta. |
-| POST | `/api/updates/firmware/apply` | Instala el firmware pendiente con `fwupdmgr update`, sin reiniciar. Requiere `ENABLE_SYSTEM_UPDATES=true` y que no haya trabajos en curso. Cuerpo: `confirm` = `"ACTUALIZAR FIRMWARE"`. Devuelve `job_id`. |
+| POST | `/api/updates/firmware/apply` | Instala el firmware pendiente con `fwupdmgr update`, sin reiniciar. Requiere `ENABLE_FIRMWARE_UPDATES=true` y que no haya trabajos en curso. Cuerpo: `confirm` = `"ACTUALIZAR FIRMWARE"`. Devuelve `job_id`. |
 | POST | `/api/system/repair` | Repara runtime NVIDIA, DKMS y llama.cpp. Requiere `ENABLE_SYSTEM_UPDATES=true`. Cuerpo: `confirm` = `"REPARAR MYDGX"`. Devuelve `job_id`. |
 
 ## Gateway (`/v1`)

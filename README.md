@@ -935,7 +935,7 @@ Key variables:
 - `ENABLE_PROFILE_AUTOSTART`: startup of the default profile;
 - `GATEWAY_HOST`, `GATEWAY_PORT`: OpenAI endpoint of the active profile;
 - `METRICS_INTERVAL_SECONDS`, `METRICS_RETENTION_HOURS`: history;
-- `ENABLE_SYSTEM_UPDATES`, `ENABLE_SERVICE_CONTROL`: privileged operations;
+- `ENABLE_SYSTEM_UPDATES`, `ENABLE_FIRMWARE_UPDATES`, `ENABLE_SERVICE_CONTROL`: privileged operations;
 - `DEVICE_VARIANT_OVERRIDE`: `nvidia`, `asus`, `hp`, `lenovo`, `dell` or `generic` when
   automatic chassis detection is not enough;
 - `TRUSTED_HOSTS`: extra names accepted in `Host` if you connect through your own DNS

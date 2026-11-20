@@ -294,7 +294,11 @@ Mientras la app está en marcha:
   al DGX y lo mantiene abierto, así que el botón de *Resumen* también funciona
   desde el navegador del Mac. El puerto debe estar libre en el Mac.
 
-API: `/api/profiles*`, `POST /api/profile-apps/{name}/{action}`,
+Para arrancar, detener o reiniciar una app a mano, con o sin perfil cargado, ve a
+**Motores → Apps de perfil**. Cada botón ejecuta `start.sh start`, `stop` o
+`restart`, y el estado sale de `start.sh status`. Detener pide confirmación.
+
+API: `/api/profiles*`, `GET /api/profile-apps`, `POST /api/profile-apps/{name}/{action}`,
 `PUT /api/profile-apps/{name}/web`; las apps web activas están en
 `GET /api/overview` (`web_apps`).
 
@@ -368,7 +372,7 @@ herramientas. Ver [Laboratorio IA](laboratorio-ia.md).
   `REPARAR MYDGX`).
 - Firmware: lo pendiente en fwupd (EC, UEFI, SSD…) y el estado de la ConnectX-7.
   MyDGX lo revisa cada 6 horas y avisa en Notificaciones cuando aparece una
-  versión nueva. Instalar exige `ENABLE_SYSTEM_UPDATES=true`, confirmación y
+  versión nueva. Instalar exige `ENABLE_FIRMWARE_UPDATES=true`, confirmación y
   que no haya trabajos en curso; MyDGX no reinicia el equipo por su cuenta. La
   ConnectX-7 la actualiza el servicio de NVIDIA al arrancar, solo con un cable
   QSFP conectado. El estado OTA de NVIDIA se consulta en DGX Dashboard.

@@ -16,18 +16,23 @@ documentarla aquí.
 
 La tarjeta **Servidor · .env** de Configuración reescribe en `.env` solo estas
 claves y las aplica al momento, salvo las marcadas con reinicio:
-`HF_TOKEN`, `HF_DOWNLOAD_WORKERS`, `MODEL_IMPORT_MAX_GB`, `BENCHMARK_ENABLED`,
+`ENABLE_SYSTEM_UPDATES`, `ENABLE_FIRMWARE_UPDATES`, `HF_TOKEN`, `HF_DOWNLOAD_WORKERS`, `MODEL_IMPORT_MAX_GB`, `BENCHMARK_ENABLED`,
 `BENCHMARK_AUTO_NEW_MODELS`, `BENCHMARK_REPETITIONS`, `BENCHMARK_QUIET_SECONDS`,
 `ASSISTANT_ENABLED`, `ASSISTANT_MODEL`, `ENABLE_PROFILE_AUTOSTART` (reinicio),
 `DEFAULT_PROFILE_ID` (reinicio), `PROFILE_START_TIMEOUT_SECONDS`,
-`MYDGX_SESSION_TTL_MINUTES`, `METRICS_RETENTION_HOURS` y `LOG_RETENTION_DAYS`.
+`MYDGX_SESSION_TTL_MINUTES`, `MYDGX_SESSION_MAX_HOURS`, `METRICS_RETENTION_HOURS`
+y `LOG_RETENTION_DAYS`.
 
 El token de Hugging Face se comprueba con Hugging Face antes de guardarlo y
 nunca se vuelve a mostrar. El archivo queda con permisos `600` y se conservan
 sus comentarios. Las claves de autenticación, de red y de operaciones
 privilegiadas (`HOST`, `PORT`, `MYDGX_*_KEY`, `MYDGX_DASHBOARD_PASSWORD`,
-`GATEWAY_API_KEY`, `ENABLE_SYSTEM_UPDATES`, `ENABLE_SERVICE_CONTROL`…) solo se
-cambian a mano en `.env`.
+`GATEWAY_API_KEY`, `ENABLE_SERVICE_CONTROL`…) solo se cambian a mano en `.env`.
+
+`ENABLE_SYSTEM_UPDATES` y `ENABLE_FIRMWARE_UPDATES` aparecen en el grupo
+**Mantenimiento del sistema**. Desactivarlas es inmediato; activarlas exige
+escribir `ACTIVAR ACTUALIZACIONES` o `ACTIVAR FIRMWARE`, queda en la auditoría
+y genera un aviso en Notificaciones.
 
 ## Servidor y acceso
 
@@ -38,7 +43,8 @@ cambian a mano en `.env`.
 | `PORT` | `8088` | Puerto del dashboard. |
 | `MYDGX_API_KEY` | vacío | **Secreto.** Clave para `/api/*`, cabecera `X-MyDGX-Key`. |
 | `MYDGX_DASHBOARD_PASSWORD` | vacío | **Secreto.** Si se define, activa el login web y una cookie de sesión `HttpOnly`. |
-| `MYDGX_SESSION_TTL_MINUTES` | `60` | Caducidad absoluta de la sesión web. Se limita entre 1 minuto y 24 horas. |
+| `MYDGX_SESSION_TTL_MINUTES` | `60` | Cierre de la sesión web por inactividad. El dashboard la renueva mientras haces clic, escribes, desplazas o mueves el ratón; el sondeo automático en segundo plano no cuenta. Se limita entre 1 minuto y 24 horas. |
+| `MYDGX_SESSION_MAX_HOURS` | `12` | Duración máxima de la sesión desde que entras, aunque sigas trabajando. Se limita entre 1 hora y 7 días, y nunca es menor que el cierre por inactividad. |
 | `DUCKDNS_DOMAIN` | vacío | Subdominio DuckDNS o nombre completo terminado en `.duckdns.org`. Admite varios separados por comas. |
 | `DUCKDNS_TOKEN` | vacío | **Secreto.** Token de DuckDNS; se usa únicamente en el DGX. |
 | `TRUSTED_HOSTS` | vacío | Nombres extra aceptados en la cabecera `Host` (por ejemplo `spark.lan`), separados por comas. Loopback y la dirección de escucha ya se aceptan. |
@@ -158,7 +164,8 @@ Los logs internos (*Logs* y `logs/`) se guardan siempre en español.
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `ENABLE_SYSTEM_UPDATES` | `false` | Permite aplicar actualizaciones APT y de firmware (fwupd) y la reparación del sistema. |
+| `ENABLE_SYSTEM_UPDATES` | `false` | Permite aplicar actualizaciones APT y la reparación del sistema. Editable desde Configuración con confirmación. |
+| `ENABLE_FIRMWARE_UPDATES` | `false` | Permite instalar firmware con fwupd. Editable desde Configuración con confirmación. |
 | `ENABLE_SERVICE_CONTROL` | `false` | Permite arrancar, parar y reiniciar servicios de la lista. |
 | `MANAGED_SERVICES` | `mydgx,mydgx-gateway,mydgx-searxng,mydgx-comfyui,mydgx-whisper,ollama,docker,open-webui` | Lista cerrada de servicios controlables. |
 

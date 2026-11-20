@@ -935,7 +935,7 @@ Variables destacadas:
 - `ENABLE_PROFILE_AUTOSTART`: arranque del perfil predeterminado;
 - `GATEWAY_HOST`, `GATEWAY_PORT`: endpoint OpenAI del perfil activo;
 - `METRICS_INTERVAL_SECONDS`, `METRICS_RETENTION_HOURS`: histórico;
-- `ENABLE_SYSTEM_UPDATES`, `ENABLE_SERVICE_CONTROL`: operaciones privilegiadas;
+- `ENABLE_SYSTEM_UPDATES`, `ENABLE_FIRMWARE_UPDATES`, `ENABLE_SERVICE_CONTROL`: operaciones privilegiadas;
 - `DEVICE_VARIANT_OVERRIDE`: `nvidia`, `asus`, `hp`, `lenovo`, `dell` o `generic` cuando
   la detección automática del chasis no sea suficiente;
 - `TRUSTED_HOSTS`: nombres extra aceptados en `Host` si accedes por un nombre DNS

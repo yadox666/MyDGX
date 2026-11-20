@@ -24,7 +24,7 @@ UNTRANSLATED_KEYS = frozenset({
     "path", "paths", "url", "file", "filename", "model", "model_id", "model_repo", "repo", "engine",
     "task", "command", "quantization", "architecture", "hash", "artifact_hash", "token", "content",
     "messages", "prompt", "system_prompt", "response", "output", "text", "stdout", "stderr", "lines",
-    "entries", "logs", "log", "target", "detail_json", "config", "env",
+    "entries", "logs", "log", "target", "detail_json", "config", "env", "confirm",
 })
 # Profile editors send these fields back unchanged, so translating them would
 # persist the translation.

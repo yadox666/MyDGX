@@ -16,7 +16,7 @@ documentarla aquí.
 
 La tarjeta **Servidor · .env** de Configuración reescribe en `.env` solo estas
 claves y las aplica al momento, salvo las marcadas con reinicio:
-`ENABLE_SYSTEM_UPDATES`, `ENABLE_FIRMWARE_UPDATES`, `HF_TOKEN`, `HF_DOWNLOAD_WORKERS`, `MODEL_IMPORT_MAX_GB`, `BENCHMARK_ENABLED`,
+`ENABLE_SYSTEM_UPDATES`, `ENABLE_FIRMWARE_UPDATES`, `ENABLE_SERVICE_CONTROL`, `HF_TOKEN`, `HF_DOWNLOAD_WORKERS`, `MODEL_IMPORT_MAX_GB`, `BENCHMARK_ENABLED`,
 `BENCHMARK_AUTO_NEW_MODELS`, `BENCHMARK_REPETITIONS`, `BENCHMARK_QUIET_SECONDS`,
 `ASSISTANT_ENABLED`, `ASSISTANT_MODEL`, `ENABLE_PROFILE_AUTOSTART` (reinicio),
 `DEFAULT_PROFILE_ID` (reinicio), `PROFILE_START_TIMEOUT_SECONDS`,
@@ -27,12 +27,12 @@ El token de Hugging Face se comprueba con Hugging Face antes de guardarlo y
 nunca se vuelve a mostrar. El archivo queda con permisos `600` y se conservan
 sus comentarios. Las claves de autenticación, de red y de operaciones
 privilegiadas (`HOST`, `PORT`, `MYDGX_*_KEY`, `MYDGX_DASHBOARD_PASSWORD`,
-`GATEWAY_API_KEY`, `ENABLE_SERVICE_CONTROL`…) solo se cambian a mano en `.env`.
+`GATEWAY_API_KEY`…) solo se cambian a mano en `.env`.
 
-`ENABLE_SYSTEM_UPDATES` y `ENABLE_FIRMWARE_UPDATES` aparecen en el grupo
-**Mantenimiento del sistema**. Desactivarlas es inmediato; activarlas exige
-escribir `ACTIVAR ACTUALIZACIONES` o `ACTIVAR FIRMWARE`, queda en la auditoría
-y genera un aviso en Notificaciones.
+`ENABLE_SYSTEM_UPDATES`, `ENABLE_FIRMWARE_UPDATES` y `ENABLE_SERVICE_CONTROL`
+aparecen en el grupo **Mantenimiento del sistema**. Desactivarlas es inmediato;
+activarlas exige escribir `ACTIVAR ACTUALIZACIONES`, `ACTIVAR FIRMWARE` o
+`ACTIVAR SERVICIOS`, queda en la auditoría y genera un aviso en Notificaciones.
 
 ## Servidor y acceso
 
@@ -166,7 +166,7 @@ Los logs internos (*Logs* y `logs/`) se guardan siempre en español.
 |---|---|---|
 | `ENABLE_SYSTEM_UPDATES` | `false` | Permite aplicar actualizaciones APT y la reparación del sistema. Editable desde Configuración con confirmación. |
 | `ENABLE_FIRMWARE_UPDATES` | `false` | Permite instalar firmware con fwupd. Editable desde Configuración con confirmación. |
-| `ENABLE_SERVICE_CONTROL` | `false` | Permite arrancar, parar y reiniciar servicios de la lista. |
+| `ENABLE_SERVICE_CONTROL` | `false` | Permite arrancar, parar y reiniciar servicios de la lista. Editable desde Configuración con confirmación. |
 | `MANAGED_SERVICES` | `mydgx,mydgx-gateway,mydgx-searxng,mydgx-comfyui,mydgx-whisper,ollama,docker,open-webui` | Lista cerrada de servicios controlables. |
 
 ## Asistente

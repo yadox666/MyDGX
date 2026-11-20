@@ -1797,8 +1797,6 @@
   "No hay apps en {root}: cada app es una carpeta con un start.sh que acepte start, stop, restart y status.",
   "Sin comprobar",
   "Usada por el perfil: {value}",
-  "Benchmark válido{file}{date}",
-  "SANO",
   "Consumo GPU",
   "de {value} W",
   "Histórico reciente de consumo de la GPU",
@@ -1809,5 +1807,9 @@
   "Cierre por inactividad (min)",
   "La sesión se renueva mientras usas el dashboard; se cierra tras este tiempo sin actividad",
   "Duración máxima de la sesión (h)",
-  "Tras este tiempo desde que entras hay que volver a escribir la contraseña, aunque sigas trabajando"
+  "Tras este tiempo desde que entras hay que volver a escribir la contraseña, aunque sigas trabajando",
+  "Controlar servicios",
+  "Permite iniciar, detener y reiniciar los servicios de la lista permitida desde Sistema y Motores. Pide confirmación para activarlo",
+  "Modelo sano: superó el benchmark",
+  "Probado {date}"
 ]

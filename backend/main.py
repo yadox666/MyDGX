@@ -4934,6 +4934,7 @@ HF_TOKEN_PATTERN = re.compile(r"^hf_[A-Za-z0-9_-]{16,200}$")
 EDITABLE_ENV_SETTINGS: dict[str, dict[str, Any]] = {
     "ENABLE_SYSTEM_UPDATES": {"attr": "enable_system_updates", "type": "bool", "restart": False, "confirm": "ACTIVAR ACTUALIZACIONES"},
     "ENABLE_FIRMWARE_UPDATES": {"attr": "enable_firmware_updates", "type": "bool", "restart": False, "confirm": "ACTIVAR FIRMWARE"},
+    "ENABLE_SERVICE_CONTROL": {"attr": "enable_service_control", "type": "bool", "restart": False, "confirm": "ACTIVAR SERVICIOS"},
     "HF_DOWNLOAD_WORKERS": {"attr": "hf_download_workers", "type": "int", "min": 1, "max": 16, "restart": False},
     "BENCHMARK_ENABLED": {"attr": "benchmark_enabled", "type": "bool", "restart": False},
     "BENCHMARK_AUTO_NEW_MODELS": {"attr": "benchmark_auto_new_models", "type": "bool", "restart": False},
@@ -6041,8 +6042,10 @@ def local_hf_models() -> list[dict[str, Any]]:
         return models
     try:
         health_marks = {**benchmark_health_marks(), **model_health_marks()}
+        file_health_marks = benchmark_source_health("comfyui")
     except Exception:
         health_marks = {}
+        file_health_marks = {}
     for directory in hub.glob("models--*"):
         repo_id = directory.name.removeprefix("models--").replace("--", "/")
         size = sum(item.stat().st_size for item in directory.rglob("*") if item.is_file() and not item.is_symlink())
@@ -6106,7 +6109,11 @@ def local_hf_models() -> list[dict[str, Any]]:
             "shard_count": len(details["shards"]),
             "partial_downloads": len(details["partials"]),
             "incomplete_shards": sum(1 for item in details["shards"] if not item["complete"]),
-            "health": local_hf_health(repo_id, files, health_marks),
+            "health": local_hf_health(repo_id, files, health_marks) or next(
+                (file_health_marks[Path(str(file["name"])).name.casefold()] for file in files
+                 if Path(str(file["name"])).name.casefold() in file_health_marks),
+                None,
+            ),
             "uncensored": bool(
                 UNCENSORED_MODEL_PATTERN.search(repo_id)
                 or UNCENSORED_MODEL_PATTERN.search(front_matter)
@@ -6697,9 +6704,14 @@ async def models() -> dict[str, Any]:
         names = owners.setdefault(model_identity(loaded_model), [])
         if profile["name"] not in names:
             names.append(str(profile["name"]))
+    try:
+        ollama_health = await asyncio.to_thread(benchmark_source_health, "ollama")
+    except Exception:
+        ollama_health = {}
     for model in installed:
         name = str(model.get("name") or model.get("model") or "")
         identity = f"ollama:{name.casefold()}"
+        model["health"] = ollama_health.get(name.casefold())
         model["persistent"] = identity in persistent
         model["quick"] = identity in quick
         model["loaded"] = name.casefold() in running_names or identity in owners
@@ -6871,23 +6883,29 @@ def clear_model_health(repo_id: str, filename: str | None = None) -> None:
     save_model_health_marks(marks)
 
 
-def benchmark_health_marks() -> dict[str, dict[str, Any]]:
-    """HEALTHY marks for Hugging Face repos whose latest local benchmark was valid; stored marks take precedence."""
+def benchmark_source_health(source: str) -> dict[str, dict[str, Any]]:
+    """HEALTHY marks keyed by source id for models whose latest local benchmark from that source was valid."""
     rows = db.rows(
         """
         SELECT m.source_id, m.filename, r.job_id, r.valid, COALESCE(r.completed_at, r.created_at) AS at
         FROM benchmark_runs r JOIN benchmark_models m ON m.id = r.model_id
-        WHERE m.source = 'huggingface' AND r.imported = 0 AND r.status IN ('completed', 'failed')
+        WHERE m.source = ? AND r.imported = 0 AND r.status IN ('completed', 'failed')
         ORDER BY r.created_at
-        """
+        """,
+        (source,),
     )
     latest: dict[str, dict[str, Any]] = {}
     for row in rows:
         latest[str(row["source_id"]).casefold()] = dict(row)
     return {
-        repo: {"status": "healthy", "reason": "Benchmark válido", "file": row["filename"], "job_id": row["job_id"], "at": row["at"]}
-        for repo, row in latest.items() if row["valid"]
+        key: {"status": "healthy", "reason": "Benchmark válido", "file": row["filename"], "job_id": row["job_id"], "at": row["at"]}
+        for key, row in latest.items() if row["valid"]
     }
+
+
+def benchmark_health_marks() -> dict[str, dict[str, Any]]:
+    """HEALTHY marks for Hugging Face repos whose latest local benchmark was valid; stored marks take precedence."""
+    return benchmark_source_health("huggingface")
 
 
 def mark_model_healthy(repo_id: str, filename: str, job_id: str) -> None:
@@ -14983,9 +15001,9 @@ async def benchmark_suite_candidates(include_measured: bool = False) -> list[dic
         suite_completed = benchmark_artifact_completed_in_suite(
             artifact_hash, protocol_id
         )
+        seen.add(artifact_hash)
         if suite_completed and not include_measured:
             continue
-        seen.add(artifact_hash)
         candidates.append({
             "candidate_key": f"ollama:{artifact_hash}",
             "target": f"ollama:{name}",
@@ -15041,9 +15059,9 @@ async def benchmark_suite_candidates(include_measured: bool = False) -> list[dic
             suite_completed = benchmark_artifact_completed_in_suite(
                 artifact_hash, protocol_id
             )
+            seen.add(artifact_hash)
             if suite_completed and not include_measured:
                 continue
-            seen.add(artifact_hash)
             model_id = str(model.get("id") or "primary")
             name = installed_model_name(model, model_id)
             candidates.append({
@@ -15088,9 +15106,9 @@ async def benchmark_suite_candidates(include_measured: bool = False) -> list[dic
         )
         measured = benchmark_artifact_was_measured(artifact_hash, protocol_id)
         suite_completed = benchmark_artifact_completed_in_suite(artifact_hash, protocol_id)
+        seen.add(artifact_hash)
         if suite_completed and not include_measured:
             continue
-        seen.add(artifact_hash)
         blocked_reason = gguf_memory_block_reason(size)
         shards = len(artifact["files"])
         candidates.append({
@@ -15142,9 +15160,9 @@ async def benchmark_suite_candidates(include_measured: bool = False) -> list[dic
             suite_completed = benchmark_artifact_completed_in_suite(
                 artifact_hash, protocol_id,
             )
+            seen.add(artifact_hash)
             if suite_completed and not include_measured:
                 continue
-            seen.add(artifact_hash)
             model_id = str(model.get("id") or "primary")
             name = installed_model_name(model, model_id)
             runnable, blocked_reason = await external_runtime_state(model)
@@ -15180,9 +15198,9 @@ async def benchmark_suite_candidates(include_measured: bool = False) -> list[dic
         suite_completed = benchmark_artifact_completed_in_suite(
             artifact_hash, TTS_BENCHMARK_PROTOCOL_ID,
         )
+        tts_seen.add(artifact_hash)
         if suite_completed and not include_measured:
             continue
-        tts_seen.add(artifact_hash)
         blocked_reason = str(model["_benchmark_blocked_reason"])
         candidates.append({
             "candidate_key": f"tts:{artifact_hash}",
@@ -15226,9 +15244,9 @@ async def benchmark_suite_candidates(include_measured: bool = False) -> list[dic
             suite_completed = benchmark_artifact_completed_in_suite(
                 artifact_hash, TTS_BENCHMARK_PROTOCOL_ID,
             )
+            tts_seen.add(artifact_hash)
             if suite_completed and not include_measured:
                 continue
-            tts_seen.add(artifact_hash)
             model_id = str(model.get("id") or "primary")
             name = installed_model_name(model, model_id)
             runnable, blocked_reason = await external_runtime_state(model)
@@ -15278,9 +15296,9 @@ async def benchmark_suite_candidates(include_measured: bool = False) -> list[dic
             suite_completed = benchmark_artifact_completed_in_suite(
                 artifact_hash, protocol_id,
             )
+            semantic_seen.add(identity)
             if suite_completed and not include_measured:
                 continue
-            semantic_seen.add(identity)
             model_id = str(model.get("id") or "primary")
             name = installed_model_name(model, model_id)
             runnable, blocked_reason = (
@@ -15370,9 +15388,9 @@ async def benchmark_suite_candidates(include_measured: bool = False) -> list[dic
         suite_completed = benchmark_artifact_completed_in_suite(
             artifact_hash, ASR_BENCHMARK_PROTOCOL_ID
         )
+        seen.add(artifact_hash)
         if suite_completed and not include_measured:
             continue
-        seen.add(artifact_hash)
         target = str(model.get("_benchmark_target") or "")
         profile_id = str(model.get("_benchmark_profile_id") or "")
         model_id = str(model.get("id") or "primary")
@@ -18390,8 +18408,8 @@ def benchmark_model_info(run: dict[str, Any], metadata: dict[str, Any]) -> dict[
 
 @app.get("/api/benchmarks/pending", dependencies=secure)
 async def benchmarks_pending() -> dict[str, int]:
-    candidates = await benchmark_suite_candidates()
-    return {"pending": sum(1 for item in candidates if item.get("runnable") is not False)}
+    candidates = await benchmark_suite_candidates(include_measured=True)
+    return {"pending": sum(1 for item in candidates if item.get("runnable") is not False and not item.get("suite_completed"))}
 
 
 @app.get("/api/benchmarks", dependencies=secure)

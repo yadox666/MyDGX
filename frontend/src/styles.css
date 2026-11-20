@@ -604,7 +604,11 @@ input { height: 36px; padding: 0 11px; }
 .model-health-note small { font-size: calc(12px * var(--font-scale)); color: var(--text-muted); overflow-wrap: anywhere; }
 .badge.model-health { font-weight: 700; letter-spacing: .02em; }
 .badge.model-health.defective { color: #fff; background: var(--red); border-color: var(--red); }
-.badge.model-health.healthy { color: #10180a; background: #7dff3a; border-color: #7dff3a; box-shadow: 0 0 8px color-mix(in srgb, #7dff3a 55%, transparent); }
+.model-health-shield { flex: 0 0 auto; width: 24px; height: 24px; display: inline-grid; place-items: center; border-radius: 7px; color: #0d1a05; background: var(--accent); cursor: help; outline: none; }
+.model-health-shield:focus-visible { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+.model-health-tooltip { position: fixed; z-index: 1000; transform: translateX(-50%); max-width: 280px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); box-shadow: var(--shadow); pointer-events: none; }
+.model-health-tooltip strong { font-size: calc(12px * var(--font-scale)); }
+.model-health-tooltip small { color: var(--text-muted); font-size: calc(11px * var(--font-scale)); overflow-wrap: anywhere; }
 .badge.model-health.incomplete { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); background: color-mix(in srgb, var(--amber) 12%, transparent); }
 .lc-actions { padding: 9px 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--surface-soft) 45%, transparent); }
 .lc-actions-spacer { flex: 1; }

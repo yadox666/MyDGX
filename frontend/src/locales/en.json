@@ -1812,8 +1812,6 @@
   "No hay apps en {root}: cada app es una carpeta con un start.sh que acepte start, stop, restart y status.": "No apps in {root}: each app is a folder with a start.sh that accepts start, stop, restart and status.",
   "Sin comprobar": "Not checked",
   "Usada por el perfil: {value}": "Used by profile: {value}",
-  "Benchmark válido{file}{date}": "Valid benchmark{file}{date}",
-  "SANO": "HEALTHY",
   "Consumo GPU": "GPU power",
   "de {value} W": "of {value} W",
   "Histórico reciente de consumo de la GPU": "Recent GPU power history",
@@ -1824,5 +1822,9 @@
   "Cierre por inactividad (min)": "Inactivity timeout (min)",
   "La sesión se renueva mientras usas el dashboard; se cierra tras este tiempo sin actividad": "The session renews while you use the dashboard; it closes after this long without activity",
   "Duración máxima de la sesión (h)": "Maximum session length (h)",
-  "Tras este tiempo desde que entras hay que volver a escribir la contraseña, aunque sigas trabajando": "After this long since you signed in, you must type the password again, even if you keep working"
+  "Tras este tiempo desde que entras hay que volver a escribir la contraseña, aunque sigas trabajando": "After this long since you signed in, you must type the password again, even if you keep working",
+  "Controlar servicios": "Control services",
+  "Permite iniciar, detener y reiniciar los servicios de la lista permitida desde Sistema y Motores. Pide confirmación para activarlo": "Allows starting, stopping and restarting the allowlisted services from System and Engines. Asks for confirmation to turn it on",
+  "Modelo sano: superó el benchmark": "Healthy model: passed the benchmark",
+  "Probado {date}": "Tested {date}"
 }

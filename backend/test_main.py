@@ -2808,9 +2808,15 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(candidate["protocol_id"], main_module.EMBEDDINGS_BENCHMARK_PROTOCOL_ID)
 
     def test_pending_benchmarks_counts_only_runnable_candidates(self) -> None:
-        candidates = [{"target": "a"}, {"target": "b", "runnable": True}, {"target": "c", "runnable": False}]
-        with patch("backend.main.benchmark_suite_candidates", new=AsyncMock(return_value=candidates)):
+        candidates = [
+            {"target": "a"},
+            {"target": "b", "runnable": True},
+            {"target": "c", "runnable": False},
+            {"target": "d", "runnable": True, "suite_completed": True},
+        ]
+        with patch("backend.main.benchmark_suite_candidates", new=AsyncMock(return_value=candidates)) as listed:
             self.assertEqual(asyncio.run(main_module.benchmarks_pending()), {"pending": 2})
+        listed.assert_awaited_once_with(include_measured=True)
 
     def test_embeddings_sample_measures_cosine_margin_without_persisting_text(self) -> None:
         case = main_module.EMBEDDINGS_BENCHMARK_PROTOCOL["cases"][0]
@@ -5610,6 +5616,7 @@ class ProfileApiTests(unittest.TestCase):
                 patch.object(main_module, "ENV_FILE", env_file),
                 patch.object(settings, "enable_system_updates", False),
                 patch.object(settings, "enable_firmware_updates", False),
+                patch.object(settings, "enable_service_control", False),
                 TestClient(app) as client,
             ):
                 unconfirmed = client.put("/api/settings/env", json={"values": {"ENABLE_FIRMWARE_UPDATES": True}})
@@ -5630,6 +5637,15 @@ class ProfileApiTests(unittest.TestCase):
                 self.assertIn("ENABLE_FIRMWARE_UPDATES=true", env_file.read_text(encoding="utf-8"))
                 notices = db.rows("SELECT kind,level FROM notifications WHERE kind='settings.privileged.enabled'")
                 self.assertEqual([(item["kind"], item["level"]) for item in notices], [("settings.privileged.enabled", "warning")])
+
+                services = client.put("/api/settings/env", json={"values": {"ENABLE_SERVICE_CONTROL": True}})
+                self.assertEqual(services.status_code, 400)
+                services = client.put("/api/settings/env", json={
+                    "values": {"ENABLE_SERVICE_CONTROL": True},
+                    "confirmations": {"ENABLE_SERVICE_CONTROL": "ACTIVAR SERVICIOS"},
+                })
+                self.assertEqual(services.status_code, 200)
+                self.assertTrue(settings.enable_service_control)
 
                 disabled = client.put("/api/settings/env", json={"values": {"ENABLE_FIRMWARE_UPDATES": False}})
                 self.assertEqual(disabled.status_code, 200)
@@ -5856,6 +5872,13 @@ class ProfileApiTests(unittest.TestCase):
             marks = main_module.benchmark_health_marks()
         self.assertEqual(set(marks), {"org/good-gguf"})
         self.assertEqual((marks["org/good-gguf"]["status"], marks["org/good-gguf"]["job_id"]), ("healthy", "j2"))
+
+    def test_benchmark_health_is_queried_per_source(self) -> None:
+        rows = [{"source_id": "llama3.2:3b", "filename": "", "job_id": "j9", "valid": 1, "at": "2026-11-20T10:00:00"}]
+        with patch.object(main_module.db, "rows", return_value=rows) as query:
+            marks = main_module.benchmark_source_health("ollama")
+        self.assertEqual(query.call_args.args[1], ("ollama",))
+        self.assertEqual(marks["llama3.2:3b"]["status"], "healthy")
 
     def test_profile_apps_listing_refreshes_status_and_skips_busy_apps(self) -> None:
         codes = {"ragkit": 0, "stopped-app": 3}

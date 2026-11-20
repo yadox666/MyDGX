@@ -1911,6 +1911,7 @@ try:
         item.name for item in root.iterdir()
         if not item.name.startswith(".") and item.name not in apps
         and (item / "start.sh").exists() and item.resolve() != ROOT.resolve()
+        and not item.name.startswith(f"{ROOT.resolve().name}.")
     )
 except OSError:
     rejected = []

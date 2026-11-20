@@ -51,9 +51,9 @@ Each rejection is recorded in the logs as `http.cross_site_blocked`.
   `ACTUALIZAR MYDGX` or `REPARAR MYDGX`. Controlling services requires
   `ENABLE_SERVICE_CONTROL=true`. Installing firmware requires
   `ENABLE_FIRMWARE_UPDATES=true` and `ACTUALIZAR FIRMWARE`. All are disabled
-  by default. The update switches can be turned on from Settings, but only by
-  typing `ACTIVAR ACTUALIZACIONES` or `ACTIVAR FIRMWARE`; the change is audited
-  and posts a notification.
+  by default. They can be turned on from Settings, but only by typing
+  `ACTIVAR ACTUALIZACIONES`, `ACTIVAR FIRMWARE` or `ACTIVAR SERVICIOS`; the
+  change is audited and posts a notification.
 - `/etc/sudoers.d/mydgx` grants only a closed list: the APT update
   commands, the repair script, `systemctl` on the MyDGX services
   and shutdown. **Never** `NOPASSWD: ALL`. The browser cannot send

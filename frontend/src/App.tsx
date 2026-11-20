@@ -59,6 +59,7 @@ import {
   Zap,
 } from "lucide-react";
 import { CSSProperties, FocusEvent, FormEvent, ReactNode, createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import MarkdownMessage from "./MarkdownMessage";
 import { language, languageHeader, locale, setLanguagePreference, storedLanguagePreference, t, type LanguagePreference } from "./i18n";
 import {
@@ -411,11 +412,41 @@ type Models = {
 
 type ModelHealth = { status: "healthy" | "defective" | "incomplete"; reason: string; file?: string; at?: string };
 
+function HealthyShield({ health }: { health: ModelHealth }) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  const tested = health.at ? new Date(health.at).toLocaleString(locale) : "";
+  const label = t("Modelo sano: superó el benchmark");
+  const show = () => {
+    const rect = anchor.current?.getBoundingClientRect();
+    if (rect) setPosition({ top: rect.bottom + 6, left: Math.min(Math.max(rect.left + rect.width / 2, 150), window.innerWidth - 150) });
+  };
+  const hide = () => setPosition(null);
+  return <>
+    <span
+      ref={anchor}
+      className="model-health-shield"
+      role="img"
+      tabIndex={0}
+      aria-label={label}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
+    ><ShieldCheck size={14} strokeWidth={2.4} /></span>
+    {position && createPortal(
+      <div className="model-health-tooltip" role="tooltip" style={{ top: position.top, left: position.left }}>
+        <strong>{label}</strong>
+        {health.file && <small>{health.file}</small>}
+        {tested && <small>{t("Probado {date}", { date: tested })}</small>}
+      </div>,
+      document.body,
+    )}
+  </>;
+}
+
 function ModelHealthBadge({ health }: { health: ModelHealth }) {
-  if (health.status === "healthy") {
-    const tested = health.at ? new Date(health.at).toLocaleString(locale) : "";
-    return <span className="badge model-health healthy" title={t("Benchmark válido{file}{date}", { file: health.file ? ` · ${health.file}` : "", date: tested ? ` · ${tested}` : "" })}><CheckCircle2 size={11} />{" "}{t("SANO")}</span>;
-  }
+  if (health.status === "healthy") return <HealthyShield health={health} />;
   const label = health.status === "incomplete" ? t("INCOMPLETO") : t("DEFECTUOSO");
   const detail = health.file ? `${health.file}: ${health.reason}` : health.reason;
   return <span className={`badge model-health ${health.status}`} title={detail}><TriangleAlert size={11} />{" "}{label}</span>;
@@ -4257,6 +4288,7 @@ function ModelsView({
                     {Boolean(model.assistant) && <span className="badge assistant"><Bot size={11} />{" "}{t("Chatbot")}</span>}
                     {Boolean(model.persistent) && <span className="badge">{t("Default")}</span>}
                     <UncensoredBadge name={name} />
+                    {model.health ? <ModelHealthBadge health={model.health as ModelHealth} /> : null}
                   </>}
                   categoryHint={localModelCategoryHint("ollama", model)}
                   meta={model.modified_at ? t("actualizado {date}", { date: new Date(String(model.modified_at)).toLocaleDateString(locale) }) : ""}
@@ -8436,6 +8468,7 @@ function envSettingGroups(): Array<{ title: string; items: Record<string, { labe
     { title: t("Mantenimiento del sistema"), items: {
       ENABLE_SYSTEM_UPDATES: { label: t("Actualizar el sistema"), hint: t("Permite instalar paquetes APT y reparar kernel, driver y runtimes desde Sistema. Pide confirmación para activarlo") },
       ENABLE_FIRMWARE_UPDATES: { label: t("Actualizar firmware"), hint: t("Permite instalar firmware con fwupd desde Sistema → Actualizaciones. Pide confirmación para activarlo") },
+      ENABLE_SERVICE_CONTROL: { label: t("Controlar servicios"), hint: t("Permite iniciar, detener y reiniciar los servicios de la lista permitida desde Sistema y Motores. Pide confirmación para activarlo") },
     } },
     { title: t("Descargas"), items: {
       HF_DOWNLOAD_WORKERS: { label: t("Descargas en paralelo"), hint: t("Archivos o shards simultáneos al bajar de Hugging Face") },

@@ -3550,6 +3550,8 @@ def profile_app_dir(name: str) -> Path | None:
     allowed = {item.strip() for item in settings.profile_apps.split(",") if item.strip()}
     if allowed and name not in allowed:
         return None
+    if name.startswith(f"{ROOT.resolve().name}."):
+        return None
     root = profile_apps_root()
     directory = root / name
     script = directory / "start.sh"
@@ -6038,7 +6040,7 @@ def local_hf_models() -> list[dict[str, Any]]:
     if not hub.exists():
         return models
     try:
-        health_marks = model_health_marks()
+        health_marks = {**benchmark_health_marks(), **model_health_marks()}
     except Exception:
         health_marks = {}
     for directory in hub.glob("models--*"):
@@ -6867,6 +6869,25 @@ def clear_model_health(repo_id: str, filename: str | None = None) -> None:
         return
     marks.pop(key)
     save_model_health_marks(marks)
+
+
+def benchmark_health_marks() -> dict[str, dict[str, Any]]:
+    """HEALTHY marks for Hugging Face repos whose latest local benchmark was valid; stored marks take precedence."""
+    rows = db.rows(
+        """
+        SELECT m.source_id, m.filename, r.job_id, r.valid, COALESCE(r.completed_at, r.created_at) AS at
+        FROM benchmark_runs r JOIN benchmark_models m ON m.id = r.model_id
+        WHERE m.source = 'huggingface' AND r.imported = 0 AND r.status IN ('completed', 'failed')
+        ORDER BY r.created_at
+        """
+    )
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        latest[str(row["source_id"]).casefold()] = dict(row)
+    return {
+        repo: {"status": "healthy", "reason": "Benchmark válido", "file": row["filename"], "job_id": row["job_id"], "at": row["at"]}
+        for repo, row in latest.items() if row["valid"]
+    }
 
 
 def mark_model_healthy(repo_id: str, filename: str, job_id: str) -> None:

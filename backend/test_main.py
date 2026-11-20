@@ -5845,6 +5845,18 @@ class ProfileApiTests(unittest.TestCase):
             self.assertEqual(main_module.local_hf_health("org/drafter-only", files, {})["status"], "incomplete")
         db.path = original_path
 
+    def test_benchmark_history_marks_healthy_only_when_latest_run_is_valid(self) -> None:
+        rows = [
+            {"source_id": "Org/Good-GGUF", "filename": "good.gguf", "job_id": "j1", "valid": 0, "at": "2026-11-19T10:00:00"},
+            {"source_id": "Org/Good-GGUF", "filename": "good.gguf", "job_id": "j2", "valid": 1, "at": "2026-11-20T10:00:00"},
+            {"source_id": "org/broken-GGUF", "filename": "b.gguf", "job_id": "j3", "valid": 1, "at": "2026-11-19T10:00:00"},
+            {"source_id": "org/broken-GGUF", "filename": "b.gguf", "job_id": "j4", "valid": 0, "at": "2026-11-20T10:00:00"},
+        ]
+        with patch.object(main_module.db, "rows", return_value=rows):
+            marks = main_module.benchmark_health_marks()
+        self.assertEqual(set(marks), {"org/good-gguf"})
+        self.assertEqual((marks["org/good-gguf"]["status"], marks["org/good-gguf"]["job_id"]), ("healthy", "j2"))
+
     def test_profile_apps_listing_refreshes_status_and_skips_busy_apps(self) -> None:
         codes = {"ragkit": 0, "stopped-app": 3}
         calls: list[tuple[str, str]] = []
@@ -7560,6 +7572,7 @@ class ProfileAppTests(unittest.TestCase):
             app = self.make_app(root)
             (root / "apps" / "no-script").mkdir()
             (root / "apps" / "link").symlink_to(app)
+            self.make_app(root, f"{main_module.ROOT.resolve().name}.deploy-backup")
             with patch.object(settings, "profile_apps_root", str(root / "apps")), patch.object(settings, "profile_apps", ""):
                 self.assertEqual(main_module.discover_profile_apps(), ["demo"])
                 self.assertIsNone(main_module.profile_app_dir("../demo"))

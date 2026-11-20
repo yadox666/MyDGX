@@ -511,7 +511,7 @@ private struct InstallStepView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             StepTitle(
-                title: String(localized: "Instala MyDGX en el Spark"),
+                title: alreadyRunning ? String(localized: "MyDGX ya está instalado en el Spark") : String(localized: "Instala MyDGX en el Spark"),
                 detail: alreadyRunning && !wizard.installing
                     ? String(localized: "MyDGX ya funciona en este Spark. Pulsa Conectar para empezar a usarlo, o Reinstalar para actualizarlo con la versión de esta app.")
                     : String(localized: "Se instalará el panel MyDGX, el motor de IA optimizado para la GPU GB10, Open WebUI, ComfyUI y Whisper. La primera vez tarda entre 20 y 40 minutos. Puedes seguir usando el Mac; no apagues el Spark.")
@@ -531,7 +531,9 @@ private struct InstallStepView: View {
                             .textFieldStyle(.roundedBorder)
                             .textContentType(.password)
                             .frame(maxWidth: 320)
-                        Text("Hace falta para instalar paquetes del sistema. Solo se usa durante la instalación.")
+                        Text(alreadyRunning
+                             ? LocalizedStringKey("Solo hace falta para Reinstalar. Conectar no instala nada en el Spark.")
+                             : LocalizedStringKey("Hace falta para instalar paquetes del sistema. Solo se usa durante la instalación."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -570,7 +572,7 @@ private struct InstallStepView: View {
             }
 
             VStack(alignment: .leading, spacing: 7) {
-                ForEach(Array(SparkSetupWizard.installPhases.enumerated()), id: \.element.id) { index, phase in
+                ForEach(Array(SparkSetupWizard.installPhases.enumerated()).filter { !wizard.linkOnly || $0.element.id == "link" }, id: \.element.id) { index, phase in
                     PhaseRow(
                         title: phase.title,
                         state: phaseState(index),
@@ -615,7 +617,7 @@ private struct InstallFooterButtons: View {
         let running = wizard.facts?.mydgxInstalled == true && wizard.facts?.mydgxRunning == true
         let started = wizard.logURL != nil || wizard.installFinished
         if wizard.installing {
-            Button("Instalando…") {}
+            Button(wizard.linkOnly ? LocalizedStringKey("Conectando…") : LocalizedStringKey("Instalando…")) {}
                 .disabled(true)
         } else if started || wizard.errorMessage != nil {
             Button("Reintentar") { wizard.install(reinstall: started) }

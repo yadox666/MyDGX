@@ -14,6 +14,7 @@
 "%@ no responde por API ni SSH." = "%@ isn’t responding over API or SSH.";
 "%@ no responde; MyDGXTray usa %@ %@." = "%@ isn’t responding; MyDGXTray is using %@ %@.";
 "%@ no se puede abrir: %@" = "%@ can’t be opened: %@";
+"%@ no tiene un puerto web válido" = "%@ has no valid web port";
 "%@ responde por SSH, pero la API de MyDGX no contesta a tiempo." = "%@ answers over SSH, but the MyDGX API is not replying in time.";
 "%@ se detuvo en %@." = "%@ stopped on %@.";
 "%@ se está quedando sin memoria; para un modelo o cancela el trabajo de ComfyUI." = "%@ is running out of memory; stop a model or cancel the ComfyUI job.";
@@ -196,6 +197,7 @@
 "El nombre viene en la etiqueta del Spark. Si no sabes el puerto, déjalo en «auto»." = "The name is on the Spark’s label. If you don’t know the port, leave it set to “auto.”";
 "El paquete descargado no es una MyDGXTray válida y firmada." = "The downloaded package isn’t a valid, signed MyDGXTray.";
 "El perfil activo no existe." = "The active profile doesn’t exist.";
+"El puerto %lld de este Mac lo usa %@, así que el túnel no puede abrir %@. Cierra %@ o cambia el puerto web de la app en Perfiles." = "Port %lld on this Mac is used by %@, so the tunnel can't open %@. Quit %@ or change the app's web port in Profiles.";
 "El puerto local del gateway no es válido." = "The gateway’s local port isn’t valid.";
 "El puerto o intervalo de actualización no es válido." = "The port or refresh interval isn’t valid.";
 "El puerto SSH remoto rechazó la conexión." = "The remote SSH port refused the connection.";
@@ -235,6 +237,7 @@
 "Escribe una IP (192.168.1.50) o un nombre (spark-1a2b.local)." = "Enter an IP (192.168.1.50) or a name (spark-1a2b.local).";
 "Escuchando anuncios Bonjour…" = "Listening for Bonjour announcements…";
 "Ese archivo no es una clave SSH privada. Elige, por ejemplo, ~/.ssh/id_ed25519." = "That file isn’t a private SSH key. Choose one such as ~/.ssh/id_ed25519.";
+"Espera a que termine la operación en curso para abrir %@" = "Wait for the current operation to finish to open %@";
 "Esperando confirmación de %@." = "Waiting for confirmation from %@.";
 "Esperando para reconectar…" = "Waiting to reconnect…";
 "Esperando red para reconectar…" = "Waiting for network to reconnect…";
@@ -350,6 +353,7 @@
 "MyDGX se sincronizó, preparó y reinició correctamente." = "MyDGX was synced, prepared, and restarted successfully.";
 "MyDGX tarda en responder" = "MyDGX is slow to respond";
 "MyDGX vuelve a responder en %@." = "MyDGX is responding again on %@.";
+"MyDGX ya está instalado en el Spark" = "MyDGX is already installed on the Spark";
 "MyDGX ya funciona en este Spark. Pulsa Conectar para empezar a usarlo, o Reinstalar para actualizarlo con la versión de esta app." = "MyDGX is already running on this Spark. Click Connect to start using it, or Reinstall to update it to this app’s version.";
 "MyDGX · ningún Spark configurado" = "MyDGX · no Spark configured";
 "MyDGXTray está al día%@." = "MyDGXTray is up to date%@.";
@@ -484,6 +488,7 @@
 "Sincronizando proyecto" = "Syncing project";
 "Sistema" = "System";
 "Sobrescribir" = "Overwrite";
+"Solo hace falta para Reinstalar. Conectar no instala nada en el Spark." = "Only needed for Reinstall. Connect doesn't install anything on the Spark.";
 "Solo si el Spark aún no acepta tu clave" = "Only if the Spark doesn’t accept your key yet";
 "Spark saturado" = "Spark saturated";
 "Spark saturado (memoria)" = "Spark saturated (memory)";

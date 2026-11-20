@@ -1193,8 +1193,25 @@ final class AppModel: ObservableObject {
             }
             return
         }
-        guard let url = app.localURL else { return }
-        guard !operationInProgress else { return }
+        guard let url = app.localURL else {
+            lastError = String(localized: "\(app.alias) no tiene un puerto web válido")
+            return
+        }
+        Task {
+            if await endpointReachable(url) {
+                NSWorkspace.shared.open(url)
+                lastError = nil
+                return
+            }
+            guard !operationInProgress else {
+                statusMessage = String(localized: "Espera a que termine la operación en curso para abrir \(app.alias)")
+                return
+            }
+            startWebAppTunnel(app, url: url, profile: profile)
+        }
+    }
+
+    private func startWebAppTunnel(_ app: WebApp, url: URL, profile: ConnectionProfile) {
         operationInProgress = true
         operationTask = Task {
             defer { operationInProgress = false }
@@ -1210,7 +1227,11 @@ final class AppModel: ObservableObject {
                 }
                 throw RemoteActionError.webAppUnavailable(app.alias, app.port)
             } catch {
-                lastError = error.localizedDescription
+                if let owner = await localPortListener(app.port), owner != "ssh" {
+                    lastError = String(localized: "El puerto \(app.port) de este Mac lo usa \(owner), así que el túnel no puede abrir \(app.alias). Cierra \(owner) o cambia el puerto web de la app en Perfiles.")
+                } else {
+                    lastError = error.localizedDescription
+                }
                 statusMessage = String(localized: "\(app.alias) no disponible")
             }
         }
@@ -2146,6 +2167,29 @@ final class AppModel: ObservableObject {
                 try process.run()
             } catch {
                 continuation.resume(returning: -1)
+            }
+        }
+    }
+
+    /// Name of the process listening on a local TCP port, or nil when the port is free.
+    private func localPortListener(_ port: Int) async -> String? {
+        await withCheckedContinuation { continuation in
+            let process = Process()
+            let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+            process.arguments = ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fc"]
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            process.terminationHandler = { _ in
+                let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                let name = output.split(separator: "\n").first { $0.hasPrefix("c") }.map { String($0.dropFirst()) }
+                continuation.resume(returning: name)
+            }
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: nil)
             }
         }
     }

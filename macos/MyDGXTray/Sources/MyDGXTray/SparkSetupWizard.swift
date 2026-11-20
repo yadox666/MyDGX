@@ -110,6 +110,8 @@ final class SparkSetupWizard: ObservableObject {
     // Step 3
     @Published private(set) var installing = false
     @Published private(set) var installFinished = false
+    /// MyDGX was already running: only this Mac is linked, nothing is deployed to the Spark.
+    @Published private(set) var linkOnly = false
     @Published private(set) var phaseIndex = 0
     @Published private(set) var phaseFraction = 0.0
     @Published private(set) var currentActivity = ""
@@ -448,6 +450,7 @@ final class SparkSetupWizard: ObservableObject {
         errorMessage = nil
         let deployNeeded = !deploySucceeded
             && (reinstall || facts?.mydgxInstalled != true || facts?.mydgxRunning != true)
+        linkOnly = !deployNeeded
         if deployNeeded {
             installTask = Task { await runInstall(profile: profile, sudoSecret: secret) }
         } else {

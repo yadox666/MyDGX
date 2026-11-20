@@ -220,6 +220,8 @@ Detalle en [Asistente MyDGX](asistente-mydgx.md).
 | POST | `/api/services/action` | `start`, `stop` o `restart` de un servicio de `MANAGED_SERVICES`. Requiere `ENABLE_SERVICE_CONTROL=true`. Cuerpo: `name`, `action`, `confirm` = `"<action> <name>"`. |
 | GET | `/api/updates` | Paquetes APT actualizables, con categoría y si son de seguridad. |
 | POST | `/api/updates/apply` | Aplica actualizaciones APT. Requiere `ENABLE_SYSTEM_UPDATES=true`, 5 GB libres. Cuerpo: `confirm` = `"ACTUALIZAR MYDGX"`. Devuelve `job_id`. |
+| GET | `/api/updates/firmware` | Firmware pendiente según fwupd (dispositivo, versión actual y nueva, notas, si requiere reinicio), reinicio pendiente y estado de la ConnectX-7. Caché de 10 minutos; `?refresh=true` fuerza la consulta. |
+| POST | `/api/updates/firmware/apply` | Instala el firmware pendiente con `fwupdmgr update`, sin reiniciar. Requiere `ENABLE_SYSTEM_UPDATES=true` y que no haya trabajos en curso. Cuerpo: `confirm` = `"ACTUALIZAR FIRMWARE"`. Devuelve `job_id`. |
 | POST | `/api/system/repair` | Repara runtime NVIDIA, DKMS y llama.cpp. Requiere `ENABLE_SYSTEM_UPDATES=true`. Cuerpo: `confirm` = `"REPARAR MYDGX"`. Devuelve `job_id`. |
 
 ## Gateway (`/v1`)

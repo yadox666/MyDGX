@@ -366,6 +366,12 @@ herramientas. Ver [Laboratorio IA](laboratorio-ia.md).
 - Actualizaciones APT y reparación del runtime. Requieren
   `ENABLE_SYSTEM_UPDATES=true` y escribir la confirmación (`ACTUALIZAR MYDGX`,
   `REPARAR MYDGX`).
+- Firmware: lo pendiente en fwupd (EC, UEFI, SSD…) y el estado de la ConnectX-7.
+  MyDGX lo revisa cada 6 horas y avisa en Notificaciones cuando aparece una
+  versión nueva. Instalar exige `ENABLE_SYSTEM_UPDATES=true`, confirmación y
+  que no haya trabajos en curso; MyDGX no reinicia el equipo por su cuenta. La
+  ConnectX-7 la actualiza el servicio de NVIDIA al arrancar, solo con un cable
+  QSFP conectado. El estado OTA de NVIDIA se consulta en DGX Dashboard.
 
 ## Logs
 

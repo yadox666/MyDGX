@@ -128,12 +128,20 @@ apt_get="$(command -v apt-get || true)"
 systemctl_bin="$(command -v systemctl || true)"
 env_bin="$(command -v env || true)"
 [[ -n "$apt_get" && -n "$systemctl_bin" && -n "$env_bin" ]] || fail "APT, env o systemctl no están disponibles." "APT, env, or systemctl is not available."
+fwupdmgr_bin="$(command -v fwupdmgr || true)"
+firmware_alias=""
+firmware_grant=""
+if [[ -n "$fwupdmgr_bin" ]]; then
+  firmware_alias="Cmnd_Alias MYDGX_FIRMWARE = $fwupdmgr_bin update -y --no-reboot-check"
+  firmware_grant=", MYDGX_FIRMWARE"
+fi
 cat >/etc/sudoers.d/mydgx <<EOF
 Cmnd_Alias MYDGX_APT = $apt_get check, $apt_get update, $env_bin DEBIAN_FRONTEND=noninteractive $apt_get upgrade --with-new-pkgs -y
 Cmnd_Alias MYDGX_REPAIR = /usr/local/libexec/mydgx-system-repair --repair, /usr/local/libexec/mydgx-system-repair --drop-caches
 Cmnd_Alias MYDGX_SERVICES = $systemctl_bin start mydgx, $systemctl_bin stop mydgx, $systemctl_bin restart mydgx, $systemctl_bin start mydgx-gateway, $systemctl_bin stop mydgx-gateway, $systemctl_bin restart mydgx-gateway, $systemctl_bin start mydgx-repair, $systemctl_bin stop mydgx-repair, $systemctl_bin restart mydgx-repair, $systemctl_bin start mydgx-searxng, $systemctl_bin stop mydgx-searxng, $systemctl_bin restart mydgx-searxng, $systemctl_bin enable --now mydgx-searxng, $systemctl_bin disable --now mydgx-searxng, $systemctl_bin start mydgx-comfyui, $systemctl_bin stop mydgx-comfyui, $systemctl_bin restart mydgx-comfyui, $systemctl_bin enable --now mydgx-comfyui, $systemctl_bin disable --now mydgx-comfyui, $systemctl_bin start mydgx-whisper, $systemctl_bin stop mydgx-whisper, $systemctl_bin restart mydgx-whisper, $systemctl_bin enable --now mydgx-whisper, $systemctl_bin disable --now mydgx-whisper, $systemctl_bin start mydgx-tts, $systemctl_bin stop mydgx-tts, $systemctl_bin start open-webui, $systemctl_bin stop open-webui, $systemctl_bin restart open-webui, $systemctl_bin start ollama, $systemctl_bin stop ollama, $systemctl_bin restart ollama, $systemctl_bin start docker, $systemctl_bin stop docker, $systemctl_bin restart docker
 Cmnd_Alias MYDGX_POWER = /usr/sbin/shutdown -h now
-$SERVICE_USER ALL=(root) NOPASSWD: MYDGX_APT, MYDGX_REPAIR, MYDGX_SERVICES, MYDGX_POWER
+$firmware_alias
+$SERVICE_USER ALL=(root) NOPASSWD: MYDGX_APT, MYDGX_REPAIR, MYDGX_SERVICES, MYDGX_POWER$firmware_grant
 EOF
 chmod 0440 /etc/sudoers.d/mydgx
 visudo -cf /etc/sudoers.d/mydgx >/dev/null || {

@@ -2508,6 +2508,95 @@ def reconcile_quick_profile_on_startup() -> bool:
     return keep
 
 
+RUN_BOOT_ID_KEY = "system.run.boot_id"
+CLEAN_STOP_BOOT_ID_KEY = "system.clean_stop.boot_id"
+NVME_UNSAFE_SHUTDOWNS_KEY = "system.nvme.unsafe_shutdowns"
+UNSAFE_SHUTDOWN_CHECK_SECONDS = 600
+
+
+def save_preference(key: str, value: str) -> None:
+    db.execute(
+        """
+        INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+        """,
+        (key, value, utc_now()),
+    )
+
+
+def detect_unclean_shutdown_on_startup() -> bool:
+    """A reboot since the last run without MyDGX's clean-stop mark means the system went down hard."""
+    boot = current_boot_id()
+    previous_run = preference_value(RUN_BOOT_ID_KEY)
+    clean_stop = preference_value(CLEAN_STOP_BOOT_ID_KEY)
+    save_preference(RUN_BOOT_ID_KEY, boot)
+    if not previous_run or previous_run == boot or clean_stop == previous_run:
+        return False
+    message = (
+        "El equipo se reinició sin apagarse de forma ordenada: corte de luz, botón de encendido "
+        "mantenido, cuelgue o kernel panic. Revisa los logs del sistema del arranque anterior "
+        "(journalctl -b -1) y vuelve a verificar los modelos que se estaban descargando."
+    )
+    db.log("warning", "system", "system.unclean_shutdown", message, detail={"previous_boot": previous_run})
+    notify_safely("system.unclean_shutdown", "Apagado incorrecto", message, level="warning")
+    return True
+
+
+def mark_clean_stop() -> None:
+    with suppress(sqlite3.Error):
+        save_preference(CLEAN_STOP_BOOT_ID_KEY, current_boot_id())
+
+
+def record_nvme_unsafe_shutdowns(devices: list[dict[str, Any]]) -> list[str]:
+    """Notifies when an SSD's own unsafe-shutdown counter grew since the last reading."""
+    try:
+        known = json.loads(preference_value(NVME_UNSAFE_SHUTDOWNS_KEY) or "{}")
+    except (json.JSONDecodeError, TypeError):
+        known = {}
+    if not isinstance(known, dict):
+        known = {}
+    current = dict(known)
+    alerts = []
+    for device in devices:
+        count = (device.get("smart") or {}).get("unsafe_shutdowns")
+        if not isinstance(count, int):
+            continue
+        key = f"{device.get('model') or ''}:{device.get('name')}"
+        previous = known.get(key)
+        current[key] = count
+        if isinstance(previous, int) and count > previous:
+            delta = count - previous
+            message = (
+                f"El SSD {device.get('model') or device.get('name')} registró {delta} apagado(s) "
+                f"sin aviso desde la última lectura ({count} en total). Un corte de alimentación puede "
+                "dañar datos que se estaban escribiendo; usa siempre un apagado ordenado."
+            )
+            db.log("warning", "storage", "storage.nvme.unsafe_shutdown", message,
+                   detail={"device": device.get("name"), "count": count, "delta": delta})
+            notify_safely("storage.nvme.unsafe_shutdown", "Apagado sin aviso en el SSD", message,
+                          target=str(device.get("name") or ""), level="warning")
+            alerts.append(str(device.get("name")))
+    if current != known:
+        save_preference(NVME_UNSAFE_SHUTDOWNS_KEY, json.dumps(current, sort_keys=True))
+    return alerts
+
+
+async def watch_nvme_unsafe_shutdowns() -> None:
+    """SMART data can appear a few minutes after boot (root reader), so retry until it is readable."""
+    deadline = time.monotonic() + UNSAFE_SHUTDOWN_CHECK_SECONDS
+    while True:
+        try:
+            devices = await asyncio.to_thread(nvme_storage_devices)
+            if any(isinstance((item.get("smart") or {}).get("unsafe_shutdowns"), int) for item in devices):
+                record_nvme_unsafe_shutdowns(devices)
+                return
+        except Exception as exc:
+            db.log("warning", "storage", "storage.nvme.unsafe_check_failed", redact_log_text(str(exc), 300))
+        if time.monotonic() >= deadline:
+            return
+        await asyncio.sleep(30)
+
+
 def persistent_models() -> list[dict[str, Any]]:
     return managed_models(DEFAULT_PROFILE_ID)
 
@@ -4505,6 +4594,10 @@ async def lifespan(_: FastAPI):
         entity_id=settings.app_name,
         detail={"version": app.version},
     )
+    try:
+        detect_unclean_shutdown_on_startup()
+    except Exception as exc:
+        db.log("warning", "system", "system.unclean_check_failed", redact_log_text(str(exc), 300))
     for seed in (seed_artifex_profiles, seed_default_profiles):
         try:
             seed()
@@ -4532,7 +4625,12 @@ async def lifespan(_: FastAPI):
     pressure_task = asyncio.create_task(memory_pressure_watchdog())
     description_task = asyncio.create_task(backfill_hf_model_descriptions())
     inventory_task = asyncio.create_task(warm_benchmark_inventory())
+    unsafe_shutdown_task = asyncio.create_task(watch_nvme_unsafe_shutdowns())
+    firmware_task = asyncio.create_task(firmware_update_watcher())
     yield
+    mark_clean_stop()
+    unsafe_shutdown_task.cancel()
+    firmware_task.cancel()
     db.log(
         "info",
         "application",
@@ -21773,6 +21871,202 @@ async def updates() -> dict[str, Any]:
         "checked_at": utc_now(),
         "message": "" if result.returncode == 0 else result.stderr.strip(),
     }
+
+
+CONNECTX_FIRMWARE_METADATA = Path("/opt/nvidia/spark-mlnx-firmware-manager/firmwares/firmware-metadata.json")
+FIRMWARE_STATUS_TTL_SECONDS = 600
+FIRMWARE_WATCH_INTERVAL_SECONDS = 6 * 3600
+FIRMWARE_NOTIFIED_KEY = "system.firmware.notified"
+FIRMWARE_UPDATE_COMMAND = ("update", "-y", "--no-reboot-check")
+_firmware_status_cache: dict[str, Any] = {"at": 0.0, "value": None}
+
+
+def html_to_text(value: str) -> str:
+    text = re.sub(r"<li>\s*", "• ", value or "", flags=re.I)
+    text = re.sub(r"</(p|li|ul|ol)>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\n{2,}", "\n", text).strip()
+
+
+def version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", value or ""))
+
+
+def parse_fwupd_updates(payload: str) -> list[dict[str, Any]]:
+    data = json.loads(payload or "{}")
+    updates = []
+    for device in data.get("Devices", []):
+        releases = device.get("Releases") or []
+        if not releases:
+            continue
+        release = releases[0]
+        flags = set(device.get("Flags") or []) | set(release.get("Flags") or [])
+        updates.append({
+            "device_id": str(device.get("DeviceId") or ""),
+            "name": str(device.get("Name") or ""),
+            "vendor": str(device.get("Vendor") or release.get("Vendor") or ""),
+            "current_version": str(device.get("Version") or ""),
+            "new_version": str(release.get("Version") or ""),
+            "summary": str(release.get("Summary") or ""),
+            "description": html_to_text(str(release.get("Description") or ""))[:2000],
+            "urgency": str(release.get("Urgency") or ""),
+            "needs_reboot": bool(flags & {"needs-reboot", "needs-shutdown"}),
+        })
+    return updates
+
+
+def fwupd_reboot_pending(payload: str) -> bool:
+    """UpdateState 1 (pending) or 4 (needs-reboot) means a staged update waits for a restart."""
+    with suppress(ValueError, TypeError, AttributeError):
+        return any(
+            device.get("UpdateState") in {1, 4, "pending", "needs-reboot"}
+            for device in json.loads(payload).get("Devices", [])
+        )
+    return False
+
+
+def connectx_firmware_status(
+    metadata_path: Path = CONNECTX_FIRMWARE_METADATA,
+    net_root: Path = Path("/sys/class/net"),
+) -> dict[str, Any] | None:
+    try:
+        entries = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    entry = next((item for item in entries if isinstance(item, dict) and "conn" in str(item.get("Name", "")).lower()), None)
+    if not entry:
+        return None
+    package = str(entry.get("PackageVersion") or "")
+    running = ""
+    present = False
+    with suppress(OSError):
+        for interface in sorted(net_root.iterdir()):
+            driver = interface / "device" / "driver"
+            if not driver.exists() or driver.resolve().name != "mlx5_core":
+                continue
+            present = True
+            if shutil.which("ethtool"):
+                output = run_command(["ethtool", "-i", interface.name], 10).stdout
+                match = re.search(r"^firmware-version:\s*(\S+)", output, re.M)
+                if match:
+                    running = match.group(1)
+                    break
+    if not present:
+        state = "cable_required"
+    elif running and version_tuple(running) < version_tuple(package):
+        state = "pending"
+    elif running:
+        state = "current"
+    else:
+        state = "unknown"
+    return {"name": "ConnectX-7", "package_version": package, "running_version": running, "state": state}
+
+
+def firmware_status(force: bool = False) -> dict[str, Any]:
+    cached = _firmware_status_cache["value"]
+    if not force and cached and time.monotonic() - _firmware_status_cache["at"] < FIRMWARE_STATUS_TTL_SECONDS:
+        return cached
+    status: dict[str, Any] = {
+        "supported": bool(shutil.which("fwupdmgr")),
+        "updates": [],
+        "reboot_pending": False,
+        "connectx": connectx_firmware_status(),
+        "checked_at": utc_now(),
+        "message": "",
+    }
+    if status["supported"]:
+        result = run_command(["fwupdmgr", "get-updates", "--json"], 60)
+        try:
+            status["updates"] = parse_fwupd_updates(result.stdout)
+        except (ValueError, TypeError, AttributeError):
+            status["message"] = redact_log_text(result.stderr.strip() or "fwupd no devolvió datos válidos", 300)
+        status["reboot_pending"] = fwupd_reboot_pending(run_command(["fwupdmgr", "get-devices", "--json"], 60).stdout)
+    else:
+        status["message"] = "fwupd no está instalado en este sistema"
+    _firmware_status_cache.update(at=time.monotonic(), value=status)
+    return status
+
+
+def notify_new_firmware(status: dict[str, Any]) -> list[str]:
+    """Notifies each pending firmware version once."""
+    pending = {
+        f"{item['device_id']}:{item['new_version']}": f"{item['name']} {item['new_version']}"
+        for item in status.get("updates", [])
+    }
+    connectx = status.get("connectx") or {}
+    if connectx.get("state") == "pending":
+        pending[f"connectx:{connectx['package_version']}"] = f"ConnectX-7 {connectx['package_version']}"
+    try:
+        notified = set(json.loads(preference_value(FIRMWARE_NOTIFIED_KEY) or "[]"))
+    except (json.JSONDecodeError, TypeError):
+        notified = set()
+    new = [key for key in pending if key not in notified]
+    if new:
+        names = ", ".join(sorted({pending[key] for key in new}))
+        notify_safely(
+            "system.firmware.available",
+            "Firmware disponible",
+            f"Hay {len(new)} actualización(es) de firmware: {names}. Revísalas en Sistema → Actualizaciones.",
+            level="info",
+        )
+    save_preference(FIRMWARE_NOTIFIED_KEY, json.dumps(sorted(pending)))
+    return new
+
+
+async def firmware_update_watcher() -> None:
+    await asyncio.sleep(120)
+    while True:
+        with suppress(Exception):
+            notify_new_firmware(await asyncio.to_thread(firmware_status, True))
+        await asyncio.sleep(FIRMWARE_WATCH_INTERVAL_SECONDS)
+
+
+@app.get("/api/updates/firmware", dependencies=secure)
+async def firmware_updates(refresh: bool = False) -> dict[str, Any]:
+    return await asyncio.to_thread(firmware_status, refresh)
+
+
+class FirmwareUpdateRequest(BaseModel):
+    confirm: Literal["ACTUALIZAR FIRMWARE"]
+
+
+async def run_firmware_update(job_id: str) -> None:
+    try:
+        db.update_job(job_id, "running", 10, "Instalando firmware con fwupd; no apagues el equipo")
+        result = await asyncio.to_thread(run_command, ["sudo", "-n", "fwupdmgr", *FIRMWARE_UPDATE_COMMAND], 3600)
+        if result.returncode not in {0, 2}:
+            raise RuntimeError(result.stderr.strip() or "fwupd no terminó correctamente")
+        status = await asyncio.to_thread(firmware_status, True)
+        if result.returncode == 2:
+            message = "No había firmware pendiente"
+        elif status["reboot_pending"]:
+            message = "Firmware instalado; reinicia el equipo para aplicarlo"
+            notify_safely("system.firmware.reboot", "Reinicio pendiente", message, level="warning")
+        else:
+            message = "Firmware instalado y activo"
+        db.update_job(job_id, "completed", 100, message)
+        db.audit("system.firmware", "fwupd", True)
+    except Exception as exc:
+        db.update_job(job_id, "failed", 0, f"{type(exc).__name__}: firmware no instalado")
+        db.log("error", "system", "system.firmware.failed", redact_log_text(str(exc), 1000))
+        notify_safely("system.firmware.failed", "Error instalando firmware", redact_log_text(str(exc), 500))
+        db.audit("system.firmware", "fwupd", False, type(exc).__name__)
+
+
+@app.post("/api/updates/firmware/apply", dependencies=secure)
+async def apply_firmware_updates(payload: FirmwareUpdateRequest, background: BackgroundTasks) -> dict[str, str]:
+    if not settings.enable_system_updates:
+        raise HTTPException(status_code=403, detail="Actualizaciones desactivadas en .env")
+    if not shutil.which("fwupdmgr"):
+        raise HTTPException(status_code=409, detail="fwupd no está instalado en este sistema")
+    if db.rows("SELECT id FROM jobs WHERE status IN ('queued','running','cancelling') LIMIT 1"):
+        raise HTTPException(status_code=409, detail="Espera a que terminen los trabajos en curso antes de instalar firmware")
+    status = await asyncio.to_thread(firmware_status, True)
+    if not status["updates"]:
+        raise HTTPException(status_code=409, detail="No hay firmware pendiente de instalar")
+    job_id = db.create_job("system.firmware", "fwupd")
+    background.add_task(run_firmware_update, job_id)
+    return {"job_id": job_id}
 
 
 class UpdateRequest(BaseModel):

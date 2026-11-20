@@ -5582,6 +5582,111 @@ class ProfileApiTests(unittest.TestCase):
             self.assertIn("org/model", notice[0]["message"])
         db.path = original_path
 
+    def test_unclean_shutdown_is_detected_only_after_a_reboot_without_clean_stop(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            db.path = Path(directory) / "shutdown.db"
+            db.initialize()
+            with patch("backend.main.current_boot_id", return_value="boot-a"):
+                self.assertFalse(main_module.detect_unclean_shutdown_on_startup())
+                self.assertFalse(main_module.detect_unclean_shutdown_on_startup())
+                main_module.mark_clean_stop()
+            with patch("backend.main.current_boot_id", return_value="boot-b"):
+                self.assertFalse(main_module.detect_unclean_shutdown_on_startup())
+            with patch("backend.main.current_boot_id", return_value="boot-c"):
+                self.assertTrue(main_module.detect_unclean_shutdown_on_startup())
+            notices = db.rows("SELECT kind,level FROM notifications")
+            self.assertEqual([(item["kind"], item["level"]) for item in notices], [("system.unclean_shutdown", "warning")])
+        db.path = original_path
+
+    def test_nvme_unsafe_shutdown_counter_growth_creates_notification(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            db.path = Path(directory) / "nvme.db"
+            db.initialize()
+            device = lambda count: [{"name": "nvme0", "model": "SSD X", "smart": {"unsafe_shutdowns": count}}]
+            self.assertEqual(main_module.record_nvme_unsafe_shutdowns(device(16)), [])
+            self.assertEqual(main_module.record_nvme_unsafe_shutdowns(device(16)), [])
+            self.assertEqual(main_module.record_nvme_unsafe_shutdowns(device(18)), ["nvme0"])
+            self.assertEqual(main_module.record_nvme_unsafe_shutdowns([{"name": "nvme0", "model": "SSD X", "smart": {}}]), [])
+            notices = db.rows("SELECT kind,message FROM notifications")
+            self.assertEqual(len(notices), 1)
+            self.assertEqual(notices[0]["kind"], "storage.nvme.unsafe_shutdown")
+            self.assertIn("2 apagado(s)", notices[0]["message"])
+        db.path = original_path
+
+    def test_fwupd_updates_are_parsed_with_release_notes_and_reboot_flag(self) -> None:
+        payload = json.dumps({"Devices": [
+            {"DeviceId": "ec1", "Name": "Embedded Controller", "Vendor": "NVIDIA", "Version": "3.13.7",
+             "Flags": ["updatable", "needs-reboot"],
+             "Releases": [{"Version": "3.14.0", "Summary": "EC firmware", "Description": "<p>Fixes</p><ul><li>Fan curve</li></ul>"}]},
+            {"DeviceId": "ssd", "Name": "SSD", "Version": "1.0", "Flags": ["updatable"], "Releases": []},
+        ]})
+        updates = main_module.parse_fwupd_updates(payload)
+        self.assertEqual(len(updates), 1)
+        self.assertEqual((updates[0]["current_version"], updates[0]["new_version"]), ("3.13.7", "3.14.0"))
+        self.assertTrue(updates[0]["needs_reboot"])
+        self.assertEqual(updates[0]["description"], "Fixes\n• Fan curve")
+
+    def test_fwupd_reboot_pending_uses_update_state_not_capability_flag(self) -> None:
+        capability_only = json.dumps({"Devices": [{"Flags": ["needs-reboot"], "UpdateState": 2}]})
+        staged = json.dumps({"Devices": [{"Flags": ["needs-reboot"], "UpdateState": 4}]})
+        self.assertFalse(main_module.fwupd_reboot_pending(capability_only))
+        self.assertTrue(main_module.fwupd_reboot_pending(staged))
+        self.assertFalse(main_module.fwupd_reboot_pending("not json"))
+
+    def test_connectx_status_reports_missing_cable_pending_and_current(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = root / "firmware-metadata.json"
+            metadata.write_text(json.dumps([{"Name": "ConnectX-7", "PackageVersion": "28.50.1002"}]))
+            net = root / "net"
+            (net / "enP7s7" / "device").mkdir(parents=True)
+            self.assertEqual(main_module.connectx_firmware_status(metadata, net)["state"], "cable_required")
+            driver = root / "drivers" / "mlx5_core"
+            driver.mkdir(parents=True)
+            (net / "enp1s0f0np0" / "device").mkdir(parents=True)
+            (net / "enp1s0f0np0" / "device" / "driver").symlink_to(driver)
+            for running, expected in (("28.45.1200", "pending"), ("28.50.1002", "current")):
+                output = subprocess.CompletedProcess([], 0, f"driver: mlx5_core\nfirmware-version: {running} (NVD0000000033)\n", "")
+                with patch("backend.main.shutil.which", return_value="/usr/sbin/ethtool"), \
+                     patch("backend.main.run_command", return_value=output):
+                    status = main_module.connectx_firmware_status(metadata, net)
+                self.assertEqual((status["running_version"], status["state"]), (running, expected))
+            self.assertIsNone(main_module.connectx_firmware_status(root / "missing.json", net))
+
+    def test_new_firmware_is_notified_once_per_version(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            db.path = Path(directory) / "firmware.db"
+            db.initialize()
+            status = lambda version: {"updates": [{"device_id": "ec1", "name": "Embedded Controller", "new_version": version}], "connectx": None}
+            self.assertEqual(main_module.notify_new_firmware(status("3.14.0")), ["ec1:3.14.0"])
+            self.assertEqual(main_module.notify_new_firmware(status("3.14.0")), [])
+            self.assertEqual(main_module.notify_new_firmware(status("3.15.0")), ["ec1:3.15.0"])
+            notices = db.rows("SELECT kind FROM notifications")
+            self.assertEqual([item["kind"] for item in notices], ["system.firmware.available"] * 2)
+        db.path = original_path
+
+    def test_firmware_apply_requires_updates_enabled_and_no_running_jobs(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            db.path = Path(directory) / "firmware-apply.db"
+            db.initialize()
+            request = main_module.FirmwareUpdateRequest(confirm="ACTUALIZAR FIRMWARE")
+            with patch.object(settings, "enable_system_updates", False):
+                with self.assertRaises(HTTPException) as disabled:
+                    asyncio.run(main_module.apply_firmware_updates(request, main_module.BackgroundTasks()))
+            self.assertEqual(disabled.exception.status_code, 403)
+            job_id = db.create_job("huggingface.download", "org/model")
+            db.update_job(job_id, "running", 10, "descargando")
+            with patch.object(settings, "enable_system_updates", True), \
+                 patch("backend.main.shutil.which", return_value="/usr/bin/fwupdmgr"):
+                with self.assertRaises(HTTPException) as busy:
+                    asyncio.run(main_module.apply_firmware_updates(request, main_module.BackgroundTasks()))
+            self.assertEqual(busy.exception.status_code, 409)
+        db.path = original_path
+
     def test_failed_hf_download_cleanup_keeps_previous_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(settings, "hf_home", directory):
             repo = Path(directory) / "hub" / "models--org--model"

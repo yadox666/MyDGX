@@ -158,7 +158,7 @@ Los logs internos (*Logs* y `logs/`) se guardan siempre en español.
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `ENABLE_SYSTEM_UPDATES` | `false` | Permite aplicar actualizaciones APT y la reparación del sistema. |
+| `ENABLE_SYSTEM_UPDATES` | `false` | Permite aplicar actualizaciones APT y de firmware (fwupd) y la reparación del sistema. |
 | `ENABLE_SERVICE_CONTROL` | `false` | Permite arrancar, parar y reiniciar servicios de la lista. |
 | `MANAGED_SERVICES` | `mydgx,mydgx-gateway,mydgx-searxng,mydgx-comfyui,mydgx-whisper,ollama,docker,open-webui` | Lista cerrada de servicios controlables. |
 

@@ -326,6 +326,25 @@ type SystemUpdates = {
   message: string;
 };
 
+type FirmwareStatus = {
+  supported: boolean;
+  updates: Array<{
+    device_id: string;
+    name: string;
+    vendor: string;
+    current_version: string;
+    new_version: string;
+    summary: string;
+    description: string;
+    urgency: string;
+    needs_reboot: boolean;
+  }>;
+  reboot_pending: boolean;
+  connectx: { name: string; package_version: string; running_version: string; state: "cable_required" | "pending" | "current" | "unknown" } | null;
+  checked_at: string;
+  message: string;
+};
+
 type QuickStart = {
   supported: boolean;
   fits: boolean;
@@ -429,7 +448,7 @@ type ModelGlossaryEntry = {
   id: string;
   term: string;
   summary: string;
-  category: "Tamaño y precisión" | "Arquitectura y velocidad" | "Uso" | "Formato y runtime" | "Alineación y acceso";
+  category: "Tamaño y precisión" | "Arquitectura y velocidad" | "Uso" | "Formato y runtime" | "Entrenamiento y variantes" | "Alineación y acceso";
   patterns: RegExp[];
 };
 
@@ -441,42 +460,56 @@ const MODEL_GLOSSARY: ModelGlossaryEntry[] = [
   { id: "k-variants", term: "K_S / K_M / K_L", summary: t("Variantes de una cuantización GGUF. S prioriza tamaño, M equilibrio y L algo más de calidad."), category: "Tamaño y precisión", patterns: [/\bq\d+_k_[sml]\b/i, /\bk_[sml]\b/i] },
   { id: "iq", term: "IQ", summary: t("Cuantización inteligente de llama.cpp. Busca conservar más calidad con muy pocos bits."), category: "Tamaño y precisión", patterns: [/\biq\d/i] },
   { id: "bpw", term: t("BPW · bits por peso"), summary: t("Promedio de bits usados por cada peso. Menos BPW reduce memoria y descarga, pero puede degradar la calidad."), category: "Tamaño y precisión", patterns: [/\bbpw\b/i, /bits?.per.weight/i, /bits?.por.peso/i] },
-  { id: "imatrix", term: t("Importance matrix · imatrix"), summary: t("Muestra de activaciones usada para decidir qué pesos necesitan más precisión durante la cuantización."), category: "Tamaño y precisión", patterns: [/\bimatrix\b/i, /importance.matrix/i] },
+  { id: "imatrix", term: t("Importance matrix · imatrix · i1"), summary: t("Muestra de activaciones usada para decidir qué pesos necesitan más precisión durante la cuantización. Los repos «i1-GGUF» (por ejemplo de mradermacher) son cuantizaciones con imatrix; las «static» no la usan."), category: "Tamaño y precisión", patterns: [/\bimatrix\b/i, /importance.matrix/i, /\bi1\b/i] },
+  { id: "nvfp4", term: "NVFP4", summary: t("Formato de 4 bits de NVIDIA para GPU Blackwell, como el GB10 del Spark, que lo acelera por hardware. Escala cada bloque de 16 valores para perder menos calidad que un INT4. Pensado para vLLM, TensorRT-LLM o SGLang; no es un GGUF."), category: "Tamaño y precisión", patterns: [/\bnvfp4\b/i] },
+  { id: "unsloth-dynamic", term: t("UD / K_XL · cuantización dinámica"), summary: t("Cuantizaciones dinámicas de Unsloth: dan más bits a las capas sensibles y menos al resto. A igual tamaño suelen rendir algo mejor que un Q estándar; K_XL es su variante más grande dentro de cada nivel."), category: "Tamaño y precisión", patterns: [/(?:^|[-_.\s/])ud[-_.]/i, /_k_xl\b/i, /unsloth.dynamic/i] },
+  { id: "low-bit", term: t("Ternary / BitNet / 1.58-bit"), summary: t("Pesos con solo tres valores (-1, 0, 1) o muy pocos bits. Ocupan muy poco, pero el modelo debe entrenarse así desde el principio y necesita kernels específicos."), category: "Tamaño y precisión", patterns: [/\bternary\b/i, /\bbitnet\b/i, /1\.58.?bit/i] },
+  { id: "effective-parameters", term: t("E2B / E4B · parámetros efectivos"), summary: t("Usado por Gemma 3n y Gemma 4: el modelo calcula como uno de ese tamaño, pero guarda más pesos, por ejemplo embeddings por capa. La memoria real puede superar lo que sugiere el número."), category: "Tamaño y precisión", patterns: [/\be\d+(?:\.\d+)?b\b/i] },
   { id: "fp-bf", term: "FP16 / BF16 / FP32", summary: t("Pesos con alta precisión. Son fieles, pero ocupan bastante más memoria que una cuantización."), category: "Tamaño y precisión", patterns: [/\bfp(?:16|32)\b/i, /\bbf16\b/i, /float(?:16|32)/i] },
   { id: "fp8-mxfp4", term: "FP8 / MXFP4 / INT4", summary: t("Formatos compactos usados por motores GPU. MXFP4 es especialmente interesante para GPT-OSS en el Spark."), category: "Tamaño y precisión", patterns: [/\bfp8\b/i, /\bmxfp4\b/i, /\bint4\b/i] },
   { id: "dense", term: t("Dense · Denso"), summary: t("Activa casi todos sus parámetros en cada token. Es sencillo, pero los modelos grandes pueden ser lentos por el ancho de banda."), category: "Arquitectura y velocidad", patterns: [/\bdense\b/i, /\bdenso\b/i] },
-  { id: "moe", term: "MoE · Mixture of Experts", summary: t("Tiene muchos parámetros totales, pero usa solo algunos expertos por token. Suele encajar muy bien con DGX Spark."), category: "Arquitectura y velocidad", patterns: [/\bmoe\b/i, /mixture.of.experts/i, /\bexperts?\b/i] },
-  { id: "active-parameters", term: t("Parámetros activos"), summary: t("Parte del modelo MoE utilizada para cada token. Explica por qué un modelo enorme puede responder con rapidez."), category: "Arquitectura y velocidad", patterns: [/active.parameters/i, /parámetros activos/i, /\b\d+(?:\.\d+)?b activos\b/i] },
+  { id: "moe", term: "MoE · Mixture of Experts", summary: t("Tiene muchos parámetros totales, pero usa solo algunos expertos por token. Suele encajar muy bien con DGX Spark."), category: "Arquitectura y velocidad", patterns: [/\bmoe\b/i, /mixture.of.experts/i, /\bexperts?\b/i, /\b\d+x\d+(?:\.\d+)?b\b/i] },
+  { id: "active-parameters", term: t("Parámetros activos · A3B / A22B"), summary: t("Parte del modelo MoE utilizada para cada token. Explica por qué un modelo enorme puede responder con rapidez."), category: "Arquitectura y velocidad", patterns: [/active.parameters/i, /parámetros activos/i, /\b\d+(?:\.\d+)?b activos\b/i, /\ba\d+(?:\.\d+)?b\b/i] },
   { id: "expert-pruning", term: t("Expert pruning · poda de expertos"), summary: t("Elimina expertos de un MoE para reducir memoria. Puede conservar bien una especialidad y perder calidad en otros usos."), category: "Arquitectura y velocidad", patterns: [/expert.prun/i, /pruned.expert/i, /poda.de.expert/i] },
   { id: "reap", term: "REAP", summary: t("Método que puntúa y poda expertos según su contribución. Reduce mucho el modelo, pero la calidad depende de los datos usados para calibrarlo."), category: "Arquitectura y velocidad", patterns: [/\breap(?:\d+)?\b/i] },
   { id: "gsq-rco", term: "GSQ / RCO", summary: t("Técnicas de cuantización y selección de expertos. GSQ comprime pesos; RCO elige qué expertos conservar bajo un límite exacto."), category: "Arquitectura y velocidad", patterns: [/\bgsq\b/i, /\brco\b/i] },
   { id: "engram", term: t("Engram"), summary: t("Grandes tablas de memoria consultadas por token. Pueden permanecer en un NVMe rápido mediante mmap y no ocupar toda la RAM."), category: "Arquitectura y velocidad", patterns: [/\bengram\b/i, /\.v41rows\b/i] },
   { id: "mtp", term: "MTP", summary: t("Predice varios tokens futuros para acelerar la generación. Necesita soporte del modelo y del motor."), category: "Arquitectura y velocidad", patterns: [/\bmtp\b/i, /multi.token prediction/i] },
-  { id: "speculative", term: t("Speculative decoding"), summary: t("Un modelo pequeño propone tokens y el principal los valida. Puede aumentar bastante la velocidad."), category: "Arquitectura y velocidad", patterns: [/speculative/i, /\bdraft model\b/i, /\bdspark\b/i, /\bdflash\b/i] },
+  { id: "speculative", term: t("Speculative decoding"), summary: t("Un modelo pequeño propone tokens y el principal los valida. Puede aumentar bastante la velocidad."), category: "Arquitectura y velocidad", patterns: [/speculative/i, /\bdraft(?: model)?\b/i, /\bdspark\b/i, /\bdflash\d*\b/i, /\beagle\d?\b/i] },
   { id: "gqa", term: "GQA / MQA", summary: t("Reduce el coste de atención y de la caché KV. Ayuda especialmente con contextos largos."), category: "Arquitectura y velocidad", patterns: [/\bgqa\b/i, /\bmqa\b/i, /grouped.query/i] },
   { id: "flash-attention", term: t("Flash Attention"), summary: t("Implementación de atención más rápida y eficiente en memoria cuando el runtime y la GPU la soportan."), category: "Arquitectura y velocidad", patterns: [/flash.?attention/i, /\bfa2\b/i, /\bfa3\b/i] },
+  { id: "flash-line", term: t("Flash · nombre de familia"), summary: t("Etiqueta comercial, no técnica: suele indicar la variante rápida y barata de una familia, a menudo un MoE con pocos parámetros activos. No tiene relación con Flash Attention; compara tamaño, parámetros activos y benchmarks."), category: "Arquitectura y velocidad", patterns: [/[-_.]flash\b(?![-_ ]?att)/i] },
+  { id: "next-line", term: t("Next · nueva generación"), summary: t("Marca una generación nueva de la arquitectura (por ejemplo Qwen3-Next o Qwen3-Coder-Next), con cambios internos como atención híbrida o MoE más disperso. Necesita un llama.cpp reciente que la reconozca."), category: "Arquitectura y velocidad", patterns: [/[-_.]next\b/i] },
+  { id: "hybrid-ssm", term: t("Hybrid / Mamba / SSM"), summary: t("Mezcla capas de atención con capas de estado (Mamba, SSM o atención lineal). Reduce la caché KV y acelera los contextos largos; necesita un llama.cpp o motor que conozca la arquitectura."), category: "Arquitectura y velocidad", patterns: [/\bmamba\d?\b/i, /\bssm\b/i, /hybrid.attention/i, /nemotron.?h\b/i, /linear.attention/i] },
+  { id: "tier-names", term: t("Nano / Mini / Lite / Pro / Max / Ultra"), summary: t("Etiquetas comerciales de gama dentro de una familia. Indican el tamaño relativo, no una técnica; compara parámetros, memoria y benchmarks entre fabricantes."), category: "Arquitectura y velocidad", patterns: [/[-_.](?:nano|mini|tiny|lite|air|small|medium|large|pro|max|ultra|plus|super)\b/i] },
+  { id: "turbo-lightning", term: t("Turbo / Lightning / Schnell"), summary: t("Variantes destiladas para generar en menos pasos, sobre todo en imagen y vídeo. Son mucho más rápidas y a cambio pierden algo de detalle o fidelidad al prompt."), category: "Arquitectura y velocidad", patterns: [/\bturbo\b/i, /\blightning\b/i, /\bschnell\b/i, /\bhyper.?sd\b/i, /\blcm\b/i] },
   { id: "kv-cache", term: "KV cache", summary: t("Memoria de la conversación ya procesada. Crece con el contexto, los slots y el tamaño del modelo."), category: "Arquitectura y velocidad", patterns: [/\bkv(?:.|_)?cache\b/i] },
+  { id: "omni", term: t("Omni / any-to-any"), summary: t("Un solo modelo que acepta y genera varias modalidades: texto, imagen, audio o vídeo. Necesita un runtime que soporte todas las entradas y salidas que quieras usar."), category: "Uso", patterns: [/\bomni\b/i, /any.to.any/i] },
+  { id: "ocr", term: t("OCR / documentos"), summary: t("Modelos especializados en leer texto de imágenes, PDF escaneados o tablas. Suelen ser pequeños y precisos, pero no sirven para conversar."), category: "Uso", patterns: [/\bocr\b/i, /docling/i, /document.(?:parsing|understanding)/i] },
+  { id: "coder-fim", term: t("Coder / FIM"), summary: t("Ajustado para programar. FIM (fill-in-the-middle) completa código entre dos fragmentos, que es lo que usan los autocompletados del editor."), category: "Uso", patterns: [/\bcoder\b/i, /\bcoding\b/i, /\bfim\b/i, /fill.in.the.middle/i, /\bcode\b/i] },
+  { id: "guard-safety", term: t("Guard / safety"), summary: t("Clasificadores que deciden si una petición o respuesta es segura. Se colocan delante o detrás del modelo de chat; no responden como un asistente."), category: "Uso", patterns: [/\bguard\b/i, /\bsafety\b/i, /shield/i] },
+  { id: "roleplay", term: t("Roleplay / RP / creative"), summary: t("Ajustes comunitarios para escritura creativa e interpretación de personajes. Priorizan estilo y continuidad sobre precisión; «unslop» indica que intentan evitar frases repetidas."), category: "Uso", patterns: [/role.?play/i, /\brp\b/i, /creative.writing/i, /\bunslop\b/i, /\bstory/i] },
   { id: "context", term: t("Contexto · 8K / 32K / 128K"), summary: t("Cantidad máxima de texto que el modelo puede recordar de una petición. Más contexto consume más memoria."), category: "Uso", patterns: [/\bcontext\b/i, /\bcontexto\b/i, /\b\d+k\b/i] },
   { id: "slots", term: t("Slots / concurrencia"), summary: t("Peticiones que el servidor puede atender a la vez. Cada slot añade caché y consumo de memoria."), category: "Uso", patterns: [/\bslots?\b/i, /concurren/i, /parallel/i] },
-  { id: "instruct-base", term: t("Base / Instruct / Chat"), summary: t("Base es el modelo sin adaptar; Instruct o Chat está preparado para seguir órdenes y conversar."), category: "Uso", patterns: [/\bbase\b/i, /\binstruct\b/i, /-it\b/i, /\bchat\b/i] },
+  { id: "instruct-base", term: t("Base / Instruct / Chat"), summary: t("Base es el modelo sin adaptar; Instruct o Chat está preparado para seguir órdenes y conversar."), category: "Uso", patterns: [/\bbase\b/i, /\binstruct\b/i, /-it\b/i, /-pt\b/i, /\bchat\b/i] },
   { id: "reasoning", term: t("Reasoning / Thinking"), summary: t("Optimizado para resolver problemas paso a paso. Puede ser más capaz, pero también más lento y verboso."), category: "Uso", patterns: [/reasoning/i, /thinking/i, /\breasoner\b/i] },
   { id: "rag", term: "RAG", summary: t("Busca información en tus documentos y la añade al prompt antes de responder. No reentrena el modelo."), category: "Uso", patterns: [/\brag\b/i, /retrieval.augmented/i] },
-  { id: "agents-tools", term: t("Agentes / tool calling"), summary: t("El modelo puede elegir y llamar herramientas, APIs o funciones. Requiere una plantilla y un runtime compatibles."), category: "Uso", patterns: [/\bagents?\b/i, /tool.call/i, /function.call/i, /computer.use/i] },
-  { id: "embeddings-reranker", term: t("Embeddings / Reranker"), summary: t("Embeddings convierten texto en vectores; un reranker reordena resultados. No son modelos de chat."), category: "Uso", patterns: [/embedding/i, /rerank/i] },
-  { id: "asr-tts", term: "ASR / STT / TTS", summary: t("ASR o STT transcribe voz a texto. TTS convierte texto en voz."), category: "Uso", patterns: [/\basr\b/i, /\bstt\b/i, /\btts\b/i, /whisper/i, /text.to.speech/i, /speech.to.text/i] },
+  { id: "agents-tools", term: t("Agentes / tool calling"), summary: t("El modelo puede elegir y llamar herramientas, APIs o funciones. Requiere una plantilla y un runtime compatibles."), category: "Uso", patterns: [/\bagents?\b/i, /agentic/i, /tool.call/i, /tool.use/i, /function.call/i, /computer.use/i] },
+  { id: "embeddings-reranker", term: t("Embeddings / Reranker"), summary: t("Embeddings convierten texto en vectores; un reranker reordena resultados. No son modelos de chat."), category: "Uso", patterns: [/embedding/i, /\bembed\b/i, /rerank/i, /\b(?:bge|e5|gte|minilm|mpnet|mxbai|splade)\b/i, /nomic.embed/i, /jina.embed/i] },
+  { id: "asr-tts", term: "ASR / STT / TTS", summary: t("ASR o STT transcribe voz a texto. TTS convierte texto en voz."), category: "Uso", patterns: [/\basr\b/i, /\bstt\b/i, /\btts\b/i, /whisper/i, /\bspeech\b/i, /text.to.speech/i, /speech.to.text/i, /\b(?:parakeet|canary|voxtral|moonshine|kokoro|chatterbox)\b/i, /wav2vec/i] },
   { id: "voice-cloning", term: t("Voice cloning / speaker embedding"), summary: t("Imita una voz usando una muestra o una representación del hablante. Usa solo voces con permiso."), category: "Uso", patterns: [/voice.clon/i, /speaker.embedding/i, /reference.audio/i, /zero.shot.voice/i] },
   { id: "vocoder-codec", term: t("Vocoder / audio codec"), summary: t("Un vocoder convierte representaciones acústicas en audio. Un codec comprime audio en tokens que otro modelo puede procesar."), category: "Uso", patterns: [/\bvocoder\b/i, /\bvocos\b/i, /audio.codec/i, /codec.model/i] },
   { id: "vad-diarization", term: t("VAD / diarización"), summary: t("VAD detecta cuándo hay voz; la diarización separa quién habla en una grabación."), category: "Uso", patterns: [/\bvad\b/i, /diari[sz]/i, /speaker.separation/i] },
-  { id: "vision-mmproj", term: t("Vision / mmproj"), summary: t("mmproj es el proyector que permite a ciertos GGUF entender imágenes. Debe descargarse junto al modelo."), category: "Uso", patterns: [/mmproj/i, /vision/i, /image.text/i, /multimodal/i] },
-  { id: "diffusion", term: t("Diffusion / checkpoint"), summary: t("Familia habitual para generar imagen o vídeo. ComfyUI carga sus checkpoints; no funciona como un chat GGUF."), category: "Uso", patterns: [/diffusion/i, /checkpoint/i, /\bflux\b/i, /wan(?:2|\b)/i] },
+  { id: "vision-mmproj", term: t("Vision / mmproj"), summary: t("mmproj es el proyector que permite a ciertos GGUF entender imágenes. Debe descargarse junto al modelo."), category: "Uso", patterns: [/mmproj/i, /vision/i, /image.text/i, /multimodal/i, /\bvlm?\b/i, /\bvit\b/i] },
+  { id: "diffusion", term: t("Diffusion / checkpoint"), summary: t("Familia habitual para generar imagen o vídeo. ComfyUI carga sus checkpoints; no funciona como un chat GGUF."), category: "Uso", patterns: [/diffusion/i, /diffusers/i, /checkpoint/i, /\bflux\d?\b/i, /wan(?:2|\b)/i, /\bsdxl\b/i, /\bsd\d(?:\.\d)?\b/i, /image.edit/i, /[-_.]edit\b/i] },
   { id: "vae-clip", term: "VAE / CLIP / text encoder", summary: t("CLIP o el text encoder entiende el prompt; el VAE transforma entre imagen y espacio latente. Suelen acompañar al checkpoint."), category: "Uso", patterns: [/\bvae\b/i, /\bclip\b/i, /text.encoder/i] },
   { id: "controlnet-upscaler", term: "ControlNet / Upscaler", summary: t("ControlNet guía composición, pose o bordes. Un upscaler aumenta resolución y detalle después de generar."), category: "Uso", patterns: [/\bcontrolnet\b/i, /\bupscal/i, /\bsuper.resolution\b/i] },
-  { id: "t2v-i2v", term: "T2V / I2V / V2V", summary: t("Texto a vídeo, imagen a vídeo o vídeo a vídeo. Más duración, resolución y FPS requieren mucha más memoria y tiempo."), category: "Uso", patterns: [/\bt2v\b/i, /\bi2v\b/i, /\bv2v\b/i, /text.to.video/i, /image.to.video/i] },
+  { id: "t2v-i2v", term: "T2V / I2V / V2V", summary: t("Texto a vídeo, imagen a vídeo o vídeo a vídeo. Más duración, resolución y FPS requieren mucha más memoria y tiempo."), category: "Uso", patterns: [/\bt2v\b/i, /\bi2v\b/i, /\bv2v\b/i, /text.to.video/i, /image.to.video/i, /\bti2v\b/i, /\bltx/i, /hunyuanvideo/i] },
   { id: "fps-frames", term: "FPS / frames", summary: t("Fotogramas por segundo y número total de imágenes del vídeo. Duplicarlos suele acercarse a duplicar el trabajo."), category: "Uso", patterns: [/\bfps\b/i, /\bframes?\b/i, /fotogram/i] },
-  { id: "gguf", term: "GGUF", summary: t("Formato preparado para llama.cpp. Es la opción más directa para ejecutar LLM cuantizados localmente."), category: "Formato y runtime", patterns: [/\bgguf\b/i] },
+  { id: "gguf", term: "GGUF", summary: t("Formato preparado para llama.cpp. Es la opción más directa para ejecutar LLM cuantizados localmente."), category: "Formato y runtime", patterns: [/\bgguf\b/i, /\bggml\b/i] },
   { id: "safetensors", term: t("Safetensors"), summary: t("Formato seguro de pesos, habitual en Hugging Face. Necesita un runtime compatible como vLLM, ComfyUI o Transformers."), category: "Formato y runtime", patterns: [/safetensors/i] },
   { id: "shards", term: t("Shards · partes 00001-of-00004"), summary: t("Un modelo dividido en varios archivos. Hay que descargar todas las partes de la misma cuantización."), category: "Formato y runtime", patterns: [/shard/i, /\d{5}-of-\d{5}/i] },
-  { id: "lora", term: "LoRA / Adapter", summary: t("Adaptación pequeña aplicada sobre un modelo base. Puede cambiar estilo, voz o capacidad, pero normalmente no incluye el modelo completo."), category: "Formato y runtime", patterns: [/\blora\b/i, /\badapter\b/i, /\bpeft\b/i] },
+  { id: "lora", term: "LoRA / Adapter", summary: t("Adaptación pequeña aplicada sobre un modelo base. Puede cambiar estilo, voz o capacidad, pero normalmente no incluye el modelo completo."), category: "Formato y runtime", patterns: [/\bq?lora\b/i, /\bdora\b/i, /\badapter\b/i, /\bpeft\b/i] },
   { id: "mlx", term: "MLX", summary: t("Runtime y formato optimizados para Apple Silicon. No es la opción nativa para un DGX Spark con CUDA."), category: "Formato y runtime", patterns: [/\bmlx\b/i, /mlx.community/i] },
   { id: "pytorch-transformers", term: "PyTorch / Transformers", summary: t("Ecosistema general para cargar modelos originales y safetensors. Flexible, aunque suele consumir más recursos que un runtime optimizado."), category: "Formato y runtime", patterns: [/\bpytorch\b/i, /\btransformers\b/i, /\btorch\b/i] },
   { id: "onnx", term: "ONNX", summary: t("Formato portable para inferencia. Necesita ONNX Runtime, TensorRT u otro motor compatible."), category: "Formato y runtime", patterns: [/\bonnx\b/i] },
@@ -484,10 +517,19 @@ const MODEL_GLOSSARY: ModelGlossaryEntry[] = [
   { id: "mmap-offload", term: "mmap / offload", summary: t("mmap lee pesos desde disco bajo demanda; offload reparte trabajo entre GPU, RAM o NVMe. Ahorra memoria, pero puede ser más lento."), category: "Formato y runtime", patterns: [/\bmmap\b/i, /\boffload/i, /lazy.mode/i] },
   { id: "runtimes", term: "llama.cpp / Ollama / vLLM / SGLang / TensorRT-LLM", summary: t("Son motores que cargan y sirven el modelo. El formato correcto depende del motor elegido."), category: "Formato y runtime", patterns: [/llama\.?cpp/i, /\bollama\b/i, /\bvllm\b/i, /\bsglang\b/i, /tensorrt/i] },
   { id: "comfyui", term: "ComfyUI / workflow / node", summary: t("Interfaz por nodos para encadenar modelos de imagen, vídeo y audio. Un workflow define el proceso completo."), category: "Formato y runtime", patterns: [/\bcomfyui\b/i, /\bworkflow\b/i, /custom.node/i] },
+  { id: "gpu-quant", term: "W4A16 / bnb / AutoRound / 4bit", summary: t("Cuantizaciones para Transformers, vLLM u Optimum: W4A16 indica pesos de 4 bits y activaciones de 16; bnb es bitsandbytes. No son GGUF, así que llama.cpp no las carga."), category: "Formato y runtime", patterns: [/\bw\d+a\d+\b/i, /\bbnb\b/i, /bitsandbytes/i, /autoround/i, /compressed.tensors/i, /\b[2-8].?bit\b/i] },
+  { id: "edge-runtime", term: "OpenVINO / RKNN / LiteRT", summary: t("Formatos para CPU Intel, NPU de Rockchip o móviles. No aprovechan la GPU del Spark; busca la versión GGUF o safetensors del mismo modelo."), category: "Formato y runtime", patterns: [/openvino/i, /\brknn\b/i, /\brk18\d+/i, /litert/i, /\btflite\b/i, /on.device/i] },
+  { id: "training", term: "SFT / DPO / GRPO / RL", summary: t("Etapas de entrenamiento posteriores al preentrenamiento. SFT enseña con ejemplos; DPO y ORPO con pares de respuestas preferidas; GRPO y RL con recompensas, habitual en modelos de razonamiento."), category: "Entrenamiento y variantes", patterns: [/\bsft\b/i, /\bdpo\b/i, /\borpo\b/i, /\bgrpo\b/i, /\bkto\b/i, /\brlhf\b/i, /[-_.]rl\b/i, /reinforcement.learning/i] },
+  { id: "distill", term: t("Distill · destilado"), summary: t("Modelo pequeño entrenado para imitar a uno mayor, como R1-Distill o los «Opus distill» de la comunidad. Hereda estilo y razonamiento, pero no todo su conocimiento; revisa la licencia y el origen de los datos."), category: "Entrenamiento y variantes", patterns: [/distil/i] },
+  { id: "finetune-cpt", term: t("Fine-tune / CPT"), summary: t("Fine-tune ajusta un modelo existente con datos propios; CPT (continued pretraining) sigue preentrenándolo con mucho texto de un idioma o dominio. Su calidad depende de quién lo hizo y con qué datos."), category: "Entrenamiento y variantes", patterns: [/fine.?tun/i, /\bft\b/i, /\bcpt\b/i, /continued.pretrain/i] },
+  { id: "qat", term: "QAT", summary: t("Quantization-aware training: el modelo se entrena sabiendo que se cuantizará. Una versión QAT en 4 bits suele conservar más calidad que cuantizar después."), category: "Entrenamiento y variantes", patterns: [/\bqat\b/i, /quantization.aware/i] },
+  { id: "merge", term: t("Merge / mergekit"), summary: t("Combina los pesos de varios modelos (SLERP, TIES, DARE…) sin reentrenar. Puede mezclar cualidades, pero el resultado es irregular y depende mucho de la receta."), category: "Entrenamiento y variantes", patterns: [/\bmerged?\b/i, /mergekit/i, /\bslerp\b/i, /\bties\b/i, /frankenmerge/i] },
+  { id: "preview", term: t("Preview / experimental"), summary: t("Versión temprana publicada para probar. Puede cambiar, tener errores de plantilla o desaparecer; para uso diario conviene la versión estable."), category: "Entrenamiento y variantes", patterns: [/\bpreview\b/i, /experimental/i, /[-_.]exp\b/i, /\balpha\b/i, /\bbeta\b/i] },
+  { id: "nsfw", term: t("NSFW / not-for-all-audiences"), summary: t("Hugging Face marca así modelos o tarjetas con contenido adulto o sensible. Requiere confirmar la edad en la web; revisa el uso permitido."), category: "Alineación y acceso", patterns: [/\bnsfw\b/i, /not.for.all.audiences/i] },
   { id: "uncensored", term: t("Uncensored · Sin censura"), summary: t("Versión comunitaria ajustada para rechazar menos peticiones. No significa que sea oficial, exacta ni libre de límites."), category: "Alineación y acceso", patterns: [/uncensored/i, /uncensor/i, /sin censura/i] },
-  { id: "abliterated", term: t("Abliterated"), summary: t("Modelo modificado para reducir mecanismos de rechazo. Puede cambiar su calidad o comportamiento respecto al original."), category: "Alineación y acceso", patterns: [/abliterat/i, /\bablit\b/i] },
-  { id: "heretic", term: t("Heretic"), summary: t("Nombre usado por algunas variantes comunitarias con menos rechazos. Revisa siempre autor, pruebas y modelo base."), category: "Alineación y acceso", patterns: [/\bheretic\b/i] },
-  { id: "derestricted", term: t("Derestricted / No-refusal"), summary: t("Otra etiqueta para modelos modificados con menos restricciones. No garantiza cero rechazos."), category: "Alineación y acceso", patterns: [/derestrict/i, /no.?refusal/i, /unrestrict/i, /unfiltered/i] },
+  { id: "abliterated", term: t("Abliterated"), summary: t("Modelo modificado para reducir mecanismos de rechazo. Puede cambiar su calidad o comportamiento respecto al original."), category: "Alineación y acceso", patterns: [/abliterat/i, /obliterat/i, /\bablit\b/i, /\bablated\b/i, /refusal.direction/i] },
+  { id: "heretic", term: t("Heretic"), summary: t("Nombre usado por algunas variantes comunitarias con menos rechazos. Revisa siempre autor, pruebas y modelo base."), category: "Alineación y acceso", patterns: [/\bheretic\b/i, /\bheres(?:y|ies)\b/i] },
+  { id: "derestricted", term: t("Derestricted / No-refusal"), summary: t("Otra etiqueta para modelos modificados con menos restricciones. No garantiza cero rechazos."), category: "Alineación y acceso", patterns: [/derestrict/i, /decensor/i, /no.?refusal/i, /unrestrict/i, /unfiltered/i] },
   { id: "gated", term: t("Gated / Restricted"), summary: t("Hugging Face exige iniciar sesión, aceptar condiciones o pedir acceso antes de descargar."), category: "Alineación y acceso", patterns: [/\bgated\b/i, /\brestricted\b/i] },
 ];
 
@@ -1463,6 +1505,45 @@ type SystemLogsResponse = {
 };
 
 const activeJobStatuses = new Set(["queued", "running", "cancelling"]);
+const downloadJobKinds = new Set(["huggingface.download", "huggingface.files.download", "ollama.pull", "ollama.update", "profile.download"]);
+
+function useDownloadTracker(jobs: Job[], onFinished?: () => void) {
+  const [requested, setRequested] = useState<Record<string, { jobId?: string; at: number }>>({});
+  const active = useMemo(() => new Set(
+    jobs.filter((job) => downloadJobKinds.has(job.kind) && activeJobStatuses.has(job.status)).map((job) => job.target.toLowerCase()),
+  ), [jobs]);
+  const activeKey = [...active].sort().join("\n");
+  const previousActive = useRef(activeKey);
+  useEffect(() => {
+    const ended = previousActive.current.split("\n").some((key) => key && !active.has(key));
+    previousActive.current = activeKey;
+    if (ended) onFinished?.();
+  }, [activeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setRequested((current) => {
+      const next = { ...current };
+      for (const [key, entry] of Object.entries(current)) {
+        const job = entry.jobId ? jobs.find((item) => item.id === entry.jobId) : undefined;
+        if (job ? !activeJobStatuses.has(job.status) : Date.now() - entry.at > 60_000) delete next[key];
+      }
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [jobs]);
+  const isDownloading = useCallback((target: string) => {
+    const key = target.toLowerCase();
+    return active.has(key) || key in requested;
+  }, [active, requested]);
+  const track = useCallback((target: string, jobId?: string) => {
+    setRequested((current) => ({ ...current, [target.toLowerCase()]: { jobId, at: Date.now() } }));
+  }, []);
+  const untrack = useCallback((target: string) => {
+    setRequested((current) => {
+      const { [target.toLowerCase()]: _removed, ...rest } = current;
+      return rest;
+    });
+  }, []);
+  return { isDownloading, track, untrack };
+}
 
 function jobLabel(kind: string): string {
   return ({
@@ -1479,6 +1560,7 @@ function jobLabel(kind: string): string {
     "benchmark.import": t("Importando benchmark"),
     "system.update": t("Actualizando el sistema"),
     "system.repair": t("Verificando y reparando el sistema"),
+    "system.firmware": t("Instalando firmware"),
   } as Record<string, string>)[kind] || kind.replaceAll(".", " · ");
 }
 
@@ -1494,7 +1576,7 @@ function jobStatusLabel(status: string): string {
 }
 
 function jobTarget(job: Job): string {
-  if (job.kind === "profile.prepare-start" || ["apt", "runtime"].includes(job.target)) return "";
+  if (job.kind === "profile.prepare-start" || ["apt", "runtime", "fwupd"].includes(job.target)) return "";
   return job.target;
 }
 
@@ -1518,6 +1600,9 @@ function jobNextStep(job: Job): string {
   }
   if (job.kind === "system.update" || job.kind === "system.repair") {
     return t("Después comprobará la integridad de paquetes, kernel y runtimes.");
+  }
+  if (job.kind === "system.firmware") {
+    return t("No apagues el equipo; al terminar indicará si hace falta reiniciar.");
   }
   return t("MyDGX continuará con la siguiente etapa y registrará aquí el resultado.");
 }
@@ -3491,6 +3576,13 @@ function ModelsView({
   const [showAllFileGroups, setShowAllFileGroups] = useState(false);
   const [quickBusy, setQuickBusy] = useState<string | null>(null);
   const [downloadBusy, setDownloadBusy] = useState<string | null>(null);
+  const downloads = useDownloadTracker(jobs, refresh);
+  const ollamaInstalled = useMemo(
+    () => new Set((models?.ollama ?? []).map((item) => String(item.name ?? "").toLowerCase())),
+    [models?.ollama],
+  );
+  const ollamaTarget = ollamaName.trim().toLowerCase();
+  const ollamaAlreadyInstalled = Boolean(ollamaTarget) && (ollamaInstalled.has(ollamaTarget) || (!ollamaTarget.includes(":") && ollamaInstalled.has(`${ollamaTarget}:latest`)));
   const [pendingDownload, setPendingDownload] = useState<PendingDownload | null>(null);
   const [settingsModel, setSettingsModel] = useState<string | null>(null);
   const [addToProfile, setAddToProfile] = useState<AddToProfileRequest | null>(null);
@@ -3534,13 +3626,17 @@ function ModelsView({
 
   async function pull(event: FormEvent) {
     event.preventDefault();
-    if (!ollamaName.trim()) return;
+    const name = ollamaName.trim();
+    if (!name || downloads.isDownloading(name) || ollamaAlreadyInstalled) return;
+    downloads.track(name);
     try {
-      await api("/api/models/ollama/pull", { method: "POST", body: JSON.stringify({ name: ollamaName.trim() }) });
+      const result = await api<{ job_id: string }>("/api/models/ollama/pull", { method: "POST", body: JSON.stringify({ name }) });
+      downloads.track(name, result.job_id);
       setOllamaName("");
       notify(t("Descarga de Ollama iniciada"));
       refresh();
     } catch (error) {
+      downloads.untrack(name);
       notify((error as Error).message, true);
     }
   }
@@ -3658,22 +3754,41 @@ function ModelsView({
     if (!pending) return;
     setPendingDownload(null);
     setDownloadBusy(pending.repoId);
+    downloads.track(pending.repoId);
     const files = [...pending.files, ...extraFiles.filter((name) => !pending.files.includes(name))];
     try {
       const result = await api<{ job_id: string; deduplicated?: boolean }>("/api/models/huggingface/files/download", {
         method: "POST",
         body: JSON.stringify({ repo_id: pending.repoId, revision: pending.revision, files }),
       });
+      downloads.track(pending.repoId, result.job_id);
       notify(result.deduplicated
         ? t("La descarga de {repoId} ya estaba en curso; no se ha duplicado", { repoId: pending.repoId })
         : `${pending.label}${extraFiles.length ? t(" · con drafter") : ""}`);
       pending.onDone?.();
       refresh();
     } catch (error) {
+      downloads.untrack(pending.repoId);
       notify((error as Error).message, true);
     } finally {
       setDownloadBusy(null);
     }
+  }
+
+  function recommendedDownloadButton(repoId: string, recommendedFiles: string[], installed: boolean) {
+    const opening = inspectingRepo === repoId;
+    if (installed || downloads.isDownloading(repoId)) {
+      return <>
+        <button className="button secondary" disabled={inspectingRepo !== null} onClick={() => inspect(repoId, recommendedFiles)}><Search className={opening ? "spin" : ""} size={15} /> {opening ? t("Abriendo…") : t("Detalles")}</button>
+        <button className="button primary" disabled>{installed ? <CheckCircle2 size={15} /> : <RefreshCw className="spin" size={15} />}{" "}{installed ? t("Instalado") : t("Descargando…")}</button>
+      </>;
+    }
+    return <button
+      className="button primary"
+      disabled={inspectingRepo !== null}
+      onClick={() => inspect(repoId, recommendedFiles)}
+      title={t("MyDGX seleccionará la cuantización adecuada y todos sus archivos")}
+    ><Download className={opening ? "spin" : ""} size={15} /> {opening ? t("Preparando…") : t("Descargar recomendada")}</button>;
   }
 
   function downloadSelected() {
@@ -3705,16 +3820,19 @@ function ModelsView({
       return;
     }
     setDownloadBusy(model.id);
+    downloads.track(model.id);
     try {
       const result = await api<{ job_id: string; deduplicated?: boolean }>("/api/models/huggingface/download", {
         method: "POST",
         body: JSON.stringify({ repo_id: model.id, revision: "main" }),
       });
+      downloads.track(model.id, result.job_id);
       notify(result.deduplicated
         ? t("La descarga de {id} ya estaba en curso; no se ha duplicado", { id: model.id })
         : t("Descarga completa iniciada: {id}", { id: model.id }));
       refresh();
     } catch (error) {
+      downloads.untrack(model.id);
       notify((error as Error).message, true);
     } finally {
       setDownloadBusy(null);
@@ -3988,7 +4106,7 @@ function ModelsView({
               <form className="ollama-pull-form" onSubmit={pull}>
                 <Download size={17} />
                 <input value={ollamaName} onChange={(event) => setOllamaName(event.target.value)} placeholder={t("qwen3:8b · llama3.2:3b · hf.co/autor/modelo:Q4_K_M")} aria-label={t("Nombre del modelo de Ollama")} />
-                <button className="button primary" type="submit" disabled={!ollamaName.trim()}>{t("Descargar")}</button>
+                <button className="button primary" type="submit" disabled={!ollamaTarget || ollamaAlreadyInstalled || downloads.isDownloading(ollamaTarget)}>{ollamaAlreadyInstalled ? t("Instalado") : downloads.isDownloading(ollamaTarget) ? t("Descargando…") : t("Descargar")}</button>
               </form>
               <div className="ollama-examples">
                 <small>{t("Ejemplos:")}</small>
@@ -4435,6 +4553,8 @@ function ModelsView({
                     <button className="button secondary" disabled={inspectingRepo !== null} onClick={() => inspect(model.id, model.recommended_files)}><Search className={inspectingRepo === model.id ? "spin" : ""} size={15} /> {inspectingRepo === model.id ? t("Abriendo…") : t("Detalles")}</button>
                     {installed
                       ? <button className="button primary" disabled><CheckCircle2 size={15} />{" "}{t("Instalado")}</button>
+                      : downloads.isDownloading(model.id)
+                      ? <button className="button primary" disabled><RefreshCw className="spin" size={15} />{" "}{t("Descargando…")}</button>
                       : model.gguf_search
                       ? <button className="button primary" onClick={() => searchGgufVariant(model.gguf_search ?? "")} title={t("Este modelo solo tiene pesos safetensors o PyTorch y en la Spark no hay motor que los ejecute; busca una versión GGUF para llama.cpp")}><Search size={15} />{" "}{t("Buscar versión GGUF")}</button>
                       : <button className="button primary" disabled={!model.fits || downloadBusy !== null} onClick={() => downloadRecommendation(model)} title={model.gated ? t("Repositorio gated: abre los detalles para comprobar el acceso antes de descargar") : undefined}><Download className={downloadBusy === model.id ? "spin" : ""} size={15} /> {downloadBusy === model.id ? t("Preparando…") : model.gated ? t("Comprobar acceso") : model.recommended_files.length ? t("Descargar recomendada") : t("Descargar snapshot")}</button>}
@@ -4491,12 +4611,7 @@ function ModelsView({
                   <div className="general-model-tags">{model.tags.slice(0, 5).map((tag) => <span key={tag}>{tag}</span>)}</div>
                   <div className="catalog-actions">
                     <button className={`icon-button favorite-button ${favoriteIds.has(model.id) ? "selected" : ""}`} onClick={() => void toggleHfFavorite(model.id, !favoriteIds.has(model.id))} aria-label={favoriteIds.has(model.id) ? t("Quitar {id} de favoritos", { id: model.id }) : t("Guardar {id} en favoritos", { id: model.id })}><Star size={15} fill={favoriteIds.has(model.id) ? "currentColor" : "none"} /></button>
-                    <button
-                      className="button primary"
-                      disabled={inspectingRepo !== null}
-                      onClick={() => inspect(model.id, model.recommended_files)}
-                      title={t("MyDGX seleccionará la cuantización adecuada y todos sus archivos")}
-                    ><Download className={inspectingRepo === model.id ? "spin" : ""} size={15} /> {inspectingRepo === model.id ? t("Preparando…") : t("Descargar recomendada")}</button>
+                    {recommendedDownloadButton(model.id, model.recommended_files, installed)}
                   </div>
                 </Card>
               );})}
@@ -4539,12 +4654,7 @@ function ModelsView({
                   <div className="general-model-tags">{model.tags.slice(0, 5).map((tag) => <span key={tag}>{tag}</span>)}</div>
                   <div className="catalog-actions">
                     <button className="icon-button favorite-button selected" onClick={() => void toggleHfFavorite(model.id, false)} aria-label={t("Quitar {id} de favoritos", { id: model.id })}><Star size={15} fill="currentColor" /></button>
-                    <button
-                      className="button primary"
-                      disabled={inspectingRepo !== null}
-                      onClick={() => inspect(model.id, model.recommended_files)}
-                      title={t("MyDGX seleccionará la cuantización adecuada y todos sus archivos")}
-                    ><Download className={inspectingRepo === model.id ? "spin" : ""} size={15} /> {inspectingRepo === model.id ? t("Preparando…") : t("Descargar recomendada")}</button>
+                    {recommendedDownloadButton(model.id, model.recommended_files, installed)}
                   </div>
                 </Card>
               );})}
@@ -4656,8 +4766,10 @@ function ModelsView({
             </small>
             <button
               className="button primary"
-              disabled={inspection.remote?.download_supported === false || hfGatedBlocked(inspection.remote) || !selectedFiles.length || !selectedSizeKnown || selectedDownloadTooLarge || downloadBusy !== null}
-              title={inspection.remote?.download_supported === false
+              disabled={inspection.remote?.download_supported === false || hfGatedBlocked(inspection.remote) || !selectedFiles.length || !selectedSizeKnown || selectedDownloadTooLarge || downloadBusy !== null || downloads.isDownloading(inspection.repo_id)}
+              title={downloads.isDownloading(inspection.repo_id)
+                ? t("Ya hay una descarga en curso de este repositorio; espera a que termine")
+                : inspection.remote?.download_supported === false
                 ? inspection.remote.download_block_reason
                 : hfGatedBlocked(inspection.remote)
                 ? t("Repositorio gated: sigue los pasos indicados para obtener acceso")
@@ -4665,7 +4777,7 @@ function ModelsView({
                 ? t("La selección supera la memoria total del sistema")
                 : !selectedSizeKnown && selectedFiles.length ? t("No se puede comprobar que la selección cabe") : undefined}
               onClick={downloadSelected}
-            ><Download className={downloadBusy === inspection.repo_id ? "spin" : ""} size={14} /> {downloadBusy === inspection.repo_id ? t("Preparando…") : t("Descargar archivos seleccionados")}</button>
+            ><Download className={downloadBusy === inspection.repo_id || downloads.isDownloading(inspection.repo_id) ? "spin" : ""} size={14} /> {downloadBusy === inspection.repo_id ? t("Preparando…") : downloads.isDownloading(inspection.repo_id) ? t("Descargando…") : t("Descargar archivos seleccionados")}</button>
           </div>
         </Card>
         </div>
@@ -4809,6 +4921,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   useEffect(() => {
     load();
   }, [load, profileJobSignature]);
+  const downloads = useDownloadTracker(jobs, load);
   const appTransitioning = Object.values(data?.apps.states ?? {}).some((item) => item.state === "starting" || item.state === "stopping");
   useEffect(() => {
     const timer = window.setInterval(load, appTransitioning ? 4000 : 10000);
@@ -5196,24 +5309,25 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
     }
   }
 
+  function profileDownloadTarget(model: ProfileModel) {
+    return model.engine === "ollama" ? model.model_ref : model.name;
+  }
+
   async function downloadMissingModel(profile: Profile, model: ProfileModel) {
-    if (model.engine === "ollama") {
-      try {
-        await api("/api/models/ollama/pull", {
-          method: "POST",
-          body: JSON.stringify({ name: model.model_ref }),
-        });
-        notify(t("Descarga de {name} añadida a la cola", { name: model.name }));
-        load();
-      } catch (error) {
-        notify((error as Error).message, true);
-      }
-      return;
+    const target = profileDownloadTarget(model);
+    if (downloads.isDownloading(target)) return;
+    downloads.track(target);
+    try {
+      const result = model.engine === "ollama"
+        ? await api<{ job_id: string }>("/api/models/ollama/pull", { method: "POST", body: JSON.stringify({ name: model.model_ref }) })
+        : await api<{ job_id: string }>(`/api/profiles/${profile.id}/models/${model.id}/download`, { method: "POST" });
+      downloads.track(target, result.job_id);
+      notify(t("Descarga de {name} añadida a la cola", { name: model.name }));
+      load();
+    } catch (error) {
+      downloads.untrack(target);
+      notify((error as Error).message, true);
     }
-    await action(
-      `/api/profiles/${profile.id}/models/${model.id}/download`,
-      t("Descarga de {name} añadida a la cola", { name: model.name }),
-    );
   }
 
   async function remove(profile: Profile) {
@@ -5354,7 +5468,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
               <span className={`status-dot ${modelRunning ? "ok" : model.downloaded ? "online" : "warn"}`} />
               <strong>{model.name}</strong>
               <small>{model.engine} · {model.task} · :{model.port}{["chat", "vision", "embeddings"].includes(model.task) ? ` · ${(effectiveContext / 1024).toLocaleString(locale)}K ctx${effectiveContext !== model.context_size ? ` ${t("(ajustado)")}` : ""}` : ""}</small>
-              {!model.downloaded && ((model.engine === "llama.cpp" && model.model_repo) || model.engine === "ollama") && <button className="profile-model-download" onClick={() => void downloadMissingModel(profile, model)}><Download size={13} />{" "}{t("Descargar modelo")}</button>}
+              {!model.downloaded && ((model.engine === "llama.cpp" && model.model_repo) || model.engine === "ollama") && <button className="profile-model-download" disabled={downloads.isDownloading(profileDownloadTarget(model))} onClick={() => void downloadMissingModel(profile, model)}>{downloads.isDownloading(profileDownloadTarget(model)) ? <><RefreshCw className="spin" size={13} />{" "}{t("Descargando…")}</> : <><Download size={13} />{" "}{t("Descargar modelo")}</>}</button>}
             </div>;
           })}
           {profile.app ? (() => {
@@ -7726,6 +7840,15 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
   const [versions, setVersions] = useState<{ components: Array<{ name: string; version?: string; available: boolean; detail: string; category?: string }>; packages: Array<{ name: string; version: string }> } | null>(null);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [integrity, setIntegrity] = useState<SystemIntegrity | null>(null);
+  const [firmware, setFirmware] = useState<FirmwareStatus | null>(null);
+  const [firmwareChecking, setFirmwareChecking] = useState(false);
+  const loadFirmware = useCallback((refresh = false) => {
+    setFirmwareChecking(true);
+    api<FirmwareStatus>(`/api/updates/firmware${refresh ? "?refresh=true" : ""}`)
+      .then(setFirmware)
+      .catch((error) => notify(error.message, true))
+      .finally(() => setFirmwareChecking(false));
+  }, [notify]);
   const readinessGroups = useMemo(() => {
     return (readiness?.checks ?? []).reduce<Record<string, ReadinessCheck[]>>((groups, check) => {
       (groups[check.category] ??= []).push(check);
@@ -7748,15 +7871,31 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
         setIntegrity(integrityData);
       })
       .catch((error) => notify(error.message, true));
-  }, [notify]);
+    loadFirmware();
+  }, [notify, loadFirmware]);
   useEffect(load, [load]);
   const maintenanceStatus = jobs
-    .filter((job) => ["system.update", "system.repair"].includes(job.kind))
+    .filter((job) => ["system.update", "system.repair", "system.firmware"].includes(job.kind))
     .map((job) => `${job.id}:${job.status}`)
     .join("|");
   useEffect(() => {
     if (maintenanceStatus.includes(":completed") || maintenanceStatus.includes(":failed")) load();
   }, [load, maintenanceStatus]);
+
+  async function applyFirmware() {
+    const reboot = firmware?.updates.some((item) => item.needs_reboot);
+    const message = [
+      t("Se instalará el firmware pendiente con fwupd. No apagues ni desconectes el equipo durante la instalación."),
+      reboot ? t("Hará falta reiniciar el DGX para aplicarlo; MyDGX no reiniciará por su cuenta.") : "",
+    ].filter(Boolean).join("\n\n");
+    if (!window.confirm(message)) return;
+    try {
+      await api("/api/updates/firmware/apply", { method: "POST", body: JSON.stringify({ confirm: "ACTUALIZAR FIRMWARE" }) });
+      notify(t("Instalación de firmware iniciada"));
+    } catch (error) {
+      notify((error as Error).message, true);
+    }
+  }
 
   async function applyUpdates() {
     if (!window.confirm(t("Se actualizarán los paquetes del sistema. Guarda todo tu trabajo antes de continuar."))) return;
@@ -7790,7 +7929,7 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
   }
 
   const maintenanceActive = jobs.some((job) =>
-    ["system.update", "system.repair"].includes(job.kind) &&
+    ["system.update", "system.repair", "system.firmware"].includes(job.kind) &&
     ["queued", "running"].includes(job.status)
   );
   const systemBranding = overview ? deviceBranding(overview.host) : null;
@@ -7966,6 +8105,50 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
             </div>
           ) : updates?.supported ? <p className="updates-empty"><CheckCircle2 size={17} />{" "}{t("El sistema está actualizado.")}</p> : null}
         </Card>
+        <Card className="updates-card">
+          <div className="card-kicker"><Cpu size={16} />{" "}{t("Firmware")}</div>
+          <div className="updates-overview">
+            <div className="update-total">
+              <strong>{firmware?.supported ? firmware.updates.length : "—"}</strong>
+              <span>{firmware?.supported ? t("actualizaciones de firmware") : t("fwupd no disponible")}</span>
+            </div>
+            <div className="update-actions">
+              {firmware?.reboot_pending && <span className="update-reboot"><TriangleAlert size={15} />{" "}{t("Firmware preparado; reinicia para aplicarlo")}</span>}
+              <small>{firmwareChecking ? t("Comprobando firmware…") : firmware?.checked_at ? t("Comprobado {date}", { date: new Date(firmware.checked_at).toLocaleString(locale) }) : ""}</small>
+              <button className="button secondary" disabled={firmwareChecking} onClick={() => loadFirmware(true)}>{t("Buscar firmware")}</button>
+              <button className="button primary" disabled={!config?.system_updates_enabled || !firmware?.updates.length || maintenanceActive} onClick={applyFirmware}>{maintenanceActive ? t("Mantenimiento en curso") : t("Instalar firmware")}</button>
+            </div>
+          </div>
+          {firmware?.message && <div className="update-message">{firmware.message}</div>}
+          <div className="update-packages">
+            {firmware?.updates.map((item) => (
+              <div className="update-package" key={item.device_id}>
+                <span>
+                  <strong>{item.name}</strong>
+                  <small>{[item.vendor, item.summary].filter(Boolean).join(" · ")}</small>
+                  {item.description && <small className="firmware-notes">{item.description}</small>}
+                </span>
+                {item.needs_reboot && <span className="badge warning">{t("Requiere reinicio")}</span>}
+                <code>{item.current_version || "—"} <span>→</span> {item.new_version}</code>
+              </div>
+            ))}
+            {firmware?.connectx && (
+              <div className="update-package">
+                <span>
+                  <strong>{firmware.connectx.name}</strong>
+                  <small>{
+                    firmware.connectx.state === "cable_required" ? t("Sin cable QSFP conectado: NVIDIA la actualiza al arrancar cuando detecta el cable") :
+                    firmware.connectx.state === "pending" ? t("Se actualizará en el próximo arranque con el cable QSFP conectado") :
+                    firmware.connectx.state === "current" ? t("Firmware al día") : t("Versión en uso no detectada")
+                  }</small>
+                </span>
+                {firmware.connectx.state === "pending" && <span className="badge warning">{t("Pendiente")}</span>}
+                <code>{firmware.connectx.running_version || "—"} <span>→</span> {firmware.connectx.package_version}</code>
+              </div>
+            )}
+          </div>
+          {firmware?.supported && !firmware.updates.length && <p className="updates-empty"><CheckCircle2 size={17} />{" "}{t("No hay firmware pendiente en fwupd.")}</p>}
+        </Card>
       </div>
       <SectionHeading eyebrow={t("SOFTWARE")} title={t("Versiones instaladas")} />
       <Card className="version-list">
@@ -7980,7 +8163,7 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
           <div key={item.name}><StatusDot online /><span><strong>{item.name}</strong><small>{t("Paquete DGX OS")}</small></span><code>{item.version}</code></div>
         ))}
       </Card>
-      {jobs.some((job) => ["system.update", "system.repair"].includes(job.kind)) && <Card className="notice"><Terminal /><span>{t("La tarea de mantenimiento se puede seguir en Modelos → Actividad reciente.")}</span></Card>}
+      {jobs.some((job) => ["system.update", "system.repair", "system.firmware"].includes(job.kind)) && <Card className="notice"><Terminal /><span>{t("La tarea de mantenimiento se puede seguir en Modelos → Actividad reciente.")}</span></Card>}
     </div>
   );
 }

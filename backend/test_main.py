@@ -1047,10 +1047,48 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue(moe_result["is_moe"])
         self.assertEqual(moe_result["active_parameters_b"], 3.0)
         self.assertIn("MTP", moe_result["speculative_methods"])
+        self.assertFalse(moe_result["speculative_verified"])
         self.assertGreater(moe_result["speculative_memory_mb"], 0)
         self.assertGreater(moe_result["estimated_tokens_per_second"], dense_result["estimated_tokens_per_second"])
         self.assertGreater(moe_result["recommended_score"], dense_result["recommended_score"])
         self.assertEqual(moe_result["recommended_slots"], 8)
+
+    def test_huggingface_spark_prefers_drafter_over_vision_and_sweet_spot_quant(self) -> None:
+        info = SimpleNamespace(
+            id="org/Cyber-Coder-35B-A3B-GGUF",
+            tags=["gguf", "image-text-to-text"], pipeline_tag="image-text-to-text",
+            siblings=[
+                SimpleNamespace(rfilename="Model-UD-Q5_K_XL.gguf", size=27 * 1024**3),
+                SimpleNamespace(rfilename="Model-UD-Q6_K_XL.gguf", size=32 * 1024**3),
+                SimpleNamespace(rfilename="Model-UD-Q8_K_XL.gguf", size=39 * 1024**3),
+                SimpleNamespace(rfilename="mmproj-BF16.gguf", size=1 * 1024**3),
+                SimpleNamespace(rfilename="mtp-Model.gguf", size=2 * 1024**3),
+            ],
+            config={"max_position_embeddings": 262_144}, card_data={"license": "apache-2.0"},
+            private=False, gated=False, downloads=1000, likes=10, last_modified=None,
+        )
+        result = hf_spark_recommendation(info, "any", "any", memory_total_mb=128 * 1024, memory_available_mb=120 * 1024)
+        self.assertEqual(result["recommended_quantization"], "UD-Q6_K_XL")
+        self.assertEqual(result["recommended_files"], ["Model-UD-Q6_K_XL.gguf", "mtp-Model.gguf"])
+        self.assertEqual(result["optional_mmproj_file"], "mmproj-BF16.gguf")
+        self.assertTrue(result["speculative_verified"])
+        self.assertEqual(result["speculative_methods"][0], "MTP")
+        tight = hf_spark_recommendation(info, "any", "any", memory_total_mb=128 * 1024, memory_available_mb=38 * 1024)
+        self.assertEqual(tight["recommended_quantization"], "UD-Q5_K_XL")
+        vision = hf_spark_recommendation(info, "vision", "any", memory_total_mb=128 * 1024, memory_available_mb=120 * 1024)
+        self.assertIn("mmproj-BF16.gguf", vision["recommended_files"])
+        self.assertNotIn("mtp-Model.gguf", vision["recommended_files"])
+
+    def test_gguf_quant_rank_and_drafter_vocabulary(self) -> None:
+        rank = main_module.gguf_quant_rank
+        self.assertEqual(rank("Q8_0")[0], rank("Q6_K")[0])
+        self.assertGreater(rank("UD-Q5_K_XL"), rank("Q5_K_M"))
+        self.assertGreater(rank("Q5_K_M"), rank("IQ4_XS"))
+        self.assertGreater(rank("IQ4_XS"), rank("IQ3_XXS"))
+        main = {"tokenizer.ggml.tokens.count": 248_320}
+        self.assertFalse(main_module.drafter_vocab_mismatch(main, {"tokenizer.ggml.tokens.count": 248_320}))
+        self.assertFalse(main_module.drafter_vocab_mismatch(main, {}))
+        self.assertTrue(main_module.drafter_vocab_mismatch(main, {"tokenizer.ggml.tokens.count": 151_936}))
 
     def test_huggingface_spark_cluster_scales_memory_and_bandwidth(self) -> None:
         original_cluster_size = settings.spark_cluster_size
@@ -2023,6 +2061,7 @@ class SpeculativeDecodingTests(unittest.TestCase):
         self.assertEqual(metadata["llama.context_length"], 131_072)
         self.assertEqual(metadata["gguf.tensor_count"], 7)
         self.assertNotIn("tokenizer.ggml.tokens", metadata)
+        self.assertEqual(metadata["tokenizer.ggml.tokens.count"], 150_001)
         cut = main_module.parse_gguf_header(io.BytesIO(data[: len(data) // 2]), partial=True)
         self.assertEqual(cut["general.architecture"], "llama")
         self.assertNotIn("llama.context_length", cut)
@@ -6518,6 +6557,27 @@ class ProfileApiTests(unittest.TestCase):
             self.assertEqual(db.rows("SELECT runtime_requirement FROM profiles WHERE id='artifex-v7'")[0]["runtime_requirement"], "llama.cpp v1.0.0 · CUDA 13 · sm_121 · tool calling")
             self.assertEqual(db.rows("SELECT runtime_requirement FROM profiles WHERE id='artifex-gpt-oss'")[0]["runtime_requirement"], "Requiere llama.cpp b11429")
         db.path = original_path
+
+    def test_downloaded_drafter_is_attached_to_plain_profiles(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "drafter.db"
+                db.initialize()
+                seed_artifex_profiles()
+                db.execute("UPDATE profiles SET spec_type='', draft_filename='' WHERE id LIKE 'artifex-tiel-%'")
+                db.execute("UPDATE profiles SET mmproj_filename='mmproj-BF16.gguf' WHERE id='artifex-tiel-q5'")
+                repo = "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF"
+                with patch.object(main_module, "local_gguf_metadata", return_value={}):
+                    self.assertEqual(main_module.attach_downloaded_drafter(repo, ["README.md"]), [])
+                    attached = main_module.attach_downloaded_drafter(repo, ["mtp-Cyber-Tiel-Coder-35B-A3B.gguf"])
+                self.assertEqual(attached, ["ARTIFEX · Cyber-Tiel Q6"])
+                rows = {row["id"]: row for row in db.rows("SELECT id,spec_type,draft_filename FROM profiles WHERE id LIKE 'artifex-tiel-%'")}
+                self.assertEqual(rows["artifex-tiel-q6"]["spec_type"], "draft-mtp")
+                self.assertEqual(rows["artifex-tiel-q6"]["draft_filename"], "mtp-Cyber-Tiel-Coder-35B-A3B.gguf")
+                self.assertEqual(rows["artifex-tiel-q5"]["spec_type"], "")
+        finally:
+            db.path = original_path
 
     def test_deleted_seed_profiles_are_not_seeded_again(self) -> None:
         original_path = db.path

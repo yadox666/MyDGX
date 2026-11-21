@@ -659,6 +659,7 @@ type PreflightFile = {
   embedded_mtp: boolean;
   runtime_supported: boolean | null;
   header_read: boolean;
+  vocab_compatible?: boolean | null;
   memory_mb?: number;
   memory_context?: number;
 };
@@ -715,6 +716,8 @@ function DownloadPreflightDialog({ pending, onCancel, onConfirm }: {
             <span className="preflight-checks">
               {file.runtime_supported === true && <span className="badge completed">{t("llama.cpp la reconoce")}</span>}
               {file.runtime_supported === false && <span className="badge failed">{t("llama.cpp no la reconoce")}</span>}
+              {file.vocab_compatible === true && <span className="badge completed">{t("Vocabulario compatible")}</span>}
+              {file.vocab_compatible === false && <span className="badge failed">{t("Vocabulario incompatible")}</span>}
               {file.memory_mb ? <span className={`badge ${file.memory_mb > report.capacity_mb ? "failed" : ""}`}>~{Math.ceil(file.memory_mb / 1024)}{" "}{t("GB con")}{" "}{shortContext(file.memory_context)}</span> : null}
             </span>
           </div>)}
@@ -1867,6 +1870,8 @@ type HfRecommendation = {
   active_parameter_ratio: number;
   active_weight_mb: number;
   speculative_methods: string[];
+  speculative_verified?: boolean;
+  optional_mmproj_file?: string | null;
   speculative_memory_mb: number;
   estimated_tokens_per_second: number;
   spark_count: number;
@@ -4586,7 +4591,8 @@ function ModelsView({
                     <span><small>{model.recommended_context ? t("Contexto") : t("Runtime")}</small><strong>{model.recommended_context ? `${Math.round(model.recommended_context / 1024)}K` : t("Externo local")}</strong></span>
                     <span title={t("Estimación comparativa basada en pesos activos y ancho de banda; no sustituye un benchmark")}><small>{t("Arquitectura")}</small><strong>{model.architecture}{model.active_parameters_b ? t(" · {count}B activos", { count: model.active_parameters_b }) : ""}</strong></span>
                     <span title={t("Estimación conservadora; depende del runtime, plantilla, contexto y batching")}><small>{t("Rendimiento")}</small><strong>{model.estimated_tokens_per_second ? `≈${model.estimated_tokens_per_second} tok/s · ${model.recommended_slots} slot(s)` : t("Según runtime")}</strong></span>
-                    {model.speculative_methods.length > 0 && <span><small>{t("Especulativa")}</small><strong>{model.speculative_methods.join(" · ")}</strong></span>}
+                    {model.speculative_methods.length > 0 && <span title={model.speculative_verified === false ? t("Solo lo dice la ficha; la comprobación previa lee la cabecera del GGUF antes de descargar") : t("El repositorio incluye el drafter y la descarga recomendada lo trae")}><small>{t("Especulativa")}</small><strong>{model.speculative_methods.join(" · ")}{model.speculative_verified === false ? ` ${t("(sin verificar)")}` : ""}</strong></span>}
+                    {model.optional_mmproj_file && <span title={t("llama.cpp no combina visión y especulativa; se descarga el drafter. Añade el mmproj desde Detalles si quieres imágenes.")}><small>{t("Visión")}</small><strong>{t("Opcional")}</strong></span>}
                     {model.spark_count > 1 && <span><small>{t("Cluster")}</small><strong>{model.spark_count}{" "}{t("Sparks ·")}{" "}{model.memory_bandwidth_gbps}{" "}{t("GB/s")}</strong></span>}
                     <span><small>{t("Memoria")}</small><strong>{Math.round(model.estimated_memory_mb / 1024)} GB</strong></span>
                   </div>

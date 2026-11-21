@@ -296,6 +296,16 @@ solo por popularidad.
 - avisa si faltan shards, si llama.cpp no reconoce la arquitectura, si el modelo
   supera la memoria segura, si solo has elegido un drafter o un proyector, o si el
   repositorio ofrece un drafter que no has seleccionado;
+- también avisa si el modelo cabe en el equipo pero no junto a los que ya están en
+  marcha, si la ficha anuncia MTP y el GGUF no trae esas capas, y si el vocabulario
+  de un drafter no coincide con el del modelo (llama.cpp lo rechazaría);
+- la recomendación prefiere Q6 a Q8 (misma calidad práctica, menos memoria),
+  reconoce las cuantizaciones dinámicas `UD-…_K_XL` y elige la mejor que cabe en
+  la memoria libre sin parar lo que está en marcha; si el repositorio trae drafter,
+  lo descarga en lugar del `mmproj` (llama.cpp no combina visión y especulativa) y
+  deja la visión como opcional;
+- si descargas un drafter más tarde, los perfiles de ese modelo sin especulativa
+  ni visión lo activan solos (queda en la auditoría);
 - rechaza los ficheros que ya están descargados y reutiliza la descarga en curso
   si el repositorio ya se está bajando;
 - al terminar, Benchmarks comprueba que el modelo arranca y responde y compara la

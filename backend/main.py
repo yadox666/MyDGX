@@ -7122,8 +7122,39 @@ SPEC_TYPE_BY_PREFIX = {
     "eagle": "draft-eagle3", "eagle3": "draft-eagle3", "draft": "draft-simple",
 }
 GGUF_DRAFTER_ARCHITECTURES = {"dflash": "draft-dflash", "dspark": "draft-dspark", "eagle3": "draft-eagle3"}
+SPEC_LABELS = {
+    "draft-mtp": "MTP", "draft-dspark": "DSpark", "draft-dflash": "DFlash",
+    "draft-eagle3": "EAGLE3", "draft-simple": "Draft",
+}
 # Every quantization of a model has the same tensors; a drafter carries a small fraction of them.
 DRAFTER_TENSOR_RATIO = 0.25
+# llama.cpp accepts a drafter whose vocabulary differs from the target's by at most this many tokens.
+DRAFTER_VOCAB_TOLERANCE = 128
+
+
+def gguf_quant_rank(quantization: str) -> tuple[int, int]:
+    """(quality tier, variant) of a GGUF quantization; Q6 and Q8 share the top tier, so the smaller file wins."""
+    name = quantization.upper().removeprefix("UD-")
+    if name == "MXFP4":
+        return 8, 0
+    if name in {"BF16", "F16", "FP16"}:
+        return 8, -1
+    match = re.match(r"I?Q(\d)", name)
+    if not match:
+        return 3, 0
+    tier = {8: 8, 7: 8, 6: 8, 5: 7, 4: 6, 3: 4, 2: 2}.get(int(match.group(1)), 1)
+    variant = {"XL": 2, "L": 1, "M": 1, "NL": 1, "K": 0, "XS": 0, "S": 0, "XXS": -1}.get(name.rsplit("_", 1)[-1], 0)
+    return tier, variant
+
+
+def gguf_vocab_size(metadata: dict[str, Any]) -> int:
+    return int(metadata.get("tokenizer.ggml.tokens.count") or gguf_arch_value(metadata, "vocab_size") or 0)
+
+
+def drafter_vocab_mismatch(main_metadata: dict[str, Any], draft_metadata: dict[str, Any]) -> bool:
+    """True when both headers carry a vocabulary and llama.cpp would refuse to pair them."""
+    main, draft = gguf_vocab_size(main_metadata), gguf_vocab_size(draft_metadata)
+    return bool(main and draft and abs(main - draft) > DRAFTER_VOCAB_TOLERANCE)
 
 
 def hf_requires_unsupported_reap_runtime(repo_id: str, filenames: Iterable[str] = ()) -> bool:
@@ -7344,7 +7375,7 @@ def local_speculative_candidates(model_id: str, siblings: list[Any], main_group:
     for group in others:
         metadata = local_gguf_metadata(model_id, group["files"][0])
         role = gguf_file_role(group["files"][0], metadata, main_metadata)
-        if role in SPEC_TYPES:
+        if role in SPEC_TYPES and not drafter_vocab_mismatch(main_metadata, metadata):
             candidates.append({
                 "spec_type": role,
                 "draft_filename": group["files"][0],
@@ -7776,6 +7807,8 @@ def parse_gguf_header(handle: Any, partial: bool = False) -> dict[str, Any]:
         if handle.seek(size, os.SEEK_CUR) != position + size:
             raise ValueError("GGUF truncado")
 
+    string_arrays = [0]
+
     def skip_strings(count: int) -> None:
         # Tokenizer vocabularies hold hundreds of thousands of strings; walk them in memory.
         data = b""
@@ -7819,6 +7852,7 @@ def parse_gguf_header(handle: Any, partial: bool = False) -> dict[str, Any]:
                 return None
             if item_kind == 8:
                 skip_strings(count)
+                string_arrays[-1] = count
                 return None
             for _ in range(count):
                 value(item_kind, False)
@@ -7836,9 +7870,12 @@ def parse_gguf_header(handle: Any, partial: bool = False) -> dict[str, Any]:
         for _ in range(min(kv_count, 100_000)):
             key = read(struct.unpack("<Q", read(8))[0]).decode("utf-8", errors="replace")
             kind = struct.unpack("<I", read(4))[0]
+            string_arrays[-1] = 0
             item = value(kind, not key.startswith("tokenizer."))
             if item is not None:
                 metadata[key] = item
+            if key == "tokenizer.ggml.tokens" and string_arrays[-1]:
+                metadata["tokenizer.ggml.tokens.count"] = string_arrays[-1]
     except (ValueError, struct.error):
         if not partial:
             raise
@@ -8664,15 +8701,28 @@ def hf_spark_recommendation(
         "large": budget_mb,
     }
     weight_cap_mb = max(0, size_caps[size] - 4096)
-    quality = {"Q8_0": 8, "Q6_K": 7, "Q6_K_L": 7, "Q5_K_M": 6, "Q5_K_L": 6, "Q4_K_M": 5, "Q4_K_L": 5}
+    weight_now_mb = max(0, min(size_caps[size], available_budget_mb) - 4096)
     fitting = [
         group for group in groups
         if group["complete"] and group["resident_size"] > 0
         and group["resident_size"] / (1024 * 1024) <= weight_cap_mb
     ]
-    fitting.sort(key=lambda item: (quality.get(item["quantization"], 3), item["size"]), reverse=True)
+    fitting.sort(key=lambda item: (
+        item["resident_size"] / (1024 * 1024) <= weight_now_mb,
+        *gguf_quant_rank(item["quantization"]),
+        -item["size"],
+    ), reverse=True)
     selected = None if runtime == "external" else (fitting[0] if fitting else (groups[0] if groups else None))
     architecture = hf_architecture_profile(info, selected["resident_size"] if selected else 0)
+    drafter = hf_named_drafter(siblings) if selected else None
+    mmproj_files_all = mmproj_files
+    prefer_drafter = bool(drafter and task != "vision")
+    if prefer_drafter:
+        mmproj_files = []
+        label = SPEC_LABELS[drafter["spec_type"]]
+        architecture["speculative_methods"] = [label, *(item for item in architecture["speculative_methods"] if item != label)]
+        architecture["speculative_memory_mb"] = max(1536, math.ceil(drafter["size"] / (1024 * 1024) * 1.25))
+    speculative_verified = bool(drafter) or not groups
     target_context = 32_768 if task in {"code", "reasoning", "any"} else 16_384
     if task in {"embedding", "vision"}:
         target_context = 8192
@@ -8721,7 +8771,7 @@ def hf_spark_recommendation(
         estimated_tps = (
             bandwidth_gbps * 1024 * efficiency / architecture["active_weight_mb"]
         )
-        if architecture["speculative_methods"]:
+        if architecture["speculative_methods"] and speculative_verified:
             estimated_tps *= 1.35
         estimated_tps = round(estimated_tps, 1)
     if selected and task in {"any", "chat", "code"}:
@@ -8764,7 +8814,7 @@ def hf_spark_recommendation(
     }
     trusted_publisher = publisher in trusted_publishers
     task_match = task == "any" or task in tasks
-    mmproj_required = bool(selected and "vision" in tasks)
+    mmproj_required = bool(selected and "vision" in tasks and not prefer_drafter)
     mmproj = mmproj_files[0] if mmproj_files else None
     if selected and mmproj:
         estimate["weight_mb"] += math.ceil(mmproj["size"] / (1024 * 1024))
@@ -8794,7 +8844,7 @@ def hf_spark_recommendation(
     score = 10 if groups or media_weight_bytes else 0
     score += 20 if fits and utilization <= 0.75 else 12 if fits and utilization <= 0.92 else 6 if fits else -25
     score += 12 if task_match else -8
-    score += quality.get(selected["quantization"], 3) if selected else 0
+    score += gguf_quant_rank(selected["quantization"])[0] if selected else 0
     score += 4 if license_name else 0
     score += 3 if not private and not gated else -12
     score += 5 if trusted_publisher else 0
@@ -8804,7 +8854,7 @@ def hf_spark_recommendation(
             score += 10 if active_ratio <= 0.25 else 7 if active_ratio <= 0.45 else 3
         elif estimate["weight_mb"] >= 48 * 1024:
             score -= 5
-        if architecture["speculative_methods"]:
+        if architecture["speculative_methods"] and speculative_verified:
             score += 5
         score += (
             8 if estimated_tps >= 30
@@ -8899,21 +8949,29 @@ def hf_spark_recommendation(
         warnings.append("Falta el archivo mmproj requerido por llama.cpp")
     elif mmproj:
         reasons.append(f"Projector visual detectado: {mmproj['name']}")
-    if architecture["speculative_methods"]:
+    if architecture["speculative_methods"] and speculative_verified:
         reasons.append(
             f"Decodificación especulativa: {', '.join(architecture['speculative_methods'])}"
+        )
+    elif architecture["speculative_methods"]:
+        warnings.append(
+            f"La ficha menciona {', '.join(architecture['speculative_methods'])}, pero el repositorio no trae drafter; "
+            "se comprueba en la cabecera del GGUF antes de descargar"
         )
     elif selected and architecture["is_moe"]:
         warnings.append("Sin MTP/DFlash/DSpark detectado en metadatos")
     if spark_count > 1:
         warnings.append("Tensor parallel requiere interconexión ConnectX-7 configurada")
     recommended_files = list(selected["files"]) if selected else []
-    drafter = hf_named_drafter(siblings) if selected and not mmproj else None
     if mmproj:
         recommended_files.append(mmproj["name"])
-    if drafter:
+    if drafter and prefer_drafter:
         recommended_files.extend(drafter["files"])
         reasons.append(f"Drafter {drafter['spec_type']} incluido: {Path(drafter['files'][0]).name}")
+        if mmproj_files_all:
+            reasons.append(
+                f"Visión opcional: {mmproj_files_all[0]['name']} (llama.cpp desactiva la especulativa con el mmproj)"
+            )
     return {
         "id": repo_id,
         "downloads": downloads,
@@ -8938,7 +8996,8 @@ def hf_spark_recommendation(
         "recommended_file": selected["files"][0] if selected else None,
         "recommended_files": recommended_files,
         "recommended_mmproj_file": mmproj["name"] if mmproj else None,
-        "recommended_draft_file": drafter["files"][0] if drafter else None,
+        "recommended_draft_file": drafter["files"][0] if drafter and prefer_drafter else None,
+        "optional_mmproj_file": mmproj_files_all[0]["name"] if prefer_drafter and mmproj_files_all else None,
         "recommended_context": target_context,
         "recommended_slots": slots,
         "architecture": architecture["architecture"],
@@ -8948,6 +9007,7 @@ def hf_spark_recommendation(
         "active_parameter_ratio": architecture["active_parameter_ratio"],
         "active_weight_mb": architecture["active_weight_mb"],
         "speculative_methods": architecture["speculative_methods"],
+        "speculative_verified": speculative_verified,
         "speculative_memory_mb": architecture["speculative_memory_mb"],
         "estimated_tokens_per_second": estimated_tps,
         "spark_count": spark_count,
@@ -9927,6 +9987,34 @@ def queue_downloaded_gguf_benchmark(repo_id: str, files: list[str] | None) -> in
     return sum(enqueue_automatic_benchmark(f"gguf:{item['key']}", "huggingface.download") for item in artifacts)
 
 
+def attach_downloaded_drafter(repo_id: str, filenames: list[str]) -> list[str]:
+    """Profiles of this repo without speculative decoding or vision get the drafter just downloaded; their names."""
+    drafters = [name for name in filenames if name.lower().endswith(".gguf") and GGUF_AUXILIARY_PATTERN.search(name)]
+    if not drafters:
+        return []
+    rows = db.rows(
+        "SELECT id,name,model_filename FROM profiles WHERE engine='llama.cpp' AND model_repo=? COLLATE NOCASE "
+        "AND COALESCE(spec_type,'')='' AND COALESCE(mmproj_filename,'')=''",
+        (repo_id,),
+    )
+    updated = []
+    for row in rows:
+        main_metadata = local_gguf_metadata(repo_id, row["model_filename"])
+        for name in drafters:
+            metadata = local_gguf_metadata(repo_id, name)
+            role = gguf_file_role(name, metadata, main_metadata)
+            if role not in SPEC_TYPES or drafter_vocab_mismatch(main_metadata, metadata):
+                continue
+            db.execute(
+                "UPDATE profiles SET spec_type=?, draft_filename=?, updated_at=? WHERE id=?",
+                (role, name, utc_now(), row["id"]),
+            )
+            db.audit("profile.update", row["name"], True, f"Drafter {SPEC_LABELS[role]} activado al descargarlo: {Path(name).name}")
+            updated.append(row["name"])
+            break
+    return updated
+
+
 async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_bytes: int = 0) -> None:
     before = {payload.repo_id: await asyncio.to_thread(hf_snapshot_entries, payload.repo_id)}
     stop = asyncio.Event()
@@ -10010,9 +10098,10 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
             payload.repo_id,
             payload.revision,
         )
+        attached = await asyncio.to_thread(attach_downloaded_drafter, payload.repo_id, payload.files)
         db.execute(
             "INSERT OR REPLACE INTO job_results(job_id,result_json,created_at) VALUES(?,?,?)",
-            (job_id, json.dumps({"files": downloaded}), utc_now()),
+            (job_id, json.dumps({"files": downloaded, "profiles_with_drafter": attached}), utc_now()),
         )
         await asyncio.to_thread(clear_model_health, payload.repo_id)
         await asyncio.to_thread(
@@ -10122,7 +10211,8 @@ def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> 
             headers[group["name"]] = {}
             warnings.append(f"No se pudo leer la cabecera de {group['files'][0]}: {type(exc).__name__}")
     main_metadata = headers.get(groups[0]["name"], {}) if groups else {}
-    capacity_mb = spark_memory_budgets()["budget_mb"]
+    budgets = spark_memory_budgets()
+    capacity_mb = budgets["budget_mb"]
     files = []
     for group in groups:
         metadata = headers.get(group["name"], {})
@@ -10145,6 +10235,10 @@ def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> 
             "embedded_mtp": bool(gguf_arch_value(metadata, "nextn_predict_layers")),
             "runtime_supported": llama_knows_architecture(architecture) if architecture and role == "main" else None,
             "header_read": bool(metadata),
+            "vocab_compatible": (
+                not drafter_vocab_mismatch(main_metadata, metadata)
+                if role in SPEC_TYPES and metadata and main_metadata else None
+            ),
         }
         if role == "main" and metadata:
             context = min(PREFLIGHT_CONTEXT, native) if native else PREFLIGHT_CONTEXT
@@ -10160,7 +10254,24 @@ def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> 
             warnings.append(f"{name}: el llama.cpp instalado no reconoce la arquitectura «{architecture}»")
         if entry.get("memory_mb", 0) > capacity_mb:
             warnings.append(f"{name}: necesita ~{entry['memory_mb'] // 1024} GB con {entry['memory_context'] // 1024}K; supera la capacidad segura")
+        elif entry.get("memory_mb", 0) > budgets["available_budget_mb"]:
+            warnings.append(
+                f"{name}: necesita ~{entry['memory_mb'] // 1024} GB y ahora hay ~{budgets['available_budget_mb'] // 1024} GB libres; "
+                "para encenderlo habrá que parar algún modelo en marcha"
+            )
+        if entry["vocab_compatible"] is False:
+            warnings.append(f"{name}: su vocabulario no coincide con el del modelo principal; llama.cpp rechazaría este drafter")
     roles = {item["role"] for item in files}
+    main_entries = [item for item in files if item["role"] == "main" and item["header_read"]]
+    claimed = hf_architecture_profile(info)["speculative_methods"]
+    if (
+        "MTP" in claimed and main_entries and not any(item["embedded_mtp"] for item in main_entries)
+        and not roles & set(SPEC_TYPES) and not hf_named_drafter(list(by_name.values()))
+    ):
+        warnings.append(
+            f"{Path(main_entries[0]['filename']).name}: la ficha anuncia MTP, pero este GGUF no trae esas capas; "
+            "funcionará sin decodificación especulativa"
+        )
     mmproj = [name for name in filenames if "mmproj" in name.casefold()]
     if files and "main" not in roles:
         warnings.insert(0, "La selección solo contiene drafters o proyectores: falta el modelo principal")

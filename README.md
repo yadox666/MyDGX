@@ -296,6 +296,16 @@ just by popularity.
 - it warns if shards are missing, if llama.cpp does not recognize the architecture, if the model
   exceeds safe memory, if you only picked a drafter or a projector, or if the
   repository offers a drafter you have not selected;
+- it also warns if the model fits the machine but not next to the ones already
+  running, if the card advertises MTP but the GGUF lacks those layers, and if a
+  drafter's vocabulary does not match the model's (llama.cpp would reject it);
+- the recommendation prefers Q6 over Q8 (same practical quality, less memory),
+  understands Unsloth dynamic `UD-…_K_XL` quantizations and picks the best one
+  that fits in free memory without stopping what is running; when the repository
+  ships a drafter, it downloads it instead of the `mmproj` (llama.cpp does not
+  combine vision and speculative decoding) and leaves vision as optional;
+- if you download a drafter later, that model's profiles without speculative
+  decoding or vision turn it on automatically (recorded in the audit log);
 - it rejects files that are already downloaded and reuses the ongoing download
   if the repository is already being fetched;
 - when finished, Benchmarks checks that the model starts and responds and compares the

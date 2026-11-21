@@ -1815,5 +1815,12 @@
   "Probado {date}",
   "Abrir asistente",
   "Cerrar asistente",
-  "Imagen, audio, vídeo y embeddings"
+  "Imagen, audio, vídeo y embeddings",
+  "Vocabulario compatible",
+  "Vocabulario incompatible",
+  "Solo lo dice la ficha; la comprobación previa lee la cabecera del GGUF antes de descargar",
+  "El repositorio incluye el drafter y la descarga recomendada lo trae",
+  "(sin verificar)",
+  "llama.cpp no combina visión y especulativa; se descarga el drafter. Añade el mmproj desde Detalles si quieres imágenes.",
+  "Opcional"
 ]

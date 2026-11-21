@@ -1830,5 +1830,12 @@
   "Probado {date}": "Tested {date}",
   "Abrir asistente": "Open assistant",
   "Cerrar asistente": "Close assistant",
-  "Imagen, audio, vídeo y embeddings": "Image, audio, video and embeddings"
+  "Imagen, audio, vídeo y embeddings": "Image, audio, video and embeddings",
+  "Vocabulario compatible": "Compatible vocabulary",
+  "Vocabulario incompatible": "Incompatible vocabulary",
+  "Solo lo dice la ficha; la comprobación previa lee la cabecera del GGUF antes de descargar": "Only the card says so; the pre-download check reads the GGUF header before downloading",
+  "El repositorio incluye el drafter y la descarga recomendada lo trae": "The repository includes the drafter and the recommended download brings it",
+  "(sin verificar)": "(unverified)",
+  "llama.cpp no combina visión y especulativa; se descarga el drafter. Añade el mmproj desde Detalles si quieres imágenes.": "llama.cpp does not combine vision with speculative decoding, so the drafter is downloaded. Add the mmproj from Details if you want images.",
+  "Opcional": "Optional"
 }

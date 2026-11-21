@@ -118,6 +118,8 @@ arranque informan de las plazas ocupadas en `llm_slots` y `max_llm_slots`.
 | GET | `/api/profiles` | Perfiles con modelos, plan de memoria, estado de ejecución, apps disponibles (`apps`, con alias y puerto web en `apps.web`) y estado del runtime. |
 | POST | `/api/profiles` | Crea un perfil (cuerpo `ProfilePayload`, ver abajo). |
 | PUT | `/api/profiles/{profile_id}` | Reemplaza la configuración de un perfil. |
+| GET | `/api/profiles/recipes` | Catálogo de recetas de GitHub (`source: github`) o, sin conexión, la copia local (`source: local` y `error`). Cada receta trae `description` (`es`, `en`), `memory_gib` e `installed_ids`. `?refresh=true` ignora la caché de 5 minutos. |
+| POST | `/api/profiles/recipes/{recipe_id}/install` | Instala una receta como perfil. Body: `name` (opcional) y `download_models`. Devuelve `id`, `name` y los `jobs` de descarga. `409` si el nombre ya existe. |
 | POST | `/api/profiles/{profile_id}/duplicate` | Crea una copia editable con otro nombre (`name`). Copia modelos y parámetros, pero no el favorito ni el predeterminado, y da puertos llama.cpp nuevos. `409` si el nombre ya existe. |
 | POST | `/api/profiles/{profile_id}/models` | Añade un modelo descargado como modelo adicional, con la misma configuración que *Encender*. Cuerpo: `source` (`huggingface` u `ollama`), `model_id` y, opcionalmente, `context_size`. Recibe puerto y alias propios. Si el perfil está cargado, se aplica al reiniciarlo. `409` si ya lo contiene o ya tiene el máximo de modelos; `403` en Default y Quick. |
 | PATCH | `/api/profiles/{profile_id}/favorite` | Marca o desmarca favorito. Cuerpo: `favorite`. |

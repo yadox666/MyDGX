@@ -1133,5 +1133,11 @@
   "«task» debe ser {0}": "«task» must be {0}",
   "«{0}» debe ser texto de hasta {1} caracteres": "«{0}» must be text of up to {1} characters",
   "Área o términos: perfiles, memoria, benchmarks, chat completions, borrar modelo...": "Area or terms: profiles, memory, benchmarks, chat completions, delete model...",
-  "≈{0} tok/s y {1} slot(s) conservadores": "≈{0} tok/s and {1} conservative slot(s)"
+  "≈{0} tok/s y {1} slot(s) conservadores": "≈{0} tok/s and {1} conservative slot(s)",
+  "Receta no encontrada": "Recipe not found",
+  "El nombre o la receta no son válidos": "The name or the recipe is not valid",
+  "El catálogo de recetas no es válido": "The recipe catalog is not valid",
+  "El origen de las recetas debe ser raw.githubusercontent.com": "The recipe source must be raw.githubusercontent.com",
+  "El catálogo de recetas supera 1 MB": "The recipe catalog exceeds 1 MB",
+  "{0}: GitHub no disponible": "{0}: GitHub unavailable"
 }

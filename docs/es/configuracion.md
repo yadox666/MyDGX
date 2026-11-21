@@ -117,6 +117,7 @@ ejecuta al arrancar y después aproximadamente cada hora.
 | `PROFILE_RESTORE_RETRY_SECONDS` | `300` | Reintento de restauración del perfil predeterminado tras un fallo. |
 | `PROFILE_APPS_ROOT` | home del usuario | Directorio cuyos subdirectorios con `start.sh` pueden ser apps de perfil. |
 | `PROFILE_APPS` | vacío | Lista blanca opcional de apps (`ragkit,otra`). Vacío: todas las válidas. |
+| `MYDGX_RECIPES_URL` | `config/recipes.json` de `main` en GitHub | Catálogo de *Buscar recetas*. Solo se acepta `https://raw.githubusercontent.com/…`; si falla, se usa la copia local. |
 
 ## Gateway
 

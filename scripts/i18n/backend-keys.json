@@ -1153,5 +1153,11 @@
   "«task» debe ser {0}",
   "«{0}» debe ser texto de hasta {1} caracteres",
   "Área o términos: perfiles, memoria, benchmarks, chat completions, borrar modelo...",
-  "≈{0} tok/s y {1} slot(s) conservadores"
+  "≈{0} tok/s y {1} slot(s) conservadores",
+  "Receta no encontrada",
+  "El nombre o la receta no son válidos",
+  "El catálogo de recetas no es válido",
+  "El origen de las recetas debe ser raw.githubusercontent.com",
+  "El catálogo de recetas supera 1 MB",
+  "{0}: GitHub no disponible"
 ]

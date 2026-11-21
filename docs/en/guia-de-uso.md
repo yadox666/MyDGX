@@ -238,6 +238,27 @@ status, memory plan and, if it has one, the associated app.
   *Models*. Default does not count toward the limit of two loaded; each chat
   or vision model started in Quick takes one of those two slots.
 
+### Recipes
+
+A recipe is a profile measured on a DGX Spark and published on GitHub, in
+`config/recipes.json`. The page shows it with a blue *RECIPE* badge.
+
+- **Find recipes**, next to *New profile*, reads the current catalog from
+  GitHub. Without a connection it shows the copy bundled with your MyDGX
+  version.
+- Each recipe shows its description, its models (quantization, context, KV,
+  MTP and whether it is uncensored) and the memory measured with everything
+  loaded.
+- *View details* shows the full recipe as JSON and *Download JSON* saves it to
+  your computer.
+- *Install* creates a regular profile with the name you choose, and can queue
+  the download of any missing models, MTP drafters included. Afterwards you
+  edit it like any other profile.
+
+New installations get the recipes from the local copy at startup. Change the
+catalog URL with `MYDGX_RECIPES_URL`; only `raw.githubusercontent.com` is
+accepted.
+
 ### Profile app
 
 An app is a directory with a `start.sh` that accepts `start`, `stop`, `restart`,

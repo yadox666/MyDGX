@@ -118,6 +118,8 @@ plan report the occupied slots in `llm_slots` and `max_llm_slots`.
 | GET | `/api/profiles` | Profiles with models, memory plan, execution status, available apps (`apps`, with alias and web port in `apps.web`) and runtime status. |
 | POST | `/api/profiles` | Creates a profile (body `ProfilePayload`, see below). |
 | PUT | `/api/profiles/{profile_id}` | Replaces a profile's configuration. |
+| GET | `/api/profiles/recipes` | Recipe catalog from GitHub (`source: github`) or, offline, the local copy (`source: local` and `error`). Each recipe has `description` (`es`, `en`), `memory_gib` and `installed_ids`. `?refresh=true` skips the 5-minute cache. |
+| POST | `/api/profiles/recipes/{recipe_id}/install` | Installs a recipe as a profile. Body: `name` (optional) and `download_models`. Returns `id`, `name` and the download `jobs`. `409` if the name already exists. |
 | POST | `/api/profiles/{profile_id}/duplicate` | Creates an editable copy with another name (`name`). Copies models and parameters, but not the favorite or default flag, and assigns new llama.cpp ports. `409` if the name already exists. |
 | POST | `/api/profiles/{profile_id}/models` | Adds a downloaded model as an additional model, with the same configuration as *Start*. Body: `source` (`huggingface` or `ollama`), `model_id` and, optionally, `context_size`. It gets its own port and alias. If the profile is loaded, it applies when the profile is restarted. `409` if it already contains it or already has the maximum number of models; `403` on Default and Quick. |
 | PATCH | `/api/profiles/{profile_id}/favorite` | Marks or unmarks as favorite. Body: `favorite`. |

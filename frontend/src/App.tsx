@@ -1085,6 +1085,151 @@ type AddToProfileRequest = {
   defaultContext?: number;
 };
 
+type Recipe = ProfileModel & {
+  description: Partial<Record<"es" | "en", string>>;
+  memory_gib?: number;
+  additional_models: ProfileModel[];
+  installed_ids: string[];
+};
+
+type RecipesResponse = { source: "github" | "local"; url: string; error: string; fetched_at: string; recipes: Recipe[] };
+
+function RecipesDialog({ notify, onClose, onInstalled }: {
+  notify: (message: string, error?: boolean) => void;
+  onClose: () => void;
+  onInstalled: () => void;
+}) {
+  useDialogEscape(onClose);
+  const [catalog, setCatalog] = useState<RecipesResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [details, setDetails] = useState("");
+  const [installing, setInstalling] = useState<{ id: string; name: string; download: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load(refresh = false) {
+    setLoading(true);
+    try {
+      setCatalog(await api<RecipesResponse>(`/api/profiles/recipes${refresh ? "?refresh=true" : ""}`));
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    api<RecipesResponse>("/api/profiles/recipes")
+      .then(setCatalog)
+      .catch((error: Error) => notify(error.message, true));
+  }, []);
+
+  function recipeJson(recipe: Recipe) {
+    return JSON.stringify(recipe, (key, value) => (key === "installed_ids" ? undefined : value), 2);
+  }
+
+  function downloadRecipe(recipe: Recipe) {
+    const url = URL.createObjectURL(new Blob([recipeJson(recipe)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `mydgx-recipe-${recipe.name.replace(RECIPE_PREFIX, "").replace(/[^A-Za-z0-9._-]+/g, "-").toLowerCase()}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function install() {
+    if (!installing) return;
+    setBusy(true);
+    try {
+      const result = await api<{ id: string; name: string; jobs: string[] }>(`/api/profiles/recipes/${encodeURIComponent(installing.id)}/install`, {
+        method: "POST",
+        body: JSON.stringify({ name: installing.name, download_models: installing.download }),
+      });
+      notify(result.jobs.length
+        ? t("{name} instalado · {count} descarga(s) en cola", { name: result.name, count: result.jobs.length })
+        : t("{name} instalado", { name: result.name }));
+      setInstalling(null);
+      onInstalled();
+      await load();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={t("Buscar recetas")} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <Card className="model-help-dialog recipes-dialog">
+      <SectionHeading
+        eyebrow={t("RECETAS DE MYDGX")}
+        title={t("Buscar recetas")}
+        action={<div className="dialog-heading-actions">
+          <button className="icon-button" disabled={loading} onClick={() => void load(true)} aria-label={t("Actualizar desde GitHub")} title={t("Actualizar desde GitHub")}><RefreshCw className={loading ? "spin" : ""} size={15} /></button>
+          <button className="icon-button" onClick={onClose} aria-label={t("Cerrar")}><X size={16} /></button>
+        </div>}
+      />
+      <p className="preflight-intro">{t("Perfiles medidos en un DGX Spark y publicados en GitHub. Al instalar una receta se crea un perfil normal que puedes renombrar y editar; los modelos se descargan ahora o más tarde desde la tarjeta del perfil.")}</p>
+      {catalog && (catalog.source === "github"
+        ? <p className="recipes-source">{t("Catálogo de GitHub · leído a las {time}", { time: new Date(catalog.fetched_at).toLocaleTimeString(locale) })}</p>
+        : <div className="profile-warning"><TriangleAlert size={15} />{t("No se pudo leer GitHub ({error}); se muestra la copia incluida en esta versión de MyDGX.", { error: catalog.error })}</div>)}
+      {!catalog
+        ? <p className="preflight-intro"><RefreshCw className="spin" size={14} />{" "}{t("Cargando recetas…")}</p>
+        : catalog.recipes.length === 0
+          ? <div className="profile-warning"><TriangleAlert size={15} />{t("No hay recetas publicadas.")}</div>
+          : <div className="recipes-list">
+            {catalog.recipes.map((recipe) => {
+              const models = [{ ...recipe, name: recipe.name }, ...recipe.additional_models.filter((model) => model.enabled !== false)];
+              const installed = recipe.installed_ids.length > 0;
+              const form = installing?.id === recipe.id ? installing : null;
+              return <article key={recipe.id} className="recipe-card">
+                <header>
+                  <ProfileName name={recipe.name} />
+                  <span className="recipe-meta">
+                    {installed && <span className="badge live">{t("Instalada")}</span>}
+                    <span className="badge">{t(models.length === 1 ? "{count} modelo" : "{count} modelos", { count: models.length })}</span>
+                    {recipe.memory_gib ? <span className="badge" title={t("Memoria medida con todos los modelos cargados")}>≈{recipe.memory_gib.toLocaleString(locale)} GiB</span> : null}
+                  </span>
+                </header>
+                <p>{recipe.description[language] || recipe.description.en || recipe.description.es || recipe.source}</p>
+                <ul className="recipe-models">
+                  {models.map((model, index) => {
+                    const identity = profileModelIdentity(model);
+                    return <li key={`${model.id || index}`}>
+                      <span className="profile-model-name">
+                        <strong title={identity.file || model.model_repo || model.model_ref}>{identity.name}</strong>
+                        <UncensoredBadge name={`${model.model_repo} ${identity.file}`} showKind />
+                      </span>
+                      <small>{[
+                        identity.quant,
+                        ["chat", "vision", "embeddings"].includes(model.task) ? `${(model.context_size / 1024).toLocaleString(locale)}K ctx` : "",
+                        model.cache_type_k ? `KV ${model.cache_type_k}` : "",
+                        model.spec_type ? SPEC_LABELS[model.spec_type] ?? model.spec_type : "",
+                        model.engine,
+                      ].filter(Boolean).join(" · ")}</small>
+                    </li>;
+                  })}
+                </ul>
+                {details === recipe.id && <pre className="recipe-json">{recipeJson(recipe)}</pre>}
+                {form
+                  ? <div className="recipe-install">
+                    <label><span>{t("Nombre del perfil")}</span><input value={form.name} maxLength={80} onChange={(event) => setInstalling({ ...form, name: event.target.value })} /></label>
+                    <label className="recipe-check"><input type="checkbox" checked={form.download} onChange={(event) => setInstalling({ ...form, download: event.target.checked })} />{t("Descargar también los modelos que falten")}</label>
+                    <div className="add-to-profile-actions">
+                      <button className="button secondary" disabled={busy} onClick={() => setInstalling(null)}>{t("Cancelar")}</button>
+                      <button className="button primary" disabled={busy || form.name.trim().length < 2} onClick={() => void install()}><Plus size={14} /> {busy ? t("Instalando…") : t("Instalar")}</button>
+                    </div>
+                  </div>
+                  : <div className="recipe-actions">
+                    <button className="button secondary" onClick={() => setDetails(details === recipe.id ? "" : recipe.id)}><Eye size={14} /> {details === recipe.id ? t("Ocultar detalles") : t("Ver detalles")}</button>
+                    <button className="button secondary" onClick={() => downloadRecipe(recipe)}><Download size={14} /> {t("Descargar JSON")}</button>
+                    <button className="button primary" onClick={() => setInstalling({ id: recipe.id, name: installed ? `${recipe.name} 2` : recipe.name, download: true })}><Plus size={14} /> {installed ? t("Instalar otra copia") : t("Instalar")}</button>
+                  </div>}
+              </article>;
+            })}
+          </div>}
+    </Card>
+  </div>;
+}
+
 function AddToProfileDialog({ request, notify, onClose }: {
   request: AddToProfileRequest;
   notify: (message: string, error?: boolean) => void;
@@ -4985,6 +5130,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   const [form, setForm] = useState(blank);
   const [editing, setEditing] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [recipesOpen, setRecipesOpen] = useState(false);
   const [formOpenRequest, setFormOpenRequest] = useState(0);
   const editorRef = useRef<HTMLDivElement>(null);
   const [analyzing, setAnalyzing] = useState(false);
@@ -5656,8 +5802,12 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       <SectionHeading
         eyebrow={t("CONFIGURACIONES DE INFERENCIA")}
         title={t("Perfiles")}
-        action={<button className="button primary" onClick={newProfile}><Rocket size={15} />{" "}{t("Nuevo perfil")}</button>}
+        action={<div className="dialog-heading-actions">
+          <button className="button secondary" onClick={() => setRecipesOpen(true)}><Search size={15} />{" "}{t("Buscar recetas")}</button>
+          <button className="button primary" onClick={newProfile}><Rocket size={15} />{" "}{t("Nuevo perfil")}</button>
+        </div>}
       />
+      {recipesOpen && <RecipesDialog notify={notify} onClose={() => setRecipesOpen(false)} onInstalled={() => load()} />}
       <div className="profile-summary">
         <Card><small>{t("Perfil predeterminado")}</small><strong>{data?.profiles.find((profile) => profile.active)?.name ?? t("Sin seleccionar")}</strong></Card>
         <Card><small>{t("Runtime")}</small><strong>{data?.runtime.running ? t("{loaded}/{max} perfiles o modelos Quick{extra} · {runningModels} modelo(s)", { loaded: data.runtime.llm_slots, max: data.runtime.max_llm_slots, extra: (data.runtime.profile_ids ?? []).includes("mydgx-default") ? " + Default" : "", runningModels: data.runtime.running_models }) : t("Detenido")}</strong></Card>

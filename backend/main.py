@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     trusted_hosts: str = ""
     profile_apps_root: str = ""
     profile_apps: str = ""
+    mydgx_recipes_url: str = "https://raw.githubusercontent.com/yadox666/MyDGX/main/config/recipes.json"
     database_path: str = str(ROOT / "data" / "mydgx.db")
     metrics_interval_seconds: int = 5
     metrics_retention_hours: int = 168
@@ -2293,12 +2294,26 @@ SEED_DISMISSED_KEY = "profiles.seed_dismissed"
 ARTIFEX_PROFILE_IDS = frozenset(preset["id"] for preset in ARTIFEX_PROFILES)
 
 
+RECIPES_PATH = ROOT / "config" / "recipes.json"
+RECIPE_ONLY_KEYS = ("id", "description", "memory_gib")
+
+
+def local_recipes() -> list[dict[str, Any]]:
+    try:
+        catalog = json.loads(RECIPES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    recipes = catalog.get("recipes") if isinstance(catalog, dict) and catalog.get("version") == 1 else None
+    return [item for item in recipes or [] if isinstance(item, dict) and item.get("id")]
+
+
 def default_catalog_profile_ids() -> set[str]:
     try:
         catalog = json.loads((ROOT / "config" / "default-profiles.json").read_text(encoding="utf-8"))
-        return {str(item.get("id")) for item in catalog.get("profiles", []) if isinstance(item, dict) and item.get("id")}
+        ids = {str(item.get("id")) for item in catalog.get("profiles", []) if isinstance(item, dict) and item.get("id")}
     except (OSError, json.JSONDecodeError, AttributeError):
-        return set()
+        ids = set()
+    return ids | {str(item["id"]) for item in local_recipes()}
 
 
 def dismissed_seed_profiles() -> set[str]:
@@ -11440,8 +11455,12 @@ def seed_default_profiles() -> None:
     now = utc_now()
     statement = PROFILE_INSERT_SQL.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
     existing = {str(row["id"]) for row in db.rows("SELECT id FROM profiles")} | dismissed_seed_profiles()
+    recipes = [
+        {key: item for key, item in recipe.items() if key not in RECIPE_ONLY_KEYS[1:]}
+        for recipe in local_recipes()
+    ]
     with db.connect() as connection:
-        for value in catalog["profiles"]:
+        for value in [*catalog["profiles"], *recipes]:
             if not isinstance(value, dict):
                 raise RuntimeError("El catálogo contiene un perfil no válido")
             profile_id = str(value.get("id") or "")
@@ -11526,6 +11545,114 @@ async def profiles() -> dict[str, Any]:
         "llama_cpp_available": bool(llama_binary()),
         "apps": profile_apps_overview(),
     }
+
+
+RECIPES_MAX_BYTES = 1_000_000
+RECIPES_CACHE_SECONDS = 300
+_recipes_cache: dict[str, Any] = {}
+
+
+def recipe_profile_payload(recipe: dict[str, Any], name: str | None = None) -> ProfilePayload:
+    values = {key: item for key, item in recipe.items() if key not in RECIPE_ONLY_KEYS}
+    if name:
+        values["name"] = name
+    return ProfilePayload.model_validate(values)
+
+
+def valid_recipes(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, dict) or values.get("version") != 1 or not isinstance(values.get("recipes"), list):
+        raise ValueError("El catálogo de recetas no es válido")
+    recipes: list[dict[str, Any]] = []
+    for recipe in values["recipes"]:
+        if not isinstance(recipe, dict) or not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", str(recipe.get("id") or "")):
+            continue
+        try:
+            recipe_profile_payload(recipe)
+        except ValueError:
+            continue
+        description = recipe.get("description")
+        recipes.append({
+            **recipe,
+            "description": {lang: str(text)[:2000] for lang, text in description.items() if lang in {"es", "en"}}
+            if isinstance(description, dict) else {},
+        })
+    return recipes
+
+
+async def load_recipes(refresh: bool = False) -> dict[str, Any]:
+    if not refresh and _recipes_cache and time.monotonic() - _recipes_cache["at"] < RECIPES_CACHE_SECONDS:
+        return _recipes_cache["value"]
+    url = settings.mydgx_recipes_url
+    error = ""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or parsed.hostname != "raw.githubusercontent.com":
+            raise ValueError("El origen de las recetas debe ser raw.githubusercontent.com")
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                content = b""
+                async for chunk in response.aiter_bytes():
+                    content += chunk
+                    if len(content) > RECIPES_MAX_BYTES:
+                        raise ValueError("El catálogo de recetas supera 1 MB")
+        value = {"source": "github", "url": url, "error": "", "recipes": valid_recipes(json.loads(content))}
+    except (httpx.HTTPError, ValueError) as exc:
+        error = str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}: GitHub no disponible"
+        value = {"source": "local", "url": url, "error": error, "recipes": valid_recipes({"version": 1, "recipes": local_recipes()})}
+    value["fetched_at"] = utc_now()
+    _recipes_cache.update({"at": time.monotonic(), "value": value})
+    return value
+
+
+@app.get("/api/profiles/recipes", dependencies=secure)
+async def profile_recipes(refresh: bool = False) -> dict[str, Any]:
+    catalog = await load_recipes(refresh)
+    rows = db.rows("SELECT id,name FROM profiles")
+    return {
+        **catalog,
+        "recipes": [
+            {**recipe, "installed_ids": [row["id"] for row in rows if row["id"] == recipe["id"] or row["name"] == recipe.get("name")]}
+            for recipe in catalog["recipes"]
+        ],
+    }
+
+
+class RecipeInstallPayload(BaseModel):
+    name: str = Field(default="", max_length=80)
+    download_models: bool = False
+
+
+@app.post("/api/profiles/recipes/{recipe_id}/install", dependencies=secure)
+async def install_profile_recipe(recipe_id: str, payload: RecipeInstallPayload, background: BackgroundTasks) -> dict[str, Any]:
+    recipe = next((item for item in (await load_recipes())["recipes"] if item["id"] == recipe_id), None)
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="Receta no encontrada")
+    try:
+        profile = recipe_profile_payload(recipe, payload.name.strip() or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="El nombre o la receta no son válidos") from exc
+    assign_profile_ports(profile, None)
+    validate_profile(profile)
+    profile_id = recipe_id if not db.rows("SELECT id FROM profiles WHERE id=?", (recipe_id,)) else str(uuid.uuid4())
+    try:
+        db.execute(PROFILE_INSERT_SQL, profile_values(profile_id, profile, utc_now()))
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Ya existe un perfil con ese nombre") from exc
+    db.execute("UPDATE profiles SET app=?,port_auto=? WHERE id=?", (profile.app, int(profile.port_auto), profile_id))
+    db.audit("profile.recipe.install", profile.name, True, recipe_id)
+    jobs: list[str] = []
+    if payload.download_models:
+        row = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))[0]
+        for model in profile_models(row):
+            if model["engine"] != "llama.cpp" or not model.get("model_repo") or profile_model_is_downloaded(model):
+                continue
+            model["_profile_id"] = profile_id
+            model["_is_additional"] = model["id"] != "primary"
+            job_id = db.create_job("profile.download", model["name"])
+            background.add_task(download_profile_models, job_id, model)
+            jobs.append(job_id)
+    return {"id": profile_id, "name": profile.name, "jobs": jobs}
 
 
 @app.post("/api/profiles", dependencies=secure)

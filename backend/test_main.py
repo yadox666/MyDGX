@@ -6601,6 +6601,42 @@ class ProfileApiTests(unittest.TestCase):
         finally:
             db.path = original_path
 
+    def test_recipes_fall_back_to_the_local_catalog_and_install_as_new_profiles(self) -> None:
+        from fastapi import BackgroundTasks
+
+        local = main_module.local_recipes()
+        self.assertEqual(len(main_module.valid_recipes({"version": 1, "recipes": local})), len(local))
+        self.assertTrue(all(recipe["description"].get("es") and recipe["description"].get("en") for recipe in local))
+        self.assertEqual(main_module.valid_recipes({"version": 1, "recipes": [{"id": "../x", "name": "Mala"}]}), [])
+        original_path = db.path
+        main_module._recipes_cache.clear()
+        try:
+            with tempfile.TemporaryDirectory() as directory, patch.object(
+                main_module.httpx.AsyncClient, "stream", side_effect=httpx.ConnectError("offline"),
+            ):
+                db.path = Path(directory) / "recipes.db"
+                db.initialize()
+                catalog = asyncio.run(main_module.load_recipes(refresh=True))
+                self.assertEqual(catalog["source"], "local")
+                recipe = catalog["recipes"][0]
+                payload = main_module.RecipeInstallPayload()
+                first = asyncio.run(main_module.install_profile_recipe(recipe["id"], payload, BackgroundTasks()))
+                self.assertEqual(first["id"], recipe["id"])
+                with self.assertRaises(HTTPException) as duplicate:
+                    asyncio.run(main_module.install_profile_recipe(recipe["id"], payload, BackgroundTasks()))
+                self.assertEqual(duplicate.exception.status_code, 409)
+                copy = asyncio.run(main_module.install_profile_recipe(
+                    recipe["id"], main_module.RecipeInstallPayload(name="Mi receta"), BackgroundTasks(),
+                ))
+                self.assertNotEqual(copy["id"], recipe["id"])
+                row = db.rows("SELECT name,model_file,spec_type FROM profiles WHERE id=?", (copy["id"],))[0]
+                self.assertEqual((row["name"], row["model_file"]), ("Mi receta", ""))
+                listed = asyncio.run(main_module.profile_recipes())
+                self.assertEqual(listed["recipes"][0]["installed_ids"], [recipe["id"]])
+        finally:
+            db.path = original_path
+            main_module._recipes_cache.clear()
+
     def test_recovered_default_profiles_are_seeded_once_without_overwriting(self) -> None:
         original_path = db.path
         with tempfile.TemporaryDirectory() as directory:

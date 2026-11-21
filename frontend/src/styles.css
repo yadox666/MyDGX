@@ -1903,6 +1903,27 @@ select { height: 34px; min-width: 170px; padding: 0 30px 0 10px; }
 .stop-all-button:disabled { opacity: .65; cursor: progress; }
 
 .add-to-profile-dialog { width: min(560px, calc(100vw - 32px)); }
+.recipes-dialog { width: min(860px, calc(100vw - 32px)); }
+.recipes-source { margin: 0 0 10px; color: var(--text-muted); font-size: calc(12px * var(--font-scale)); }
+.recipes-list { display: grid; gap: 12px; margin-top: 12px; }
+.recipe-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
+.recipe-card > header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.recipe-card > header .profile-name { font-size: calc(15px * var(--font-scale)); }
+.recipe-card > p { margin: 0; color: var(--text-secondary); line-height: 1.45; }
+.recipe-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.recipe-meta .badge { padding: 3px 8px; font-size: calc(11px * var(--font-scale)); }
+.recipe-models { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
+.recipe-models li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.recipe-models .profile-model-name { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.recipe-models strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(13px * var(--font-scale)); }
+.recipe-models .badge { flex: none; padding: 2px 7px; font-size: calc(10px * var(--font-scale)); }
+.recipe-models small { color: var(--text-muted); font-size: calc(12px * var(--font-scale)); text-align: right; }
+.recipe-json { max-height: 280px; margin: 0; padding: 10px; overflow: auto; border-radius: 8px; background: var(--surface); font-size: calc(11px * var(--font-scale)); }
+.recipe-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.recipe-install { display: grid; gap: 8px; }
+.recipe-install label { display: grid; gap: 4px; font-weight: 600; }
+.recipe-install label.recipe-check { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+@media (max-width: 640px) { .recipe-models li { grid-template-columns: 1fr; } .recipe-models small { text-align: left; } }
 .add-to-profile-list { display: grid; gap: 8px; margin: 12px 0; max-height: 320px; overflow-y: auto; }
 .add-to-profile-list label { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
 .add-to-profile-list label.selected { border-color: var(--accent); background: var(--accent-soft); }

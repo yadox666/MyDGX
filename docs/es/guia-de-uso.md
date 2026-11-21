@@ -238,6 +238,25 @@ de descarga, plan de memoria y, si tiene, la app asociada.
   *Modelos*. Default no cuenta para el límite de dos cargados; cada modelo de
   chat o visión encendido en Quick ocupa una de esas dos plazas.
 
+### Recetas
+
+Una receta es un perfil medido en un DGX Spark y publicado en GitHub, en
+`config/recipes.json`. En la página se muestra con un badge azul *RECIPE*.
+
+- **Buscar recetas**, junto a *Nuevo perfil*, lee el catálogo actual de GitHub.
+  Si no hay conexión, muestra la copia incluida en tu versión de MyDGX.
+- Cada receta muestra su descripción, sus modelos (cuantización, contexto,
+  KV, MTP y si es uncensored) y la memoria medida con todo cargado.
+- *Ver detalles* enseña la receta completa en JSON y *Descargar JSON* la
+  guarda en tu equipo.
+- *Instalar* crea un perfil normal con el nombre que elijas, y puede poner en
+  cola la descarga de los modelos que falten, drafters MTP incluidos. Después
+  se edita como cualquier otro perfil.
+
+Las instalaciones nuevas reciben las recetas de la copia local al arrancar.
+La URL del catálogo se cambia con `MYDGX_RECIPES_URL` y solo se acepta
+`raw.githubusercontent.com`.
+
 ### App del perfil
 
 Una app es un directorio con un `start.sh` que acepta `start`, `stop`, `restart`

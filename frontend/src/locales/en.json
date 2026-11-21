@@ -1068,6 +1068,8 @@
   "Predeterminado (F16)": "Default (F16)",
   "MTP · Multi-Token Prediction": "MTP · Multi-Token Prediction",
   "Capas extra que proponen varios tokens por adelantado; el modelo los valida y la generación se acelera. Pueden venir dentro del GGUF o en un archivo aparte (mtp-*.gguf) que se descarga junto al modelo. MyDGX lo detecta y lo activa en el perfil; si falta el archivo, arranca sin él.": "Extra layers that propose several tokens ahead; the model checks them and generation speeds up. They can be built into the GGUF or come as a separate file (mtp-*.gguf) downloaded next to the model. MyDGX detects it and turns it on in the profile; if the file is missing, the profile starts without it.",
+  "Drafter · modelo borrador": "Drafter · draft model",
+  "El modelo pequeño que propone tokens en la decodificación especulativa. Puede ser un archivo aparte (mtp-*.gguf, DFlash, EAGLE3 o un modelo pequeño de la misma familia) o venir dentro del GGUF. Debe compartir vocabulario con el modelo principal, y los MTP solo sirven para el modelo con el que se entrenaron. Ocupa algo de memoria extra y en llama.cpp no se combina con visión (mmproj).": "The small model that proposes tokens in speculative decoding. It can be a separate file (mtp-*.gguf, DFlash, EAGLE3 or a small model from the same family) or be built into the GGUF. It must share the main model's vocabulary, and MTP drafters only work with the model they were trained for. It takes some extra memory, and llama.cpp doesn't combine it with vision (mmproj).",
   "Pregunta a {activeLabel}": "Ask {activeLabel}",
   "Pregunta o administra tu MyDGX": "Ask about or manage your MyDGX",
   "Preparando la suite": "Preparing the suite",

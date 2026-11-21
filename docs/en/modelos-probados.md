@@ -150,6 +150,7 @@ before downloading it.</sub>
 | **Parameters (B)** | Billions of "connections" in the model. 3B is small; 70B or more, large. |
 | **MoE** | *Mixture of Experts*: the model has many "experts" and only uses a few for each word. Fast even when it's huge. |
 | **Speculative decoding** | A small model (the *drafter*) proposes several tokens and the big one checks them in one pass. When it guesses right, the answer comes out faster with the same quality. |
+| **Drafter** | The small model that proposes the tokens. It must share the main model's vocabulary (Qwen3-Coder-Next, for example, has no compatible drafter installed), and MTP drafters only work with the model they were trained for. In llama.cpp it doesn't combine with vision (`mmproj`), so MyDGX picks the drafter unless you ask for vision. |
 | **MTP** | *Multi-Token Prediction*: a drafter built into the GGUF or shipped as a separate file (`mtp-*.gguf`). On the Spark, BugHunter v7 goes from 13 to 31 tok/s with its own and Cyber-Tiel Q5 from 64 to 90 tok/s. MyDGX only turns it on when it finds the drafter. |
 | **Quantization** | Model compression. `Q8_0` ≈ original; `Q6_K` very good; `Q4` a good balance; `IQ2`/`IQ3` heavy compression so giant models fit. |
 | **GGUF** | The file format llama.cpp uses. It's the one that works best on the Spark. |

@@ -150,6 +150,7 @@ antes de descargarlo.</sub>
 | **Parámetros (B)** | Miles de millones de "conexiones" del modelo. 3B es pequeño; 70B o más, grande. |
 | **MoE** | *Mixture of Experts*: el modelo tiene muchos "expertos" y en cada palabra solo usa unos pocos. Rápido aunque sea enorme. |
 | **Decodificación especulativa** | Un modelo pequeño (*drafter*) propone varios tokens y el grande los comprueba de una vez. Si acierta, la respuesta sale más rápido sin cambiar su calidad. |
+| **Drafter** | El modelo pequeño que propone los tokens. Debe compartir vocabulario con el principal (Qwen3-Coder-Next, por ejemplo, no tiene ninguno compatible instalado) y los MTP solo sirven para el modelo con el que se entrenaron. En llama.cpp no se combina con visión (`mmproj`), así que MyDGX elige el drafter salvo que pidas visión. |
 | **MTP** | *Multi-Token Prediction*: un drafter que viene dentro del GGUF o en un archivo aparte (`mtp-*.gguf`). En el Spark, BugHunter v7 pasa de 13 a 31 tok/s con el suyo y Cyber-Tiel Q5 de 64 a 90 tok/s. MyDGX lo activa solo si encuentra el drafter. |
 | **Cuantización** | Compresión del modelo. `Q8_0` ≈ original; `Q6_K` muy bueno; `Q4` buen equilibrio; `IQ2`/`IQ3` mucha compresión para que quepan modelos gigantes. |
 | **GGUF** | Formato de archivo que usa llama.cpp. Es el que mejor funciona en el Spark. |

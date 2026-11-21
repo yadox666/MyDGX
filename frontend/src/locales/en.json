@@ -1841,5 +1841,6 @@
   "llama.cpp no combina visión y especulativa; se descarga el drafter. Añade el mmproj desde Detalles si quieres imágenes.": "llama.cpp does not combine vision with speculative decoding, so the drafter is downloaded. Add the mmproj from Details if you want images.",
   "Opcional": "Optional",
   "alias {alias}": "alias {alias}",
-  "visión": "vision"
+  "visión": "vision",
+  "Receta de MyDGX: perfil medido que se instala con MyDGX y descarga sus modelos al pedirlo": "MyDGX recipe: a measured profile that ships with MyDGX and downloads its models on request"
 }

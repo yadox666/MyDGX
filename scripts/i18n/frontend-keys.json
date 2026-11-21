@@ -1826,5 +1826,6 @@
   "llama.cpp no combina visión y especulativa; se descarga el drafter. Añade el mmproj desde Detalles si quieres imágenes.",
   "Opcional",
   "alias {alias}",
-  "visión"
+  "visión",
+  "Receta de MyDGX: perfil medido que se instala con MyDGX y descarga sus modelos al pedirlo"
 ]

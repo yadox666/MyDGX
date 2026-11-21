@@ -493,6 +493,16 @@ function UncensoredBadge({ name, flagged = false, showKind = false }: { name: st
   return <span className="badge uncensored" title={t("Modelo sin filtros de seguridad (uncensored, abliterated o similar), según su nombre o las etiquetas y el modelo base de su ficha")}>{kind ?? t("Uncensored")}</span>;
 }
 
+const RECIPE_PREFIX = /^RECIPE\s*[·:-]\s*/i;
+
+function ProfileName({ name, as: Tag = "strong" }: { name: string; as?: "strong" | "b" }) {
+  const label = name.replace(RECIPE_PREFIX, "");
+  return <Tag className="profile-name" title={name}>
+    {label !== name && <span className="badge recipe" title={t("Receta de MyDGX: perfil medido que se instala con MyDGX y descarga sus modelos al pedirlo")}>RECIPE</span>}
+    {label}
+  </Tag>;
+}
+
 type ModelGlossaryEntry = {
   id: string;
   term: string;
@@ -1147,7 +1157,7 @@ function AddToProfileDialog({ request, notify, onClose }: {
               return <label key={profile.id} className={`${selected === profile.id ? "selected" : ""} ${already ? "disabled" : ""}`}>
                 <input type="radio" name="add-to-profile" value={profile.id} checked={selected === profile.id} disabled={already} onChange={() => setSelected(profile.id)} />
                 <span>
-                  <strong>{profile.name}</strong>
+                  <ProfileName name={profile.name} />
                   <small>{already ? t("Ya contiene este modelo") : t(profile.models.length === 1 ? "{count} modelo · {engine}{suffix}" : "{count} modelos · {engine}{suffix}", { count: profile.models.length, engine: profile.engine, suffix: profile.active ? t(" · predeterminado") : "" })}</small>
                 </span>
               </label>;
@@ -5512,7 +5522,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       <Card className={`profile-card ${profile.active ? "active" : ""} ${running ? "running" : ""}`} key={profile.id}>
         <div className="profile-card-head">
           <div className="model-icon"><SlidersHorizontal /></div>
-          <div><strong title={profile.name}>{profile.name}</strong><small title={`${profile.engine} · ${profile.task} · ${profile.model_repo || profile.model_ref}`}>{profile.engine} · {profile.task} · {profile.model_repo || profile.model_ref}</small></div>
+          <div><ProfileName name={profile.name} /><small title={`${profile.engine} · ${profile.task} · ${profile.model_repo || profile.model_ref}`}>{profile.engine} · {profile.task} · {profile.model_repo || profile.model_ref}</small></div>
           <div className="profile-badges">
             {profile.source.startsWith("ARTIFEX") ? <span className="badge">ARTIFEX</span> : null}
             {profile.read_only ? <span className="badge" title={profile.id === QUICK_PROFILE_ID ? t("Modelos encendidos desde Modelos; no se restaura al reiniciar") : t("Modelos marcados como Default en Modelos; arranca siempre con MyDGX")}>{t("Solo lectura")}</span> : null}
@@ -9140,7 +9150,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
                   <div key={profile.id}>
                     <span>
                       <SlidersHorizontal size={11} />
-                      <b>{profile.name}</b>
+                      <ProfileName name={profile.name} as="b" />
                       {profile.app ? <em><Rocket size={10} /> {profile.app}</em> : null}
                     </span>
                     {(profile.models ?? []).map((model) => <i key={model} title={model}>{model}</i>)}

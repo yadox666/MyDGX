@@ -2089,6 +2089,9 @@ class SpeculativeDecodingTests(unittest.TestCase):
                 main_module.speculative_args("llama-server", {"spec_type": "draft-mtp"}),
                 ["--spec-type", "draft-mtp"],
             )
+            self.assertEqual(main_module.speculative_args("llama-server", {
+                "spec_type": "draft-mtp", "draft_filename": "mtp-Model.gguf",
+            }), [])
         with patch.object(main_module, "llama_supports_flag", return_value=False):
             self.assertEqual(main_module.speculative_args("llama-server", model), [])
 

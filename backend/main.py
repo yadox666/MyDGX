@@ -2230,18 +2230,20 @@ ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
         "id": "artifex-tiel-q5", "name": "ARTIFEX · Cyber-Tiel Q5", "model_ref": "bughunter-tiel",
         "repo": "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF",
         "files": ["Cyber-Tiel-Coder-35B-A3B-UD-Q5_K_XL.gguf"], "port": 18081,
-        "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
+        "context": 262144, "parallel": 1, "batch": 2048, "ubatch": 512,
         "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0,
         "cache_k": "q8_0", "cache_v": "q8_0", "memory": 40960,
+        "spec": "draft-mtp", "draft": "mtp-Cyber-Tiel-Coder-35B-A3B.gguf",
         "runtime": LLAMA_CPP_RUNTIME,
     },
     {
         "id": "artifex-tiel-q6", "name": "ARTIFEX · Cyber-Tiel Q6", "model_ref": "bughunter-tiel",
         "repo": "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF",
         "files": ["Cyber-Tiel-Coder-35B-A3B-UD-Q6_K_XL.gguf"], "port": 18081,
-        "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
+        "context": 262144, "parallel": 1, "batch": 2048, "ubatch": 512,
         "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0,
         "cache_k": "q8_0", "cache_v": "q8_0", "memory": 49152,
+        "spec": "draft-mtp", "draft": "mtp-Cyber-Tiel-Coder-35B-A3B.gguf",
         "runtime": LLAMA_CPP_RUNTIME,
     },
     {
@@ -2250,7 +2252,7 @@ ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
         "files": ["Qwen3.8-27B-Uncensored.Q4_K_M.gguf"], "port": 18080,
         "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
         "temperature": 0.1, "top_p": 0.9, "top_k": 0, "min_p": 0,
-        "cache_k": "", "cache_v": "", "memory": 40960,
+        "cache_k": "", "cache_v": "", "memory": 40960, "spec": "draft-mtp",
         "runtime": LLAMA_CPP_RUNTIME,
     },
     {
@@ -2327,8 +2329,9 @@ def seed_artifex_profiles() -> None:
                 model_alias,port,context_size,gpu_layers,threads,parallel,batch_size,ubatch_size,
                 temperature,top_p,top_k,min_p,repeat_penalty,presence_penalty,flash_attention,
                 cache_type_k,cache_type_v,reasoning_off,reasoning_effort,kv_unified_per_slot,
-                jinja,min_free_memory_mb,source,runtime_requirement,active,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                jinja,min_free_memory_mb,source,runtime_requirement,spec_type,draft_filename,
+                active,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 preset["id"], preset["name"], "llama.cpp", preset["model_ref"], "",
@@ -2338,7 +2341,8 @@ def seed_artifex_profiles() -> None:
                 preset.get("presence", 0), 1, preset["cache_k"], preset["cache_v"],
                 preset.get("reasoning_off", 1), preset.get("reasoning_effort", ""),
                 preset.get("kv_unified", 1), 1, preset["memory"],
-                "ARTIFEX gpu/remote/start_server.sh", preset["runtime"], 0, now, now,
+                "ARTIFEX gpu/remote/start_server.sh", preset["runtime"],
+                preset.get("spec", ""), preset.get("draft", ""), 0, now, now,
             ),
         )
     for legacy in LEGACY_LLAMA_CPP_LABELS:
@@ -3172,7 +3176,7 @@ def speculative_args(binary: str, model: dict[str, Any]) -> list[str]:
     if spec not in SPEC_TYPES or not llama_supports_flag(binary, "--spec-type"):
         return []
     draft = resolve_draft_file(model)
-    if draft is None and spec != "draft-mtp":
+    if draft is None and (spec != "draft-mtp" or model.get("draft_filename")):
         return []
     args = ["--spec-type", spec]
     if draft is not None:

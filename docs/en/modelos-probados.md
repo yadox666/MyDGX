@@ -149,6 +149,8 @@ before downloading it.</sub>
 | **Token** | A piece of text, roughly half a word. We read at about 5–8 tokens per second. |
 | **Parameters (B)** | Billions of "connections" in the model. 3B is small; 70B or more, large. |
 | **MoE** | *Mixture of Experts*: the model has many "experts" and only uses a few for each word. Fast even when it's huge. |
+| **Speculative decoding** | A small model (the *drafter*) proposes several tokens and the big one checks them in one pass. When it guesses right, the answer comes out faster with the same quality. |
+| **MTP** | *Multi-Token Prediction*: a drafter built into the GGUF or shipped as a separate file (`mtp-*.gguf`). On the Spark, BugHunter v7 goes from 13 to 31 tok/s with its own and Cyber-Tiel Q5 from 64 to 90 tok/s. MyDGX only turns it on when it finds the drafter. |
 | **Quantization** | Model compression. `Q8_0` ≈ original; `Q6_K` very good; `Q4` a good balance; `IQ2`/`IQ3` heavy compression so giant models fit. |
 | **GGUF** | The file format llama.cpp uses. It's the one that works best on the Spark. |
 | **Ollama / Hugging Face** | Two places to download models from. MyDGX manages both from *Models*. |

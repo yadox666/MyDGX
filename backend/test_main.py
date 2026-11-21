@@ -6609,6 +6609,12 @@ class ProfileApiTests(unittest.TestCase):
         self.assertTrue(all(recipe["description"].get("es") and recipe["description"].get("en") for recipe in local))
         self.assertTrue(all(isinstance(recipe.get("version"), int) and recipe["version"] >= 1 for recipe in local))
         self.assertEqual(main_module.valid_recipes({"version": 1, "recipes": [{"id": "../x", "name": "Mala"}]}), [])
+        self.assertTrue(all(
+            recipe["categories"] and set(recipe["categories"]) <= set(main_module.RECIPE_CATEGORIES)
+            for recipe in local
+        ))
+        tagged = main_module.valid_recipes({"version": 1, "recipes": [{**local[0], "categories": ["video", "hack", "text"]}]})
+        self.assertEqual(tagged[0]["categories"], ["text", "video"])
         original_path = db.path
         main_module._recipes_cache.clear()
         try:

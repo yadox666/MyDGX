@@ -1922,6 +1922,17 @@ select { height: 34px; min-width: 170px; padding: 0 30px 0 10px; }
 .recipe-changelog { margin: 0; color: var(--text-muted); font-size: calc(12px * var(--font-scale)); }
 .recipe-version { font-variant-numeric: tabular-nums; }
 .recipes-tab { display: grid; gap: 14px; }
+.category-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.category-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; color: var(--category); border: 1px solid color-mix(in srgb, var(--category) 35%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--category) 10%, transparent); font-size: calc(11px * var(--font-scale)); font-weight: 650; line-height: 1.4; }
+.recipe-card > .category-badges { margin-top: -4px; }
+.category-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.category-filters button { --category: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: calc(12px * var(--font-scale)); font-weight: 600; cursor: pointer; }
+.category-filters button svg { color: var(--category); }
+.category-filters button b { min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--surface-soft); font-size: calc(11px * var(--font-scale)); text-align: center; }
+.category-filters button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--category) 50%, var(--border)); }
+.category-filters button.active { color: var(--category); border-color: var(--category); background: color-mix(in srgb, var(--category) 12%, var(--surface)); }
+.category-filters button:first-child.active { color: var(--text); border-color: var(--text); }
+.category-filters button:disabled { opacity: .45; cursor: default; }
 .recipes-hero { background: radial-gradient(circle at 0 0, color-mix(in srgb, var(--blue) 18%, transparent), transparent 55%), var(--surface); }
 .recipes-hero .ollama-hero-icon { background: var(--blue); color: #fff; }
 .recipes-hero .recipes-source, .recipes-hero .profile-warning { margin: 0; }

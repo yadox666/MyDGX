@@ -2297,7 +2297,8 @@ ARTIFEX_PROFILE_IDS = frozenset(preset["id"] for preset in ARTIFEX_PROFILES)
 
 
 RECIPES_PATH = ROOT / "config" / "recipes.json"
-RECIPE_ONLY_KEYS = ("id", "description", "memory_gib", "version", "changelog")
+RECIPE_ONLY_KEYS = ("id", "description", "memory_gib", "version", "changelog", "categories")
+RECIPE_CATEGORIES = ("text", "code", "vision", "embeddings", "image", "video", "audio")
 
 
 def local_recipes() -> list[dict[str, Any]]:
@@ -11673,7 +11674,12 @@ def valid_recipes(values: Any) -> list[dict[str, Any]]:
             if isinstance(recipe.get(key), dict) else {}
             for key in ("description", "changelog")
         }
-        recipes.append({**recipe, **texts, "version": recipe_version(recipe)})
+        categories = recipe.get("categories") if isinstance(recipe.get("categories"), list) else []
+        recipes.append({
+            **recipe, **texts,
+            "version": recipe_version(recipe),
+            "categories": [key for key in RECIPE_CATEGORIES if key in categories],
+        })
     return recipes
 
 

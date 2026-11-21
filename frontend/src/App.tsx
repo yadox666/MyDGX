@@ -1096,7 +1096,13 @@ type Recipe = ProfileModel & {
   installed_version: number;
   missing_models: string[];
   running: boolean;
+  categories?: ModelCategoryKey[];
 };
+
+function recipeCategories(recipe: Recipe): ModelCategoryKey[] {
+  const declared = (recipe.categories ?? []).filter((key) => key in MODEL_CATEGORIES);
+  return declared.length ? declared : profileCategories([recipe, ...recipe.additional_models]);
+}
 
 type RecipesResponse = { source: "github" | "local"; url: string; error: string; fetched_at: string; recipes: Recipe[] };
 
@@ -1120,6 +1126,7 @@ function RecipesBrowser({ notify, onInstalled, onClose, activeDownloads = 0 }: {
   activeDownloads?: number;
 }) {
   const inTab = !onClose;
+  const [category, setCategory] = useState<ModelCategoryKey | "all">("all");
   const [catalog, setCatalog] = useState<RecipesResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [details, setDetails] = useState("");
@@ -1211,6 +1218,24 @@ function RecipesBrowser({ notify, onInstalled, onClose, activeDownloads = 0 }: {
   const source = catalog && (catalog.source === "github"
     ? <p className="recipes-source">{t("Catálogo de GitHub · leído a las {time}", { time: new Date(catalog.fetched_at).toLocaleTimeString(locale) })}</p>
     : <div className="profile-warning"><TriangleAlert size={15} />{t("No se pudo leer GitHub ({error}); se muestra la copia incluida en esta versión de MyDGX.", { error: catalog.error })}</div>);
+  const categoryCounts = Object.fromEntries(MODEL_CATEGORY_KEYS.map((key) => [
+    key, catalog?.recipes.filter((recipe) => recipeCategories(recipe).includes(key)).length ?? 0,
+  ])) as Record<ModelCategoryKey, number>;
+  const visibleRecipes = catalog?.recipes.filter((recipe) => category === "all" || recipeCategories(recipe).includes(category)) ?? [];
+  const filters = catalog && catalog.recipes.length > 0 && <div className="category-filters" role="toolbar" aria-label={t("Filtrar por categoría")}>
+    <button className={category === "all" ? "active" : ""} aria-pressed={category === "all"} onClick={() => setCategory("all")}>{t("Todas")}<b>{catalog.recipes.length}</b></button>
+    {MODEL_CATEGORY_KEYS.map((key) => {
+      const { label, icon: Icon, color } = MODEL_CATEGORIES[key];
+      return <button
+        key={key}
+        className={category === key ? "active" : ""}
+        aria-pressed={category === key}
+        disabled={!categoryCounts[key]}
+        style={{ "--category": color } as CSSProperties}
+        onClick={() => setCategory(category === key ? "all" : key)}
+      ><Icon size={13} />{label}<b>{categoryCounts[key]}</b></button>;
+    })}
+  </div>;
   const installedCount = catalog?.recipes.filter((recipe) => recipe.installed_version > 0).length ?? 0;
   const updatesCount = catalog?.recipes.filter((recipe) => recipe.installed_version > 0 && recipe.installed_version !== recipe.version).length ?? 0;
 
@@ -1250,8 +1275,10 @@ function RecipesBrowser({ notify, onInstalled, onClose, activeDownloads = 0 }: {
         ? <p className="preflight-intro"><RefreshCw className="spin" size={14} />{" "}{t("Cargando recetas…")}</p>
         : catalog.recipes.length === 0
           ? <div className="profile-warning"><TriangleAlert size={15} />{t("No hay recetas publicadas.")}</div>
-          : <div className={`recipes-list ${inTab ? "recipes-grid" : ""}`}>
-            {catalog.recipes.map((recipe) => {
+          : <>{filters}{visibleRecipes.length === 0
+            ? <div className="profile-warning"><TriangleAlert size={15} />{t("Ninguna receta en esta categoría.")}</div>
+            : <div className={`recipes-list ${inTab ? "recipes-grid" : ""}`}>
+            {visibleRecipes.map((recipe) => {
               const models = [{ ...recipe, name: recipe.name }, ...recipe.additional_models.filter((model) => model.enabled !== false)];
               const installed = recipe.installed_version > 0;
               const nameTaken = !installed && recipe.installed_ids.length > 0;
@@ -1271,6 +1298,7 @@ function RecipesBrowser({ notify, onInstalled, onClose, activeDownloads = 0 }: {
                     {recipe.memory_gib ? <span className="badge" title={t("Memoria medida con todos los modelos cargados")}>≈{recipe.memory_gib.toLocaleString(locale)} GiB</span> : null}
                   </span>
                 </header>
+                <CategoryBadges categories={recipeCategories(recipe)} />
                 <p>{recipe.description[language] || recipe.description.en || recipe.description.es || recipe.source}</p>
                 {changelog && <p className="recipe-changelog"><b>v{recipe.version}</b> · {changelog}</p>}
                 <ul className="recipe-models">
@@ -1314,7 +1342,7 @@ function RecipesBrowser({ notify, onInstalled, onClose, activeDownloads = 0 }: {
                   </div>}
               </article>;
             })}
-          </div>}
+          </div>}</>}
   </>;
 }
 
@@ -2442,15 +2470,56 @@ function localModelCategoryHint(source: "ollama" | "huggingface", model: Record<
   ].filter(Boolean).join(" ");
 }
 
-function localModelCategory(searchable: string): { label: string; icon: typeof Gauge; color: string } {
+const MODEL_CATEGORIES = {
+  text: { label: t("Texto"), icon: MessageSquare, color: "#68b929" },
+  code: { label: t("Código"), icon: Terminal, color: "#68b929" },
+  vision: { label: t("Visión"), icon: Eye, color: "#e09a2b" },
+  embeddings: { label: t("Embeddings"), icon: Layers, color: "#2fb3a3" },
+  image: { label: t("Imagen"), icon: ImageIcon, color: "#c05bd6" },
+  video: { label: t("Vídeo"), icon: Film, color: "#9b66db" },
+  audio: { label: t("Voz / audio"), icon: Mic, color: "#3e8fdc" },
+} satisfies Record<string, { label: string; icon: typeof Gauge; color: string }>;
+type ModelCategoryKey = keyof typeof MODEL_CATEGORIES;
+const MODEL_CATEGORY_KEYS = Object.keys(MODEL_CATEGORIES) as ModelCategoryKey[];
+
+function localModelCategoryKey(searchable: string): ModelCategoryKey {
   const text = searchable.toLowerCase();
-  if (/(audio|voice|speech|whisper|tts|asr|wav2vec|bark|vocos|vocoder|snac|encodec|chatterbox|kokoro|xtts|parler|\d+khz)/.test(text)) return { label: t("Voz / audio"), icon: Mic, color: "#3e8fdc" };
-  if (/(wan2|wan_2|ltx|video|text-to-video|image-to-video)/.test(text)) return { label: t("Vídeo"), icon: Film, color: "#9b66db" };
-  if (/(flux|diffusion|sdxl|sd3|hidream|image-gen|qwen-image|text-to-image)/.test(text)) return { label: t("Imagen"), icon: ImageIcon, color: "#c05bd6" };
-  if (/(vision|llava|[-_.]vl\b|[-_.]vl[-_.]|clip|siglip|mmproj)/.test(text)) return { label: t("Visión"), icon: Eye, color: "#e09a2b" };
-  if (/(embed|rerank|bge|e5-|gte-|sentence-transformers|minilm|mpnet)/.test(text)) return { label: t("Embeddings"), icon: Layers, color: "#2fb3a3" };
-  if (/(coder|code)/.test(text)) return { label: t("Código"), icon: Terminal, color: "#68b929" };
-  return { label: t("Texto"), icon: MessageSquare, color: "#68b929" };
+  if (/(audio|voice|speech|whisper|tts|asr|wav2vec|bark|vocos|vocoder|snac|encodec|chatterbox|kokoro|xtts|parler|\d+khz)/.test(text)) return "audio";
+  if (/(wan2|wan_2|ltx|video|text-to-video|image-to-video)/.test(text)) return "video";
+  if (/(flux|diffusion|sdxl|sd3|hidream|image-gen|qwen-image|text-to-image)/.test(text)) return "image";
+  if (/(vision|llava|[-_.]vl\b|[-_.]vl[-_.]|clip|siglip|mmproj)/.test(text)) return "vision";
+  if (/(embed|rerank|bge|e5-|gte-|sentence-transformers|minilm|mpnet)/.test(text)) return "embeddings";
+  if (/(coder|code)/.test(text)) return "code";
+  return "text";
+}
+
+function localModelCategory(searchable: string): { label: string; icon: typeof Gauge; color: string } {
+  return MODEL_CATEGORIES[localModelCategoryKey(searchable)];
+}
+
+function profileModelCategory(model: ProfileModel): ModelCategoryKey {
+  if (model.task === "tts" || model.task === "asr") return "audio";
+  if (model.task === "image-generation") return "image";
+  if (model.task === "video-generation") return "video";
+  if (model.task === "embeddings" || model.task === "reranking") return "embeddings";
+  if (model.task === "vision" || model.mmproj_filename || model.mmproj_file || model.input_modalities?.includes("image")) return "vision";
+  const guessed = localModelCategoryKey(`${model.model_repo} ${model.model_filename} ${model.model_ref}`);
+  return guessed === "code" || guessed === "vision" ? guessed : "text";
+}
+
+function profileCategories(models: ProfileModel[]): ModelCategoryKey[] {
+  const found = new Set(models.filter((model) => model.enabled !== false).map(profileModelCategory));
+  return MODEL_CATEGORY_KEYS.filter((key) => found.has(key));
+}
+
+function CategoryBadges({ categories }: { categories: ModelCategoryKey[] }) {
+  if (!categories.length) return null;
+  return <span className="category-badges">
+    {categories.map((key) => {
+      const { label, icon: Icon, color } = MODEL_CATEGORIES[key];
+      return <span key={key} className="category-badge" style={{ "--category": color } as CSSProperties}><Icon size={11} />{label}</span>;
+    })}
+  </span>;
 }
 
 const LOCAL_MODEL_SECTIONS = [
@@ -5765,7 +5834,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       <Card className={`profile-card ${profile.active ? "active" : ""} ${running ? "running" : ""}`} key={profile.id}>
         <div className="profile-card-head">
           <div className="model-icon"><SlidersHorizontal /></div>
-          <div><ProfileName name={profile.name} /><small title={`${profile.engine} · ${profile.task} · ${profile.model_repo || profile.model_ref}`}>{profile.engine} · {profile.task} · {profile.model_repo || profile.model_ref}</small></div>
+          <div><ProfileName name={profile.name} /><small title={`${profile.engine} · ${profile.task} · ${profile.model_repo || profile.model_ref}`}>{profile.engine} · {profile.task} · {profile.model_repo || profile.model_ref}</small><CategoryBadges categories={profileCategories(profile.models)} /></div>
           <div className="profile-badges">
             {profile.source.startsWith("ARTIFEX") ? <span className="badge">ARTIFEX</span> : null}
             {profile.read_only ? <span className="badge" title={profile.id === QUICK_PROFILE_ID ? t("Modelos encendidos desde Modelos; no se restaura al reiniciar") : t("Modelos marcados como Default en Modelos; arranca siempre con MyDGX")}>{t("Solo lectura")}</span> : null}

@@ -1886,5 +1886,7 @@
   "Modelos listos": "Models ready",
   "Hay descargas en curso": "Downloads in progress",
   "Descargar {count} modelo(s)": "Download {count} model(s)",
-  "Instalar con modelos": "Install with models"
+  "Instalar con modelos": "Install with models",
+  "Filtrar por categoría": "Filter by category",
+  "Ninguna receta en esta categoría.": "No recipes in this category."
 }

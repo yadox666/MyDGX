@@ -248,6 +248,10 @@ A recipe is a profile measured on a DGX Spark and published on GitHub, in
   current catalog from GitHub, and *Refresh from GitHub* reads it again on the
   spot. Without a connection they show the copy bundled with your MyDGX
   version.
+- Each recipe has categories with the same badges as models: Text, Code,
+  Vision, Embeddings, Image, Video and Voice / audio. The badges at the top
+  filter the list by category. *Profiles* cards also show the categories of
+  the models they contain.
 - Each recipe shows its description, its models (quantization, context, KV,
   MTP and whether it is uncensored) and the memory measured with everything
   loaded.

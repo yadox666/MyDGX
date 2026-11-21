@@ -1871,5 +1871,7 @@
   "Modelos listos",
   "Hay descargas en curso",
   "Descargar {count} modelo(s)",
-  "Instalar con modelos"
+  "Instalar con modelos",
+  "Filtrar por categoría",
+  "Ninguna receta en esta categoría."
 ]

@@ -1218,24 +1218,13 @@ function RecipesBrowser({ notify, onInstalled, onClose, activeDownloads = 0 }: {
   const source = catalog && (catalog.source === "github"
     ? <p className="recipes-source">{t("Catálogo de GitHub · leído a las {time}", { time: new Date(catalog.fetched_at).toLocaleTimeString(locale) })}</p>
     : <div className="profile-warning"><TriangleAlert size={15} />{t("No se pudo leer GitHub ({error}); se muestra la copia incluida en esta versión de MyDGX.", { error: catalog.error })}</div>);
-  const categoryCounts = Object.fromEntries(MODEL_CATEGORY_KEYS.map((key) => [
-    key, catalog?.recipes.filter((recipe) => recipeCategories(recipe).includes(key)).length ?? 0,
-  ])) as Record<ModelCategoryKey, number>;
   const visibleRecipes = catalog?.recipes.filter((recipe) => category === "all" || recipeCategories(recipe).includes(category)) ?? [];
-  const filters = catalog && catalog.recipes.length > 0 && <div className="category-filters" role="toolbar" aria-label={t("Filtrar por categoría")}>
-    <button className={category === "all" ? "active" : ""} aria-pressed={category === "all"} onClick={() => setCategory("all")}>{t("Todas")}<b>{catalog.recipes.length}</b></button>
-    {MODEL_CATEGORY_KEYS.map((key) => {
-      const { label, icon: Icon, color } = MODEL_CATEGORIES[key];
-      return <button
-        key={key}
-        className={category === key ? "active" : ""}
-        aria-pressed={category === key}
-        disabled={!categoryCounts[key]}
-        style={{ "--category": color } as CSSProperties}
-        onClick={() => setCategory(category === key ? "all" : key)}
-      ><Icon size={13} />{label}<b>{categoryCounts[key]}</b></button>;
-    })}
-  </div>;
+  const filters = catalog && catalog.recipes.length > 0 && <CategoryFilters
+    value={category}
+    onChange={setCategory}
+    counts={categoryCounts(catalog.recipes, recipeCategories)}
+    total={catalog.recipes.length}
+  />;
   const installedCount = catalog?.recipes.filter((recipe) => recipe.installed_version > 0).length ?? 0;
   const updatesCount = catalog?.recipes.filter((recipe) => recipe.installed_version > 0 && recipe.installed_version !== recipe.version).length ?? 0;
 
@@ -2510,6 +2499,35 @@ function profileModelCategory(model: ProfileModel): ModelCategoryKey {
 function profileCategories(models: ProfileModel[]): ModelCategoryKey[] {
   const found = new Set(models.filter((model) => model.enabled !== false).map(profileModelCategory));
   return MODEL_CATEGORY_KEYS.filter((key) => found.has(key));
+}
+
+function CategoryFilters({ value, onChange, counts, total, className = "" }: {
+  value: ModelCategoryKey | "all";
+  onChange: (value: ModelCategoryKey | "all") => void;
+  counts: Record<ModelCategoryKey, number>;
+  total: number;
+  className?: string;
+}) {
+  return <div className={`category-filters ${className}`} role="toolbar" aria-label={t("Filtrar por categoría")}>
+    <button className={value === "all" ? "active" : ""} aria-pressed={value === "all"} onClick={() => onChange("all")}>{t("Todas")}<b>{total}</b></button>
+    {MODEL_CATEGORY_KEYS.map((key) => {
+      const { label, icon: Icon, color } = MODEL_CATEGORIES[key];
+      return <button
+        key={key}
+        className={value === key ? "active" : ""}
+        aria-pressed={value === key}
+        disabled={!counts[key] && value !== key}
+        style={{ "--category": color } as CSSProperties}
+        onClick={() => onChange(value === key ? "all" : key)}
+      ><Icon size={13} />{label}<b>{counts[key]}</b></button>;
+    })}
+  </div>;
+}
+
+function categoryCounts<T>(items: T[], categoriesOf: (item: T) => ModelCategoryKey[]): Record<ModelCategoryKey, number> {
+  return Object.fromEntries(MODEL_CATEGORY_KEYS.map((key) => [
+    key, items.filter((item) => categoriesOf(item).includes(key)).length,
+  ])) as Record<ModelCategoryKey, number>;
 }
 
 function CategoryBadges({ categories }: { categories: ModelCategoryKey[] }) {
@@ -5302,6 +5320,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   const [analyzing, setAnalyzing] = useState(false);
   const [loadingDefaults, setLoadingDefaults] = useState<string | null>(null);
   const [profileSearch, setProfileSearch] = useState("");
+  const [profileCategory, setProfileCategory] = useState<ModelCategoryKey | "all">("all");
   const [recommendation, setRecommendation] = useState<{ recommended_file?: string; model_max_context?: number; context_source?: string; warning?: string } | null>(null);
   const [requestedStarts, setRequestedStarts] = useState<Record<string, string>>({});
   const enabledAliases = [
@@ -5765,7 +5784,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   }
 
   const normalizedSearch = profileSearch.trim().toLocaleLowerCase();
-  const visibleProfiles = (data?.profiles ?? []).filter((profile) => {
+  const searchedProfiles = (data?.profiles ?? []).filter((profile) => {
     if (!normalizedSearch) return true;
     return [
       profile.name,
@@ -5787,6 +5806,9 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
     || (data?.runtime.running && data?.runtime.profile_id === profile.id)
   );
   const byFavorite = (left: Profile, right: Profile) => Number(Boolean(right.favorite)) - Number(Boolean(left.favorite));
+  const profileCategoriesOf = (profile: Profile) => profileCategories(profile.models);
+  const visibleProfiles = searchedProfiles.filter((profile) => profileCategory === "all" || profileCategoriesOf(profile).includes(profileCategory));
+  const profileFilterText = [profileSearch, profileCategory === "all" ? "" : profileCategory].join(" ");
   const activeProfiles = visibleProfiles.filter(profileIsRunning).sort(byFavorite);
   const availableProfiles = visibleProfiles.filter((profile) => !profileIsRunning(profile)).sort(byFavorite);
 
@@ -5990,7 +6012,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       </div>
       {data?.runtime.boot_restore?.state === "restoring" && <div className="profile-warning"><RefreshCw className="spin" size={14} />{t("Restaurando los perfiles del último arranque")}{data.runtime.boot_restore.pending.length ? `: ${data.runtime.boot_restore.pending.join(", ")}` : ""}…</div>}
       {data?.runtime.boot_restore?.state === "done" && data.runtime.boot_restore.errors.length > 0 && <div className="profile-warning"><TriangleAlert size={14} />{t("No se pudieron restaurar tras el arranque:")}{" "}{data.runtime.boot_restore.errors.join(" · ")}</div>}
-      <div className={`profile-search${searchStateClass(profileSearch, data ? visibleProfiles.length : null)}`} data-count={searchCountLabel(profileSearch, data ? visibleProfiles.length : null)}>
+      <div className="profile-filter-bar">
+      <div className={`profile-search${searchStateClass(profileFilterText, data ? visibleProfiles.length : null)}`} data-count={searchCountLabel(profileFilterText, data ? visibleProfiles.length : null)}>
         <Search size={14} />
         <input
           type="search"
@@ -6000,6 +6023,14 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
           aria-label={t("Buscar perfiles")}
         />
         {profileSearch && <button onClick={() => setProfileSearch("")} title={t("Limpiar búsqueda")} aria-label={t("Limpiar búsqueda")}><X size={13} /></button>}
+      </div>
+      {data && data.profiles.length > 0 && <CategoryFilters
+        className="compact"
+        value={profileCategory}
+        onChange={setProfileCategory}
+        counts={categoryCounts(searchedProfiles, profileCategoriesOf)}
+        total={searchedProfiles.length}
+      />}
       </div>
 
       {showForm && (
@@ -6160,8 +6191,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       {data && !visibleProfiles.length && (
         <Empty
           icon={<SlidersHorizontal />}
-          title={profileSearch ? t("No hay coincidencias") : t("No hay perfiles")}
-          text={profileSearch ? t("Prueba con otro nombre, modelo, motor o tarea.") : t("Crea una configuración para llama.cpp u Ollama y actívala como predeterminada.")}
+          title={profileFilterText.trim() ? t("No hay coincidencias") : t("No hay perfiles")}
+          text={profileFilterText.trim() ? t("Prueba con otro nombre, modelo, motor o tarea.") : t("Crea una configuración para llama.cpp u Ollama y actívala como predeterminada.")}
         />
       )}
     </div>

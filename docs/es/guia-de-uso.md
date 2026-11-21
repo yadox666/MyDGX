@@ -251,7 +251,8 @@ Una receta es un perfil medido en un DGX Spark y publicado en GitHub, en
 - Cada receta tiene categorías con los mismos badges que los modelos: Texto,
   Código, Visión, Embeddings, Imagen, Vídeo y Voz / audio. Los badges de
   arriba filtran la lista por categoría. Las tarjetas de *Perfiles* muestran
-  también las categorías de los modelos que contienen.
+  también las categorías de los modelos que contienen, y los mismos badges, a
+  la derecha del buscador de perfiles, filtran la lista.
 - Cada receta muestra su descripción, sus modelos (cuantización, contexto,
   KV, MTP y si es uncensored) y la memoria medida con todo cargado.
 - *Ver detalles* enseña la receta completa en JSON y *Descargar JSON* la

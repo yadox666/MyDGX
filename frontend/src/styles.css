@@ -1933,6 +1933,10 @@ select { height: 34px; min-width: 170px; padding: 0 30px 0 10px; }
 .category-filters button.active { color: var(--category); border-color: var(--category); background: color-mix(in srgb, var(--category) 12%, var(--surface)); }
 .category-filters button:first-child.active { color: var(--text); border-color: var(--text); }
 .category-filters button:disabled { opacity: .45; cursor: default; }
+.profile-filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.profile-filter-bar .profile-search { flex: 0 1 330px; }
+.category-filters.compact { flex: 1 1 420px; gap: 5px; }
+.category-filters.compact button { padding: 5px 9px; font-size: calc(11.5px * var(--font-scale)); }
 .recipes-hero { background: radial-gradient(circle at 0 0, color-mix(in srgb, var(--blue) 18%, transparent), transparent 55%), var(--surface); }
 .recipes-hero .ollama-hero-icon { background: var(--blue); color: #fff; }
 .recipes-hero .recipes-source, .recipes-hero .profile-warning { margin: 0; }

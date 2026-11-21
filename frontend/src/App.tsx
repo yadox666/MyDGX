@@ -1088,8 +1088,11 @@ type AddToProfileRequest = {
 type Recipe = ProfileModel & {
   description: Partial<Record<"es" | "en", string>>;
   memory_gib?: number;
+  version: number;
+  changelog: Partial<Record<"es" | "en", string>>;
   additional_models: ProfileModel[];
   installed_ids: string[];
+  installed_version: number;
 };
 
 type RecipesResponse = { source: "github" | "local"; url: string; error: string; fetched_at: string; recipes: Recipe[] };
@@ -1103,7 +1106,7 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
   const [catalog, setCatalog] = useState<RecipesResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [details, setDetails] = useState("");
-  const [installing, setInstalling] = useState<{ id: string; name: string; download: boolean } | null>(null);
+  const [installing, setInstalling] = useState<{ id: string; mode: "install" | "copy"; name: string; download: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function load(refresh = false) {
@@ -1124,7 +1127,7 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
   }, []);
 
   function recipeJson(recipe: Recipe) {
-    return JSON.stringify(recipe, (key, value) => (key === "installed_ids" ? undefined : value), 2);
+    return JSON.stringify(recipe, (key, value) => (["installed_ids", "installed_version"].includes(key) ? undefined : value), 2);
   }
 
   function downloadRecipe(recipe: Recipe) {
@@ -1140,14 +1143,29 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
     if (!installing) return;
     setBusy(true);
     try {
-      const result = await api<{ id: string; name: string; jobs: string[] }>(`/api/profiles/recipes/${encodeURIComponent(installing.id)}/install`, {
+      const copy = installing.mode === "copy";
+      const result = await api<{ id: string; name: string; jobs: string[] }>(`/api/profiles/recipes/${encodeURIComponent(installing.id)}/${copy ? "copy" : "install"}`, {
         method: "POST",
-        body: JSON.stringify({ name: installing.name, download_models: installing.download }),
+        body: JSON.stringify(copy ? { name: installing.name, download_models: installing.download } : { download_models: installing.download }),
       });
       notify(result.jobs.length
         ? t("{name} instalado · {count} descarga(s) en cola", { name: result.name, count: result.jobs.length })
         : t("{name} instalado", { name: result.name }));
       setInstalling(null);
+      onInstalled();
+      await load();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateRecipe(recipe: Recipe) {
+    setBusy(true);
+    try {
+      await api(`/api/profiles/recipes/${encodeURIComponent(recipe.id)}/update`, { method: "POST" });
+      notify(t("{name} actualizada a v{version}", { name: recipe.name.replace(RECIPE_PREFIX, ""), version: recipe.version }));
       onInstalled();
       await load();
     } catch (error) {
@@ -1167,7 +1185,7 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
           <button className="icon-button" onClick={onClose} aria-label={t("Cerrar")}><X size={16} /></button>
         </div>}
       />
-      <p className="preflight-intro">{t("Perfiles medidos en un DGX Spark y publicados en GitHub. Al instalar una receta se crea un perfil normal que puedes renombrar y editar; los modelos se descargan ahora o más tarde desde la tarjeta del perfil.")}</p>
+      <p className="preflight-intro">{t("Perfiles medidos en un DGX Spark y publicados en GitHub. Una receta instalada es de solo lectura y se actualiza cuando publicamos una versión nueva; para cambiarla, duplícala como perfil normal. Los modelos se descargan ahora o más tarde desde la tarjeta del perfil.")}</p>
       {catalog && (catalog.source === "github"
         ? <p className="recipes-source">{t("Catálogo de GitHub · leído a las {time}", { time: new Date(catalog.fetched_at).toLocaleTimeString(locale) })}</p>
         : <div className="profile-warning"><TriangleAlert size={15} />{t("No se pudo leer GitHub ({error}); se muestra la copia incluida en esta versión de MyDGX.", { error: catalog.error })}</div>)}
@@ -1178,18 +1196,23 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
           : <div className="recipes-list">
             {catalog.recipes.map((recipe) => {
               const models = [{ ...recipe, name: recipe.name }, ...recipe.additional_models.filter((model) => model.enabled !== false)];
-              const installed = recipe.installed_ids.length > 0;
+              const installed = recipe.installed_version > 0;
+              const nameTaken = !installed && recipe.installed_ids.length > 0;
+              const changed = installed && recipe.installed_version !== recipe.version;
+              const changelog = recipe.changelog[language] || recipe.changelog.en || recipe.changelog.es;
               const form = installing?.id === recipe.id ? installing : null;
               return <article key={recipe.id} className="recipe-card">
                 <header>
                   <ProfileName name={recipe.name} />
                   <span className="recipe-meta">
-                    {installed && <span className="badge live">{t("Instalada")}</span>}
+                    <span className="badge recipe-version" title={changelog || undefined}>v{recipe.version}</span>
+                    {installed && <span className="badge live">{changed ? t("Instalada v{version}", { version: recipe.installed_version }) : t("Instalada")}</span>}
                     <span className="badge">{t(models.length === 1 ? "{count} modelo" : "{count} modelos", { count: models.length })}</span>
                     {recipe.memory_gib ? <span className="badge" title={t("Memoria medida con todos los modelos cargados")}>≈{recipe.memory_gib.toLocaleString(locale)} GiB</span> : null}
                   </span>
                 </header>
                 <p>{recipe.description[language] || recipe.description.en || recipe.description.es || recipe.source}</p>
+                {changelog && <p className="recipe-changelog"><b>v{recipe.version}</b> · {changelog}</p>}
                 <ul className="recipe-models">
                   {models.map((model, index) => {
                     const identity = profileModelIdentity(model);
@@ -1211,17 +1234,20 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
                 {details === recipe.id && <pre className="recipe-json">{recipeJson(recipe)}</pre>}
                 {form
                   ? <div className="recipe-install">
-                    <label><span>{t("Nombre del perfil")}</span><input value={form.name} maxLength={80} onChange={(event) => setInstalling({ ...form, name: event.target.value })} /></label>
+                    {form.mode === "copy" && <label><span>{t("Nombre del perfil")}</span><input value={form.name} maxLength={80} onChange={(event) => setInstalling({ ...form, name: event.target.value })} /></label>}
                     <label className="recipe-check"><input type="checkbox" checked={form.download} onChange={(event) => setInstalling({ ...form, download: event.target.checked })} />{t("Descargar también los modelos que falten")}</label>
                     <div className="add-to-profile-actions">
                       <button className="button secondary" disabled={busy} onClick={() => setInstalling(null)}>{t("Cancelar")}</button>
-                      <button className="button primary" disabled={busy || form.name.trim().length < 2} onClick={() => void install()}><Plus size={14} /> {busy ? t("Instalando…") : t("Instalar")}</button>
+                      <button className="button primary" disabled={busy || (form.mode === "copy" && (form.name.trim().length < 2 || RECIPE_PREFIX.test(form.name.trim())))} onClick={() => void install()}>{form.mode === "copy" ? <Copy size={14} /> : <Plus size={14} />} {busy ? t("Instalando…") : form.mode === "copy" ? t("Duplicar como perfil") : t("Instalar")}</button>
                     </div>
                   </div>
                   : <div className="recipe-actions">
                     <button className="button secondary" onClick={() => setDetails(details === recipe.id ? "" : recipe.id)}><Eye size={14} /> {details === recipe.id ? t("Ocultar detalles") : t("Ver detalles")}</button>
                     <button className="button secondary" onClick={() => downloadRecipe(recipe)}><Download size={14} /> {t("Descargar JSON")}</button>
-                    <button className="button primary" onClick={() => setInstalling({ id: recipe.id, name: installed ? `${recipe.name} 2` : recipe.name, download: true })}><Plus size={14} /> {installed ? t("Instalar otra copia") : t("Instalar")}</button>
+                    <button className="button secondary" onClick={() => setInstalling({ id: recipe.id, mode: "copy", name: recipe.name.replace(RECIPE_PREFIX, ""), download: true })}><Copy size={14} /> {t("Duplicar como perfil")}</button>
+                    {changed
+                      ? <button className="button primary" disabled={busy} title={changelog || undefined} onClick={() => void updateRecipe(recipe)}><RefreshCw size={14} /> {recipe.version > recipe.installed_version ? t("Actualizar a v{version}", { version: recipe.version }) : t("Volver a v{version}", { version: recipe.version })}</button>
+                      : !installed && <button className="button primary" disabled={nameTaken} title={nameTaken ? t("Ya hay un perfil con este nombre") : undefined} onClick={() => setInstalling({ id: recipe.id, mode: "install", name: recipe.name, download: true })}><Plus size={14} /> {t("Instalar")}</button>}
                   </div>}
               </article>;
             })}
@@ -1255,7 +1281,7 @@ function AddToProfileDialog({ request, notify, onClose }: {
   useEffect(() => {
     api<{ profiles: Profile[] }>("/api/profiles")
       .then((data) => {
-        const editable = data.profiles.filter((profile) => !profile.read_only);
+        const editable = data.profiles.filter((profile) => !profile.read_only && !profile.recipe_id);
         setProfiles(editable);
         setSelected((editable.find((profile) => !contains(profile)) ?? editable[0])?.id ?? "");
       })
@@ -2147,6 +2173,9 @@ type Profile = ModelConfig & {
   minimum_context_size: number;
   app: string;
   read_only?: boolean;
+  recipe_id?: string;
+  recipe_version?: number;
+  recipe_update?: number;
   memory_plan: {
     required_mb: number;
     reserve_mb: number;
@@ -5477,7 +5506,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   }
 
   async function duplicate(profile: Profile) {
-    const suggestion = t("{name} copia", { name: profile.name }).replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+    const suggestion = t("{name} copia", { name: profile.name.replace(RECIPE_PREFIX, "") }).replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
     const name = window.prompt(
       t("Nombre del nuevo perfil (copia de {name}).\nLetras, números, espacios y · . _ - ; de 2 a 80 caracteres.", { name: profile.name }),
       suggestion,
@@ -5672,6 +5701,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
           <div className="profile-badges">
             {profile.source.startsWith("ARTIFEX") ? <span className="badge">ARTIFEX</span> : null}
             {profile.read_only ? <span className="badge" title={profile.id === QUICK_PROFILE_ID ? t("Modelos encendidos desde Modelos; no se restaura al reiniciar") : t("Modelos marcados como Default en Modelos; arranca siempre con MyDGX")}>{t("Solo lectura")}</span> : null}
+            {profile.recipe_id ? <span className="badge" title={t("Receta de solo lectura; duplícala para editarla")}>{t("Solo lectura")} · v{profile.recipe_version}</span> : null}
             {profile.active ? <span className="badge live">{t("Predeterminado")}</span> : null}
             {running ? <span className="badge running">{t("Cargado")}</span> : null}
           </div>
@@ -5786,10 +5816,18 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             }}
           ><X size={14} />{" "}{t("Cancelar")}</button>}
           <button title={t("Crear un perfil editable con la misma configuración y otro nombre")} onClick={() => void duplicate(profile)}><Copy size={14} />{" "}{t("Duplicar")}</button>
+          {profile.recipe_update ? <button
+            className="primary"
+            disabled={running}
+            title={running ? t("Detén el perfil antes de actualizar la receta") : undefined}
+            onClick={() => void action(`/api/profiles/recipes/${encodeURIComponent(profile.recipe_id || "")}/update`, t("{name} actualizada a v{version}", { name: profile.name.replace(RECIPE_PREFIX, ""), version: profile.recipe_update }))}
+          ><RefreshCw size={14} />{" "}{t("Actualizar a v{version}", { version: profile.recipe_update })}</button> : null}
           {profile.read_only
             ? <small className="profile-readonly-hint">{t("Se gestiona desde Modelos")}</small>
             : <>
-              <button onClick={() => editProfile(profile)}><Pencil size={14} />{" "}{t("Editar")}</button>
+              {profile.recipe_id
+                ? <small className="profile-readonly-hint">{t("Receta: duplícala para editarla")}</small>
+                : <button onClick={() => editProfile(profile)}><Pencil size={14} />{" "}{t("Editar")}</button>}
               <button className="danger" onClick={() => remove(profile)}><Trash2 size={14} /></button>
             </>}
         </div>

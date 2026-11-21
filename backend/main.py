@@ -1150,6 +1150,8 @@ class Database:
                 "spec_type": "TEXT NOT NULL DEFAULT ''",
                 "draft_filename": "TEXT NOT NULL DEFAULT ''",
                 "spec_draft_n_max": "INTEGER NOT NULL DEFAULT 0",
+                "recipe_id": "TEXT NOT NULL DEFAULT ''",
+                "recipe_version": "INTEGER NOT NULL DEFAULT 0",
             }
             for column, definition in additions.items():
                 if column not in existing:
@@ -2295,7 +2297,7 @@ ARTIFEX_PROFILE_IDS = frozenset(preset["id"] for preset in ARTIFEX_PROFILES)
 
 
 RECIPES_PATH = ROOT / "config" / "recipes.json"
-RECIPE_ONLY_KEYS = ("id", "description", "memory_gib")
+RECIPE_ONLY_KEYS = ("id", "description", "memory_gib", "version", "changelog")
 
 
 def local_recipes() -> list[dict[str, Any]]:
@@ -2322,6 +2324,12 @@ def dismissed_seed_profiles() -> set[str]:
     except (json.JSONDecodeError, TypeError):
         return set()
     return {str(item) for item in values} if isinstance(values, list) else set()
+
+
+def restore_seed_profile(profile_id: str) -> None:
+    dismissed = dismissed_seed_profiles()
+    if profile_id in dismissed:
+        save_preference(SEED_DISMISSED_KEY, json.dumps(sorted(dismissed - {profile_id})))
 
 
 def dismiss_seed_profile(profile_id: str) -> None:
@@ -11437,12 +11445,52 @@ def sync_managed_profile(profile_id: str) -> None:
         connection.commit()
 
 
-def ensure_profile_editable(profile_id: str) -> None:
+def ensure_profile_not_managed(profile_id: str) -> None:
     if profile_id in MANAGED_PROFILES:
         raise HTTPException(
             status_code=403,
             detail=f"El perfil {MANAGED_PROFILES[profile_id]['name']} es de solo lectura; se gestiona desde Modelos",
         )
+
+
+def ensure_profile_editable(profile_id: str) -> None:
+    ensure_profile_not_managed(profile_id)
+    if db.rows("SELECT id FROM profiles WHERE id=? AND recipe_id<>''", (profile_id,)):
+        raise HTTPException(status_code=403, detail="Las recetas son de solo lectura; duplícala para editarla")
+
+
+RECIPE_NAME_PATTERN = re.compile(r"^RECIPE\s*[·:-]", re.IGNORECASE)
+
+
+def ensure_not_recipe_name(name: str) -> None:
+    if RECIPE_NAME_PATTERN.match(name.strip()):
+        raise HTTPException(status_code=400, detail="Los nombres que empiezan por RECIPE están reservados para las recetas")
+
+
+def recipe_version(recipe: dict[str, Any]) -> int:
+    try:
+        return max(1, int(recipe.get("version") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def apply_recipe_to_profile(profile_id: str, recipe: dict[str, Any]) -> None:
+    """Replace an installed recipe's configuration with a newer version, keeping id, favorite and default."""
+    payload = recipe_profile_payload(recipe)
+    assign_profile_ports(payload, profile_id)
+    validate_profile(payload)
+    current = db.rows("SELECT favorite,active,created_at FROM profiles WHERE id=?", (profile_id,))
+    if not current:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    with db.connect() as connection:
+        connection.execute("DELETE FROM profiles WHERE id=?", (profile_id,))
+        connection.execute(PROFILE_INSERT_SQL, profile_values(profile_id, payload, utc_now()))
+        connection.execute(
+            "UPDATE profiles SET favorite=?,active=?,created_at=?,app=?,port_auto=?,recipe_id=?,recipe_version=? WHERE id=?",
+            (current[0]["favorite"], current[0]["active"], current[0]["created_at"], payload.app,
+             int(payload.port_auto), str(recipe["id"]), recipe_version(recipe), profile_id),
+        )
+        connection.commit()
 
 
 def seed_default_profiles() -> None:
@@ -11455,12 +11503,8 @@ def seed_default_profiles() -> None:
     now = utc_now()
     statement = PROFILE_INSERT_SQL.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
     existing = {str(row["id"]) for row in db.rows("SELECT id FROM profiles")} | dismissed_seed_profiles()
-    recipes = [
-        {key: item for key, item in recipe.items() if key not in RECIPE_ONLY_KEYS[1:]}
-        for recipe in local_recipes()
-    ]
     with db.connect() as connection:
-        for value in [*catalog["profiles"], *recipes]:
+        for value in catalog["profiles"]:
             if not isinstance(value, dict):
                 raise RuntimeError("El catálogo contiene un perfil no válido")
             profile_id = str(value.get("id") or "")
@@ -11478,6 +11522,55 @@ def seed_default_profiles() -> None:
                 continue
             connection.execute(statement, profile_values(profile_id, payload, now))
         connection.commit()
+    sync_installed_recipes(local_recipes(), install_missing=True)
+
+
+def insert_recipe_profile(profile_id: str, recipe: dict[str, Any], payload: ProfilePayload | None = None) -> ProfilePayload:
+    """Insert a recipe as a read-only profile; a payload with a custom name makes an editable copy instead."""
+    is_copy = payload is not None
+    payload = payload or recipe_profile_payload(recipe)
+    assign_profile_ports(payload, None)
+    validate_profile(payload)
+    with db.connect() as connection:
+        connection.execute(PROFILE_INSERT_SQL, profile_values(profile_id, payload, utc_now()))
+        connection.execute(
+            "UPDATE profiles SET app=?,port_auto=?,recipe_id=?,recipe_version=? WHERE id=?",
+            (payload.app, int(payload.port_auto), "" if is_copy else str(recipe["id"]),
+             0 if is_copy else recipe_version(recipe), profile_id),
+        )
+        connection.commit()
+    return payload
+
+
+def sync_installed_recipes(recipes: list[dict[str, Any]], install_missing: bool = False) -> list[str]:
+    """Adopt recipe rows, install new ones and upgrade idle recipes whose published version is newer."""
+    dismissed = dismissed_seed_profiles()
+    rows = {
+        str(row["id"]): row
+        for row in db.rows("SELECT id,name,recipe_id,recipe_version FROM profiles")
+    }
+    running = set(_runtime_profile_ids)
+    updated: list[str] = []
+    for recipe in recipes:
+        recipe_id = str(recipe.get("id") or "")
+        row = rows.get(recipe_id)
+        try:
+            if row is None:
+                if install_missing and recipe_id not in dismissed:
+                    insert_recipe_profile(recipe_id, recipe)
+                continue
+            installed = int(row["recipe_version"] or 0)
+            if not row["recipe_id"]:
+                db.execute("UPDATE profiles SET recipe_id=?,recipe_version=0 WHERE id=?", (recipe_id, recipe_id))
+                installed = 0
+            if recipe_version(recipe) > installed and recipe_id not in running:
+                apply_recipe_to_profile(recipe_id, recipe)
+                db.audit("profile.recipe.update", f"{row['name']} → v{recipe_version(recipe)}", True)
+                updated.append(recipe_id)
+        except (HTTPException, ValidationError, sqlite3.IntegrityError) as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            db.log("warning", "profile", "profile.recipe.skipped", f"{recipe_id}: {detail}", entity_type="profile", entity_id=recipe_id)
+    return updated
 
 
 @app.get("/api/profiles", dependencies=secure)
@@ -11493,6 +11586,8 @@ async def profiles() -> dict[str, Any]:
     except HTTPException:
         ollama_installed = set()
     loaded_profiles = running_profiles()
+    published = _recipes_cache["value"]["recipes"] if _recipes_cache else local_recipes()
+    latest_recipe_versions = {str(recipe["id"]): recipe_version(recipe) for recipe in published}
     for profile in profile_rows:
         models = profile_models(profile)
         plan = profile_memory_plan(profile)
@@ -11524,6 +11619,9 @@ async def profiles() -> dict[str, Any]:
         profile["downloaded"] = all(model["downloaded"] for model in models if model.get("enabled", True))
         profile["models"] = models
         profile["read_only"] = profile["id"] in MANAGED_PROFILES
+        if profile.get("recipe_id"):
+            latest = latest_recipe_versions.get(profile["recipe_id"], 0)
+            profile["recipe_update"] = latest if latest > int(profile.get("recipe_version") or 0) else 0
         profile["model_labels"] = profile_model_labels(profile)
         profile["memory_plan"] = plan
         profile["runtime_plan"] = profiles_runtime_plan([
@@ -11570,12 +11668,12 @@ def valid_recipes(values: Any) -> list[dict[str, Any]]:
             recipe_profile_payload(recipe)
         except ValueError:
             continue
-        description = recipe.get("description")
-        recipes.append({
-            **recipe,
-            "description": {lang: str(text)[:2000] for lang, text in description.items() if lang in {"es", "en"}}
-            if isinstance(description, dict) else {},
-        })
+        texts = {
+            key: {lang: str(text)[:2000] for lang, text in recipe[key].items() if lang in {"es", "en"}}
+            if isinstance(recipe.get(key), dict) else {}
+            for key in ("description", "changelog")
+        }
+        recipes.append({**recipe, **texts, "version": recipe_version(recipe)})
     return recipes
 
 
@@ -11608,55 +11706,109 @@ async def load_recipes(refresh: bool = False) -> dict[str, Any]:
 @app.get("/api/profiles/recipes", dependencies=secure)
 async def profile_recipes(refresh: bool = False) -> dict[str, Any]:
     catalog = await load_recipes(refresh)
-    rows = db.rows("SELECT id,name FROM profiles")
+    rows = db.rows("SELECT id,name,recipe_id,recipe_version FROM profiles")
     return {
         **catalog,
         "recipes": [
-            {**recipe, "installed_ids": [row["id"] for row in rows if row["id"] == recipe["id"] or row["name"] == recipe.get("name")]}
+            {
+                **recipe,
+                "installed_version": next(
+                    (int(row["recipe_version"] or 0) for row in rows if row["recipe_id"] == recipe["id"]), 0
+                ),
+                "installed_ids": [row["id"] for row in rows if row["id"] == recipe["id"] or row["name"] == recipe.get("name")],
+            }
             for recipe in catalog["recipes"]
         ],
     }
 
 
 class RecipeInstallPayload(BaseModel):
-    name: str = Field(default="", max_length=80)
     download_models: bool = False
+
+
+class RecipeCopyPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    download_models: bool = False
+
+
+async def published_recipe(recipe_id: str) -> dict[str, Any]:
+    recipe = next((item for item in (await load_recipes())["recipes"] if item["id"] == recipe_id), None)
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="Receta no encontrada")
+    return recipe
+
+
+def queue_profile_downloads(profile_id: str, background: BackgroundTasks) -> list[str]:
+    jobs: list[str] = []
+    row = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))[0]
+    for model in profile_models(row):
+        if model["engine"] != "llama.cpp" or not model.get("model_repo") or profile_model_is_downloaded(model):
+            continue
+        model["_profile_id"] = profile_id
+        model["_is_additional"] = model["id"] != "primary"
+        job_id = db.create_job("profile.download", model["name"])
+        background.add_task(download_profile_models, job_id, model)
+        jobs.append(job_id)
+    return jobs
 
 
 @app.post("/api/profiles/recipes/{recipe_id}/install", dependencies=secure)
 async def install_profile_recipe(recipe_id: str, payload: RecipeInstallPayload, background: BackgroundTasks) -> dict[str, Any]:
-    recipe = next((item for item in (await load_recipes())["recipes"] if item["id"] == recipe_id), None)
-    if recipe is None:
-        raise HTTPException(status_code=404, detail="Receta no encontrada")
+    """Install the recipe as its own read-only profile; each recipe can be installed once."""
+    recipe = await published_recipe(recipe_id)
+    if db.rows("SELECT id FROM profiles WHERE id=? OR recipe_id=?", (recipe_id, recipe_id)):
+        raise HTTPException(status_code=409, detail="La receta ya está instalada")
     try:
-        profile = recipe_profile_payload(recipe, payload.name.strip() or None)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="El nombre o la receta no son válidos") from exc
-    assign_profile_ports(profile, None)
-    validate_profile(profile)
-    profile_id = recipe_id if not db.rows("SELECT id FROM profiles WHERE id=?", (recipe_id,)) else str(uuid.uuid4())
-    try:
-        db.execute(PROFILE_INSERT_SQL, profile_values(profile_id, profile, utc_now()))
+        profile = insert_recipe_profile(recipe_id, recipe)
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="Ya existe un perfil con ese nombre") from exc
-    db.execute("UPDATE profiles SET app=?,port_auto=? WHERE id=?", (profile.app, int(profile.port_auto), profile_id))
-    db.audit("profile.recipe.install", profile.name, True, recipe_id)
-    jobs: list[str] = []
-    if payload.download_models:
-        row = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))[0]
-        for model in profile_models(row):
-            if model["engine"] != "llama.cpp" or not model.get("model_repo") or profile_model_is_downloaded(model):
-                continue
-            model["_profile_id"] = profile_id
-            model["_is_additional"] = model["id"] != "primary"
-            job_id = db.create_job("profile.download", model["name"])
-            background.add_task(download_profile_models, job_id, model)
-            jobs.append(job_id)
-    return {"id": profile_id, "name": profile.name, "jobs": jobs}
+    restore_seed_profile(recipe_id)
+    db.audit("profile.recipe.install", f"{profile.name} v{recipe_version(recipe)}", True, recipe_id)
+    jobs = queue_profile_downloads(recipe_id, background) if payload.download_models else []
+    return {"id": recipe_id, "name": profile.name, "version": recipe_version(recipe), "jobs": jobs}
+
+
+@app.post("/api/profiles/recipes/{recipe_id}/copy", dependencies=secure)
+async def copy_profile_recipe(recipe_id: str, payload: RecipeCopyPayload, background: BackgroundTasks) -> dict[str, Any]:
+    """Create an editable profile from the published recipe; the recipe itself stays untouched."""
+    recipe = await published_recipe(recipe_id)
+    name = payload.name.strip()
+    ensure_not_recipe_name(name)
+    try:
+        profile = recipe_profile_payload(recipe, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="El nombre o la receta no son válidos") from exc
+    profile_id = str(uuid.uuid4())
+    try:
+        insert_recipe_profile(profile_id, recipe, profile)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Ya existe un perfil con ese nombre") from exc
+    db.audit("profile.recipe.copy", f"{recipe.get('name')} v{recipe_version(recipe)} → {name}", True, recipe_id)
+    jobs = queue_profile_downloads(profile_id, background) if payload.download_models else []
+    return {"id": profile_id, "name": name, "jobs": jobs}
+
+
+@app.post("/api/profiles/recipes/{recipe_id}/update", dependencies=secure)
+async def update_profile_recipe(recipe_id: str) -> dict[str, Any]:
+    """Replace an installed recipe with the published version, including a rollback to a lower version."""
+    recipe = await published_recipe(recipe_id)
+    rows = db.rows("SELECT id,name,recipe_version FROM profiles WHERE recipe_id=?", (recipe_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="La receta no está instalada")
+    profile_id = rows[0]["id"]
+    if profile_id in _runtime_profile_ids:
+        raise HTTPException(status_code=409, detail="Detén el perfil antes de actualizar la receta")
+    try:
+        apply_recipe_to_profile(profile_id, recipe)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Ya existe un perfil con ese nombre") from exc
+    db.audit("profile.recipe.update", f"{rows[0]['name']} v{rows[0]['recipe_version']} → v{recipe_version(recipe)}", True, recipe_id)
+    return {"id": profile_id, "version": recipe_version(recipe)}
 
 
 @app.post("/api/profiles", dependencies=secure)
 async def create_profile(payload: ProfilePayload) -> dict[str, str]:
+    ensure_not_recipe_name(payload.name)
     assign_profile_ports(payload, None)
     validate_profile(payload)
     profile_id = str(uuid.uuid4())
@@ -11676,6 +11828,7 @@ async def update_profile(profile_id: str, payload: ProfilePayload) -> dict[str, 
     existing = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
     if not existing:
         raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    ensure_not_recipe_name(payload.name)
     assign_profile_ports(payload, profile_id)
     validate_profile(payload)
     try:
@@ -12276,7 +12429,7 @@ async def download_additional_profile_model(
 
 @app.post("/api/profiles/{profile_id}/activate", dependencies=secure)
 async def activate_profile(profile_id: str) -> dict[str, bool]:
-    ensure_profile_editable(profile_id)
+    ensure_profile_not_managed(profile_id)
     rows = db.rows("SELECT name FROM profiles WHERE id=?", (profile_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="Perfil no encontrado")
@@ -12461,7 +12614,7 @@ async def update_profile_app_web(name: str, payload: ProfileAppWebPayload) -> di
 
 @app.delete("/api/profiles/{profile_id}", dependencies=secure)
 async def delete_profile(profile_id: str, confirm: str = Query()) -> dict[str, bool]:
-    ensure_profile_editable(profile_id)
+    ensure_profile_not_managed(profile_id)
     rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="Perfil no encontrado")

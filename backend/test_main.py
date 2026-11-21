@@ -6601,12 +6601,13 @@ class ProfileApiTests(unittest.TestCase):
         finally:
             db.path = original_path
 
-    def test_recipes_fall_back_to_the_local_catalog_and_install_as_new_profiles(self) -> None:
+    def test_recipes_install_read_only_copy_as_editable_profiles_and_upgrade_by_version(self) -> None:
         from fastapi import BackgroundTasks
 
         local = main_module.local_recipes()
         self.assertEqual(len(main_module.valid_recipes({"version": 1, "recipes": local})), len(local))
         self.assertTrue(all(recipe["description"].get("es") and recipe["description"].get("en") for recipe in local))
+        self.assertTrue(all(isinstance(recipe.get("version"), int) and recipe["version"] >= 1 for recipe in local))
         self.assertEqual(main_module.valid_recipes({"version": 1, "recipes": [{"id": "../x", "name": "Mala"}]}), [])
         original_path = db.path
         main_module._recipes_cache.clear()
@@ -6621,18 +6622,64 @@ class ProfileApiTests(unittest.TestCase):
                 recipe = catalog["recipes"][0]
                 payload = main_module.RecipeInstallPayload()
                 first = asyncio.run(main_module.install_profile_recipe(recipe["id"], payload, BackgroundTasks()))
-                self.assertEqual(first["id"], recipe["id"])
-                with self.assertRaises(HTTPException) as duplicate:
+                self.assertEqual((first["id"], first["version"]), (recipe["id"], recipe["version"]))
+                with self.assertRaises(HTTPException) as again:
                     asyncio.run(main_module.install_profile_recipe(recipe["id"], payload, BackgroundTasks()))
-                self.assertEqual(duplicate.exception.status_code, 409)
-                copy = asyncio.run(main_module.install_profile_recipe(
-                    recipe["id"], main_module.RecipeInstallPayload(name="Mi receta"), BackgroundTasks(),
+                self.assertEqual(again.exception.status_code, 409)
+
+                with self.assertRaises(HTTPException) as edit:
+                    asyncio.run(main_module.update_profile(recipe["id"], main_module.recipe_profile_payload(recipe)))
+                self.assertEqual(edit.exception.status_code, 403)
+                with self.assertRaises(HTTPException) as add:
+                    asyncio.run(main_module.add_model_to_profile(
+                        recipe["id"], main_module.ProfileAddModelPayload(source="ollama", model_id="x"),
+                    ))
+                self.assertEqual(add.exception.status_code, 403)
+                with self.assertRaises(HTTPException) as reserved:
+                    asyncio.run(main_module.create_profile(main_module.recipe_profile_payload(recipe, "RECIPE · Falsa")))
+                self.assertEqual(reserved.exception.status_code, 400)
+
+                duplicate = asyncio.run(main_module.duplicate_profile(
+                    recipe["id"], main_module.ProfileDuplicatePayload(name="Copia editable"),
                 ))
-                self.assertNotEqual(copy["id"], recipe["id"])
-                row = db.rows("SELECT name,model_file,spec_type FROM profiles WHERE id=?", (copy["id"],))[0]
-                self.assertEqual((row["name"], row["model_file"]), ("Mi receta", ""))
+                copy = asyncio.run(main_module.copy_profile_recipe(
+                    recipe["id"], main_module.RecipeCopyPayload(name="Mi receta"), BackgroundTasks(),
+                ))
+                for profile_id in (duplicate["id"], copy["id"]):
+                    row = db.rows("SELECT recipe_id,recipe_version,model_file FROM profiles WHERE id=?", (profile_id,))[0]
+                    self.assertEqual((row["recipe_id"], row["recipe_version"], row["model_file"]), ("", 0, ""))
+                    main_module.ensure_profile_editable(profile_id)
+                with self.assertRaises(HTTPException) as reserved_copy:
+                    asyncio.run(main_module.copy_profile_recipe(
+                        recipe["id"], main_module.RecipeCopyPayload(name="RECIPE: otra"), BackgroundTasks(),
+                    ))
+                self.assertEqual(reserved_copy.exception.status_code, 400)
+
                 listed = asyncio.run(main_module.profile_recipes())
                 self.assertEqual(listed["recipes"][0]["installed_ids"], [recipe["id"]])
+                self.assertEqual(listed["recipes"][0]["installed_version"], recipe["version"])
+
+                db.execute("UPDATE profiles SET favorite=1 WHERE id=?", (recipe["id"],))
+                fixed = {**recipe, "version": recipe["version"] + 1, "context_size": 65536}
+                with patch.object(main_module, "_runtime_profile_ids", [recipe["id"]]):
+                    self.assertEqual(main_module.sync_installed_recipes([fixed]), [])
+                self.assertEqual(main_module.sync_installed_recipes([fixed]), [recipe["id"]])
+                row = db.rows("SELECT context_size,recipe_version,favorite,name FROM profiles WHERE id=?", (recipe["id"],))[0]
+                self.assertEqual(
+                    (row["context_size"], row["recipe_version"], row["favorite"], row["name"]),
+                    (65536, recipe["version"] + 1, 1, recipe["name"]),
+                )
+
+                with patch.object(main_module, "_runtime_profile_ids", [recipe["id"]]):
+                    with self.assertRaises(HTTPException) as busy:
+                        asyncio.run(main_module.update_profile_recipe(recipe["id"]))
+                self.assertEqual(busy.exception.status_code, 409)
+                rolled_back = asyncio.run(main_module.update_profile_recipe(recipe["id"]))
+                self.assertEqual(rolled_back["version"], recipe["version"])
+                self.assertEqual(
+                    db.rows("SELECT context_size FROM profiles WHERE id=?", (recipe["id"],))[0]["context_size"],
+                    recipe["context_size"],
+                )
         finally:
             db.path = original_path
             main_module._recipes_cache.clear()
@@ -6657,6 +6704,17 @@ class ProfileApiTests(unittest.TestCase):
             self.assertEqual(recipe["model_repo"], "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF")
             self.assertEqual((recipe["spec_type"], recipe["draft_filename"]), ("draft-mtp", "mtp-Cyber-Tiel-Coder-35B-A3B.gguf"))
             self.assertTrue(all(not model["model_file"] for model in json.loads(recipe["additional_models_json"])))
+            self.assertEqual(
+                {(row["recipe_id"], row["recipe_version"]) for row in db.rows("SELECT recipe_id,recipe_version FROM profiles WHERE name LIKE 'RECIPE%'")},
+                {(item["id"], item["version"]) for item in main_module.local_recipes()},
+            )
+            legacy_id = main_module.local_recipes()[0]["id"]
+            db.execute("UPDATE profiles SET recipe_id='',recipe_version=0,context_size=4096 WHERE id=?", (legacy_id,))
+            main_module.seed_default_profiles()
+            adopted = db.rows("SELECT recipe_id,recipe_version,context_size FROM profiles WHERE id=?", (legacy_id,))[0]
+            self.assertEqual(adopted["recipe_id"], legacy_id)
+            self.assertGreaterEqual(adopted["recipe_version"], 1)
+            self.assertEqual(adopted["context_size"], main_module.local_recipes()[0]["context_size"])
             db.execute(
                 "UPDATE profiles SET name=? WHERE id=?",
                 ("TTS Lab personalizado", "tts-lab-mlx"),

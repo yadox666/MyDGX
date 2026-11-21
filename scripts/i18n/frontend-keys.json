@@ -1831,7 +1831,6 @@
   "Buscar recetas",
   "RECETAS DE MYDGX",
   "Actualizar desde GitHub",
-  "Perfiles medidos en un DGX Spark y publicados en GitHub. Al instalar una receta se crea un perfil normal que puedes renombrar y editar; los modelos se descargan ahora o más tarde desde la tarjeta del perfil.",
   "Catálogo de GitHub · leído a las {time}",
   "No se pudo leer GitHub ({error}); se muestra la copia incluida en esta versión de MyDGX.",
   "Cargando recetas…",
@@ -1847,7 +1846,16 @@
   "Ocultar detalles",
   "Ver detalles",
   "Descargar JSON",
-  "Instalar otra copia",
   "{name} instalado · {count} descarga(s) en cola",
-  "{name} instalado"
+  "{name} instalado",
+  "Instalada v{version}",
+  "{name} actualizada a v{version}",
+  "Perfiles medidos en un DGX Spark y publicados en GitHub. Una receta instalada es de solo lectura y se actualiza cuando publicamos una versión nueva; para cambiarla, duplícala como perfil normal. Los modelos se descargan ahora o más tarde desde la tarjeta del perfil.",
+  "Duplicar como perfil",
+  "Actualizar a v{version}",
+  "Volver a v{version}",
+  "Ya hay un perfil con este nombre",
+  "Receta de solo lectura; duplícala para editarla",
+  "Detén el perfil antes de actualizar la receta",
+  "Receta: duplícala para editarla"
 ]

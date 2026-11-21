@@ -249,9 +249,25 @@ Una receta es un perfil medido en un DGX Spark y publicado en GitHub, en
   KV, MTP y si es uncensored) y la memoria medida con todo cargado.
 - *Ver detalles* enseña la receta completa en JSON y *Descargar JSON* la
   guarda en tu equipo.
-- *Instalar* crea un perfil normal con el nombre que elijas, y puede poner en
-  cola la descarga de los modelos que falten, drafters MTP incluidos. Después
-  se edita como cualquier otro perfil.
+- *Instalar* añade la receta tal cual, con su nombre, y puede poner en cola la
+  descarga de los modelos que falten, drafters MTP incluidos. Cada receta se
+  instala una sola vez.
+- *Duplicar como perfil* crea un perfil normal con el nombre que elijas, que
+  puedes editar a tu gusto.
+
+Una receta instalada es de solo lectura: puedes encenderla, apagarla, marcarla
+como favorita o predeterminada y borrarla, pero no editarla ni añadirle
+modelos. Para cambiarla, usa *Duplicar* y edita la copia. Los nombres que
+empiezan por `RECIPE` quedan reservados para las recetas.
+
+Cada receta tiene un número de versión (`v1`, `v2`…) y una nota de cambios.
+Si publicamos una versión nueva, la tarjeta del perfil y *Buscar recetas*
+ofrecen *Actualizar a vN*. La actualización conserva el favorito y el
+predeterminado, no vuelve a descargar los modelos que ya tienes y exige apagar
+antes el perfil. Si se publica una versión anterior para retirar una con
+errores, *Buscar recetas* permite volver a ella. Al arrancar, MyDGX actualiza
+las recetas que no estén cargadas cuando la copia local trae una versión más
+nueva.
 
 Las instalaciones nuevas reciben las recetas de la copia local al arrancar.
 La URL del catálogo se cambia con `MYDGX_RECIPES_URL` y solo se acepta

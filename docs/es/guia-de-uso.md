@@ -243,8 +243,11 @@ de descarga, plan de memoria y, si tiene, la app asociada.
 Una receta es un perfil medido en un DGX Spark y publicado en GitHub, en
 `config/recipes.json`. En la página se muestra con un badge azul *RECIPE*.
 
-- **Buscar recetas**, junto a *Nuevo perfil*, lee el catálogo actual de GitHub.
-  Si no hay conexión, muestra la copia incluida en tu versión de MyDGX.
+- **Buscar recetas** está en dos sitios: como pestaña en *Modelos*, junto a
+  *Explorar Hugging Face*, y como botón junto a *Nuevo perfil*. Ambos leen el
+  catálogo actual de GitHub, y *Actualizar desde GitHub* lo vuelve a leer en
+  el momento.
+  Si no hay conexión, muestran la copia incluida en tu versión de MyDGX.
 - Cada receta muestra su descripción, sus modelos (cuantización, contexto,
   KV, MTP y si es uncensored) y la memoria medida con todo cargado.
 - *Ver detalles* enseña la receta completa en JSON y *Descargar JSON* la
@@ -252,6 +255,9 @@ Una receta es un perfil medido en un DGX Spark y publicado en GitHub, en
 - *Instalar* añade la receta tal cual, con su nombre, y puede poner en cola la
   descarga de los modelos que falten, drafters MTP incluidos. Cada receta se
   instala una sola vez.
+- En la pestaña de *Modelos*, *Instalar con modelos* instala la receta y pone
+  en cola todos sus modelos de una vez. Si a una receta instalada le faltan
+  modelos, la tarjeta lo indica y ofrece *Descargar N modelo(s)*.
 - *Duplicar como perfil* crea un perfil normal con el nombre que elijas, que
   puedes editar a tu gusto.
 

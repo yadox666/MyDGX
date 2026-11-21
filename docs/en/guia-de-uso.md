@@ -243,8 +243,10 @@ status, memory plan and, if it has one, the associated app.
 A recipe is a profile measured on a DGX Spark and published on GitHub, in
 `config/recipes.json`. The page shows it with a blue *RECIPE* badge.
 
-- **Find recipes**, next to *New profile*, reads the current catalog from
-  GitHub. Without a connection it shows the copy bundled with your MyDGX
+- **Find recipes** lives in two places: as a tab in *Models*, next to
+  *Explore Hugging Face*, and as a button next to *New profile*. Both read the
+  current catalog from GitHub, and *Refresh from GitHub* reads it again on the
+  spot. Without a connection they show the copy bundled with your MyDGX
   version.
 - Each recipe shows its description, its models (quantization, context, KV,
   MTP and whether it is uncensored) and the memory measured with everything
@@ -254,6 +256,9 @@ A recipe is a profile measured on a DGX Spark and published on GitHub, in
 - *Install* adds the recipe as is, with its own name, and can queue the
   download of any missing models, MTP drafters included. Each recipe is
   installed once.
+- In the *Models* tab, *Install with models* installs the recipe and queues
+  all its models at once. If an installed recipe is missing models, its card
+  says so and offers *Download N model(s)*.
 - *Duplicate as profile* creates a regular profile with the name you choose,
   which you can edit freely.
 

@@ -1857,5 +1857,19 @@
   "Ya hay un perfil con este nombre",
   "Receta de solo lectura; duplícala para editarla",
   "Detén el perfil antes de actualizar la receta",
-  "Receta: duplícala para editarla"
+  "Receta: duplícala para editarla",
+  "{count} descarga(s) en cola para {name}",
+  "Los modelos de {name} ya están descargados",
+  "Perfiles listos para tu DGX Spark",
+  "Consultando GitHub…",
+  "{count} receta",
+  "{count} recetas",
+  "{count} instaladas",
+  "{count} con versión nueva",
+  "{count} descarga(s) en curso",
+  "Faltan {count} modelo(s)",
+  "Modelos listos",
+  "Hay descargas en curso",
+  "Descargar {count} modelo(s)",
+  "Instalar con modelos"
 ]

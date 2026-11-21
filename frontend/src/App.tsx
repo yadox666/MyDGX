@@ -57,6 +57,7 @@ import {
   Upload,
   X,
   Zap,
+  ChefHat,
 } from "lucide-react";
 import { CSSProperties, FocusEvent, FormEvent, ReactNode, createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -1093,6 +1094,8 @@ type Recipe = ProfileModel & {
   additional_models: ProfileModel[];
   installed_ids: string[];
   installed_version: number;
+  missing_models: string[];
+  running: boolean;
 };
 
 type RecipesResponse = { source: "github" | "local"; url: string; error: string; fetched_at: string; recipes: Recipe[] };
@@ -1103,6 +1106,20 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
   onInstalled: () => void;
 }) {
   useDialogEscape(onClose);
+  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={t("Buscar recetas")} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <Card className="model-help-dialog recipes-dialog">
+      <RecipesBrowser notify={notify} onInstalled={onInstalled} onClose={onClose} />
+    </Card>
+  </div>;
+}
+
+function RecipesBrowser({ notify, onInstalled, onClose, activeDownloads = 0 }: {
+  notify: (message: string, error?: boolean) => void;
+  onInstalled: () => void;
+  onClose?: () => void;
+  activeDownloads?: number;
+}) {
+  const inTab = !onClose;
   const [catalog, setCatalog] = useState<RecipesResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [details, setDetails] = useState("");
@@ -1124,10 +1141,10 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
     api<RecipesResponse>("/api/profiles/recipes")
       .then(setCatalog)
       .catch((error: Error) => notify(error.message, true));
-  }, []);
+  }, [activeDownloads]);
 
   function recipeJson(recipe: Recipe) {
-    return JSON.stringify(recipe, (key, value) => (["installed_ids", "installed_version"].includes(key) ? undefined : value), 2);
+    return JSON.stringify(recipe, (key, value) => (["installed_ids", "installed_version", "missing_models", "running"].includes(key) ? undefined : value), 2);
   }
 
   function downloadRecipe(recipe: Recipe) {
@@ -1139,20 +1156,35 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
     URL.revokeObjectURL(url);
   }
 
-  async function install() {
-    if (!installing) return;
+  async function install(form = installing) {
+    if (!form) return;
     setBusy(true);
     try {
-      const copy = installing.mode === "copy";
-      const result = await api<{ id: string; name: string; jobs: string[] }>(`/api/profiles/recipes/${encodeURIComponent(installing.id)}/${copy ? "copy" : "install"}`, {
+      const copy = form.mode === "copy";
+      const result = await api<{ id: string; name: string; jobs: string[] }>(`/api/profiles/recipes/${encodeURIComponent(form.id)}/${copy ? "copy" : "install"}`, {
         method: "POST",
-        body: JSON.stringify(copy ? { name: installing.name, download_models: installing.download } : { download_models: installing.download }),
+        body: JSON.stringify(copy ? { name: form.name, download_models: form.download } : { download_models: form.download }),
       });
       notify(result.jobs.length
         ? t("{name} instalado · {count} descarga(s) en cola", { name: result.name, count: result.jobs.length })
         : t("{name} instalado", { name: result.name }));
       setInstalling(null);
       onInstalled();
+      await load();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function downloadModels(recipe: Recipe) {
+    setBusy(true);
+    try {
+      const result = await api<{ jobs: string[] }>(`/api/profiles/recipes/${encodeURIComponent(recipe.id)}/download`, { method: "POST" });
+      notify(result.jobs.length
+        ? t("{count} descarga(s) en cola para {name}", { count: result.jobs.length, name: recipe.name.replace(RECIPE_PREFIX, "") })
+        : t("Los modelos de {name} ya están descargados", { name: recipe.name.replace(RECIPE_PREFIX, "") }));
       await load();
     } catch (error) {
       notify((error as Error).message, true);
@@ -1175,25 +1207,50 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
     }
   }
 
-  return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={t("Buscar recetas")} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <Card className="model-help-dialog recipes-dialog">
-      <SectionHeading
-        eyebrow={t("RECETAS DE MYDGX")}
-        title={t("Buscar recetas")}
-        action={<div className="dialog-heading-actions">
-          <button className="icon-button" disabled={loading} onClick={() => void load(true)} aria-label={t("Actualizar desde GitHub")} title={t("Actualizar desde GitHub")}><RefreshCw className={loading ? "spin" : ""} size={15} /></button>
-          <button className="icon-button" onClick={onClose} aria-label={t("Cerrar")}><X size={16} /></button>
-        </div>}
-      />
-      <p className="preflight-intro">{t("Perfiles medidos en un DGX Spark y publicados en GitHub. Una receta instalada es de solo lectura y se actualiza cuando publicamos una versión nueva; para cambiarla, duplícala como perfil normal. Los modelos se descargan ahora o más tarde desde la tarjeta del perfil.")}</p>
-      {catalog && (catalog.source === "github"
-        ? <p className="recipes-source">{t("Catálogo de GitHub · leído a las {time}", { time: new Date(catalog.fetched_at).toLocaleTimeString(locale) })}</p>
-        : <div className="profile-warning"><TriangleAlert size={15} />{t("No se pudo leer GitHub ({error}); se muestra la copia incluida en esta versión de MyDGX.", { error: catalog.error })}</div>)}
+  const intro = t("Perfiles medidos en un DGX Spark y publicados en GitHub. Una receta instalada es de solo lectura y se actualiza cuando publicamos una versión nueva; para cambiarla, duplícala como perfil normal. Los modelos se descargan ahora o más tarde desde la tarjeta del perfil.");
+  const source = catalog && (catalog.source === "github"
+    ? <p className="recipes-source">{t("Catálogo de GitHub · leído a las {time}", { time: new Date(catalog.fetched_at).toLocaleTimeString(locale) })}</p>
+    : <div className="profile-warning"><TriangleAlert size={15} />{t("No se pudo leer GitHub ({error}); se muestra la copia incluida en esta versión de MyDGX.", { error: catalog.error })}</div>);
+  const installedCount = catalog?.recipes.filter((recipe) => recipe.installed_version > 0).length ?? 0;
+  const updatesCount = catalog?.recipes.filter((recipe) => recipe.installed_version > 0 && recipe.installed_version !== recipe.version).length ?? 0;
+
+  return <>
+      {inTab
+        ? <Card className="ollama-hero recipes-hero">
+          <div className="ollama-hero-icon"><ChefHat size={26} /></div>
+          <div className="ollama-hero-copy">
+            <span className="card-kicker">{t("RECETAS DE MYDGX")}</span>
+            <h3>{t("Perfiles listos para tu DGX Spark")}</h3>
+            <p>{intro}</p>
+            <div className="recipes-hero-bar">
+              <button className="button primary compact" disabled={loading} onClick={() => void load(true)}><RefreshCw className={loading ? "spin" : ""} size={14} />{" "}{loading ? t("Consultando GitHub…") : t("Actualizar desde GitHub")}</button>
+              {catalog && <span className="recipes-stats">
+                <span className="badge">{t(catalog.recipes.length === 1 ? "{count} receta" : "{count} recetas", { count: catalog.recipes.length })}</span>
+                <span className="badge live">{t("{count} instaladas", { count: installedCount })}</span>
+                {updatesCount > 0 && <span className="badge recipe">{t("{count} con versión nueva", { count: updatesCount })}</span>}
+                {activeDownloads > 0 && <span className="badge running"><RefreshCw className="spin" size={11} />{" "}{t("{count} descarga(s) en curso", { count: activeDownloads })}</span>}
+              </span>}
+            </div>
+            {source}
+          </div>
+        </Card>
+        : <>
+          <SectionHeading
+            eyebrow={t("RECETAS DE MYDGX")}
+            title={t("Buscar recetas")}
+            action={<div className="dialog-heading-actions">
+              <button className="icon-button" disabled={loading} onClick={() => void load(true)} aria-label={t("Actualizar desde GitHub")} title={t("Actualizar desde GitHub")}><RefreshCw className={loading ? "spin" : ""} size={15} /></button>
+              <button className="icon-button" onClick={onClose} aria-label={t("Cerrar")}><X size={16} /></button>
+            </div>}
+          />
+          <p className="preflight-intro">{intro}</p>
+          {source}
+        </>}
       {!catalog
         ? <p className="preflight-intro"><RefreshCw className="spin" size={14} />{" "}{t("Cargando recetas…")}</p>
         : catalog.recipes.length === 0
           ? <div className="profile-warning"><TriangleAlert size={15} />{t("No hay recetas publicadas.")}</div>
-          : <div className="recipes-list">
+          : <div className={`recipes-list ${inTab ? "recipes-grid" : ""}`}>
             {catalog.recipes.map((recipe) => {
               const models = [{ ...recipe, name: recipe.name }, ...recipe.additional_models.filter((model) => model.enabled !== false)];
               const installed = recipe.installed_version > 0;
@@ -1207,6 +1264,9 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
                   <span className="recipe-meta">
                     <span className="badge recipe-version" title={changelog || undefined}>v{recipe.version}</span>
                     {installed && <span className="badge live">{changed ? t("Instalada v{version}", { version: recipe.installed_version }) : t("Instalada")}</span>}
+                    {installed && (recipe.missing_models.length
+                      ? <span className="badge warning" title={recipe.missing_models.join("\n")}>{t("Faltan {count} modelo(s)", { count: recipe.missing_models.length })}</span>
+                      : <span className="badge">{t("Modelos listos")}</span>)}
                     <span className="badge">{t(models.length === 1 ? "{count} modelo" : "{count} modelos", { count: models.length })}</span>
                     {recipe.memory_gib ? <span className="badge" title={t("Memoria medida con todos los modelos cargados")}>≈{recipe.memory_gib.toLocaleString(locale)} GiB</span> : null}
                   </span>
@@ -1245,15 +1305,17 @@ function RecipesDialog({ notify, onClose, onInstalled }: {
                     <button className="button secondary" onClick={() => setDetails(details === recipe.id ? "" : recipe.id)}><Eye size={14} /> {details === recipe.id ? t("Ocultar detalles") : t("Ver detalles")}</button>
                     <button className="button secondary" onClick={() => downloadRecipe(recipe)}><Download size={14} /> {t("Descargar JSON")}</button>
                     <button className="button secondary" onClick={() => setInstalling({ id: recipe.id, mode: "copy", name: recipe.name.replace(RECIPE_PREFIX, ""), download: true })}><Copy size={14} /> {t("Duplicar como perfil")}</button>
+                    {installed && recipe.missing_models.length > 0 && <button className="button primary" disabled={busy || activeDownloads > 0} title={activeDownloads > 0 ? t("Hay descargas en curso") : recipe.missing_models.join("\n")} onClick={() => void downloadModels(recipe)}><Download size={14} /> {t("Descargar {count} modelo(s)", { count: recipe.missing_models.length })}</button>}
                     {changed
-                      ? <button className="button primary" disabled={busy} title={changelog || undefined} onClick={() => void updateRecipe(recipe)}><RefreshCw size={14} /> {recipe.version > recipe.installed_version ? t("Actualizar a v{version}", { version: recipe.version }) : t("Volver a v{version}", { version: recipe.version })}</button>
-                      : !installed && <button className="button primary" disabled={nameTaken} title={nameTaken ? t("Ya hay un perfil con este nombre") : undefined} onClick={() => setInstalling({ id: recipe.id, mode: "install", name: recipe.name, download: true })}><Plus size={14} /> {t("Instalar")}</button>}
+                      ? <button className="button primary" disabled={busy || recipe.running} title={recipe.running ? t("Detén el perfil antes de actualizar la receta") : changelog || undefined} onClick={() => void updateRecipe(recipe)}><RefreshCw size={14} /> {recipe.version > recipe.installed_version ? t("Actualizar a v{version}", { version: recipe.version }) : t("Volver a v{version}", { version: recipe.version })}</button>
+                      : !installed && <button className="button primary" disabled={nameTaken} title={nameTaken ? t("Ya hay un perfil con este nombre") : undefined} onClick={() => inTab
+                        ? void install({ id: recipe.id, mode: "install", name: recipe.name, download: true })
+                        : setInstalling({ id: recipe.id, mode: "install", name: recipe.name, download: true })}><Plus size={14} /> {inTab ? t("Instalar con modelos") : t("Instalar")}</button>}
                   </div>}
               </article>;
             })}
           </div>}
-    </Card>
-  </div>;
+  </>;
 }
 
 function AddToProfileDialog({ request, notify, onClose }: {
@@ -3795,9 +3857,9 @@ function ModelsView({
   refresh: () => void;
   notify: (message: string, error?: boolean) => void;
 }) {
-  const [tab, setTab] = useState<"installed" | "catalog" | "ollama" | "import">(() => {
+  const [tab, setTab] = useState<"installed" | "catalog" | "recipes" | "ollama" | "import">(() => {
     const stored = localStorage.getItem("mydgx-models-tab");
-    return stored === "catalog" || stored === "ollama" || stored === "import" ? stored : "installed";
+    return stored === "catalog" || stored === "recipes" || stored === "ollama" || stored === "import" ? stored : "installed";
   });
   const [catalogMode, setCatalogMode] = useState<"spark" | "all" | "favorites">(() => {
     const stored = localStorage.getItem("mydgx-models-catalog");
@@ -4273,6 +4335,7 @@ function ModelsView({
     .filter((job) => job.kind === "ollama.pull" || job.kind === "ollama.update")
     .sort((a, b) => Number(activeJobStatuses.has(b.status)) - Number(activeJobStatuses.has(a.status)) || b.created_at.localeCompare(a.created_at))
     .slice(0, 8);
+  const recipeDownloads = jobs.filter((job) => job.kind === "profile.download" && activeJobStatuses.has(job.status)).length;
   const displayedJobs = jobs.reduce<Array<{ job: Job; duplicateCount: number }>>((groups, job) => {
     const created = Date.parse(job.created_at);
     const duplicate = job.status === "completed" && job.kind.startsWith("huggingface.") && job.kind.includes("download")
@@ -4343,11 +4406,16 @@ function ModelsView({
       <div className="tabs">
         <button className={tab === "installed" ? "active" : ""} onClick={() => setTab("installed")}><HardDrive size={14} />{" "}{t("Instalados")}{" "}<b className="tab-count">{localModelCount}</b></button>
         <button className={tab === "catalog" ? "active" : ""} onClick={() => setTab("catalog")}><Sparkles size={14} />{" "}{t("Explorar Hugging Face")}</button>
+        <button className={tab === "recipes" ? "active" : ""} onClick={() => setTab("recipes")}><ChefHat size={14} />{" "}{t("Buscar recetas")}{recipeDownloads > 0 && <b className="tab-count live">●</b>}</button>
         <button className={tab === "ollama" ? "active" : ""} onClick={() => setTab("ollama")}><Bot size={14} />{" "}{t("Descargar con Ollama")}{ollamaJobs.some((job) => activeJobStatuses.has(job.status)) && <b className="tab-count live">●</b>}</button>
         <button className={tab === "import" ? "active" : ""} onClick={() => setTab("import")}><FileArchive size={14} />{" "}{t("Importar ZIP")}{jobs.some((job) => job.kind === "models.import" && activeJobStatuses.has(job.status)) && <b className="tab-count live">●</b>}</button>
       </div>
 
-      {tab === "import" ? (
+      {tab === "recipes" ? (
+        <div className="recipes-tab">
+          <RecipesBrowser notify={notify} onInstalled={refresh} activeDownloads={recipeDownloads} />
+        </div>
+      ) : tab === "import" ? (
         <ModelImportView
           notify={notify}
           onImported={refresh}

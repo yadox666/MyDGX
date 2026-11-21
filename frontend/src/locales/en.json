@@ -1872,5 +1872,19 @@
   "Ya hay un perfil con este nombre": "A profile with this name already exists",
   "Receta de solo lectura; duplícala para editarla": "Read-only recipe; duplicate it to edit",
   "Detén el perfil antes de actualizar la receta": "Stop the profile before updating the recipe",
-  "Receta: duplícala para editarla": "Recipe: duplicate it to edit"
+  "Receta: duplícala para editarla": "Recipe: duplicate it to edit",
+  "{count} descarga(s) en cola para {name}": "{count} download(s) queued for {name}",
+  "Los modelos de {name} ya están descargados": "The models of {name} are already downloaded",
+  "Perfiles listos para tu DGX Spark": "Ready-made profiles for your DGX Spark",
+  "Consultando GitHub…": "Checking GitHub…",
+  "{count} receta": "{count} recipe",
+  "{count} recetas": "{count} recipes",
+  "{count} instaladas": "{count} installed",
+  "{count} con versión nueva": "{count} with a new version",
+  "{count} descarga(s) en curso": "{count} download(s) in progress",
+  "Faltan {count} modelo(s)": "{count} model(s) missing",
+  "Modelos listos": "Models ready",
+  "Hay descargas en curso": "Downloads in progress",
+  "Descargar {count} modelo(s)": "Download {count} model(s)",
+  "Instalar con modelos": "Install with models"
 }

@@ -6658,6 +6658,23 @@ class ProfileApiTests(unittest.TestCase):
                 listed = asyncio.run(main_module.profile_recipes())
                 self.assertEqual(listed["recipes"][0]["installed_ids"], [recipe["id"]])
                 self.assertEqual(listed["recipes"][0]["installed_version"], recipe["version"])
+                expected_missing = [
+                    model["name"] for model in main_module.profile_models(db.rows("SELECT * FROM profiles WHERE id=?", (recipe["id"],))[0])
+                    if model.get("enabled", True) and model["engine"] == "llama.cpp"
+                ]
+                self.assertEqual(listed["recipes"][0]["missing_models"], expected_missing)
+                self.assertTrue(expected_missing)
+                self.assertFalse(listed["recipes"][0]["running"])
+                background = BackgroundTasks()
+                queued = asyncio.run(main_module.download_profile_recipe(recipe["id"], background))
+                self.assertEqual(len(queued["jobs"]), len(expected_missing))
+                self.assertEqual(len(background.tasks), len(expected_missing))
+                with patch.object(main_module, "profile_model_is_downloaded", return_value=True):
+                    self.assertEqual(asyncio.run(main_module.download_profile_recipe(recipe["id"], BackgroundTasks()))["jobs"], [])
+                    self.assertEqual(asyncio.run(main_module.profile_recipes())["recipes"][0]["missing_models"], [])
+                with self.assertRaises(HTTPException) as not_installed:
+                    asyncio.run(main_module.download_profile_recipe(catalog["recipes"][1]["id"], BackgroundTasks()))
+                self.assertEqual(not_installed.exception.status_code, 404)
 
                 db.execute("UPDATE profiles SET favorite=1 WHERE id=?", (recipe["id"],))
                 fixed = {**recipe, "version": recipe["version"] + 1, "context_size": 65536}

@@ -11706,20 +11706,23 @@ async def load_recipes(refresh: bool = False) -> dict[str, Any]:
 @app.get("/api/profiles/recipes", dependencies=secure)
 async def profile_recipes(refresh: bool = False) -> dict[str, Any]:
     catalog = await load_recipes(refresh)
-    rows = db.rows("SELECT id,name,recipe_id,recipe_version FROM profiles")
-    return {
-        **catalog,
-        "recipes": [
-            {
-                **recipe,
-                "installed_version": next(
-                    (int(row["recipe_version"] or 0) for row in rows if row["recipe_id"] == recipe["id"]), 0
-                ),
-                "installed_ids": [row["id"] for row in rows if row["id"] == recipe["id"] or row["name"] == recipe.get("name")],
-            }
-            for recipe in catalog["recipes"]
-        ],
-    }
+    rows = db.rows("SELECT * FROM profiles")
+    recipes = []
+    for recipe in catalog["recipes"]:
+        installed = next((row for row in rows if row["recipe_id"] == recipe["id"]), None)
+        missing = [
+            model["name"]
+            for model in (profile_models(installed) if installed else [])
+            if model.get("enabled", True) and model["engine"] == "llama.cpp" and not profile_model_is_downloaded(model)
+        ]
+        recipes.append({
+            **recipe,
+            "installed_version": int(installed["recipe_version"] or 0) if installed else 0,
+            "installed_ids": [row["id"] for row in rows if row["id"] == recipe["id"] or row["name"] == recipe.get("name")],
+            "missing_models": missing,
+            "running": bool(installed and installed["id"] in _runtime_profile_ids),
+        })
+    return {**catalog, "recipes": recipes}
 
 
 class RecipeInstallPayload(BaseModel):
@@ -11742,7 +11745,10 @@ def queue_profile_downloads(profile_id: str, background: BackgroundTasks) -> lis
     jobs: list[str] = []
     row = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))[0]
     for model in profile_models(row):
-        if model["engine"] != "llama.cpp" or not model.get("model_repo") or profile_model_is_downloaded(model):
+        if (
+            not model.get("enabled", True) or model["engine"] != "llama.cpp"
+            or not model.get("model_repo") or profile_model_is_downloaded(model)
+        ):
             continue
         model["_profile_id"] = profile_id
         model["_is_additional"] = model["id"] != "primary"
@@ -11786,6 +11792,18 @@ async def copy_profile_recipe(recipe_id: str, payload: RecipeCopyPayload, backgr
     db.audit("profile.recipe.copy", f"{recipe.get('name')} v{recipe_version(recipe)} → {name}", True, recipe_id)
     jobs = queue_profile_downloads(profile_id, background) if payload.download_models else []
     return {"id": profile_id, "name": name, "jobs": jobs}
+
+
+@app.post("/api/profiles/recipes/{recipe_id}/download", dependencies=secure)
+async def download_profile_recipe(recipe_id: str, background: BackgroundTasks) -> dict[str, Any]:
+    """Queue every missing model of an installed recipe, additional models and MTP drafters included."""
+    rows = db.rows("SELECT id FROM profiles WHERE recipe_id=?", (recipe_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="La receta no está instalada")
+    jobs = queue_profile_downloads(rows[0]["id"], background)
+    if jobs:
+        db.audit("profile.recipe.download", recipe_id, True, f"{len(jobs)} job(s)")
+    return {"id": rows[0]["id"], "jobs": jobs}
 
 
 @app.post("/api/profiles/recipes/{recipe_id}/update", dependencies=secure)

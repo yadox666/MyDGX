@@ -39,6 +39,10 @@ API: `GET /api/overview`, `GET /api/metrics/history`, `GET /api/metrics/models`.
 
 ## Chat
 
+El chat se abre como ventana flotante abajo a la derecha con el botón del
+robot de la cabecera, a la izquierda de las notificaciones. Se cierra con la
+X, con Escape o con el mismo botón, y conserva la conversación al reabrirlo.
+
 Dos modos:
 
 - **Chat** con cualquier modelo de Ollama o de un perfil cargado

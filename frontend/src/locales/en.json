@@ -1826,5 +1826,8 @@
   "Controlar servicios": "Control services",
   "Permite iniciar, detener y reiniciar los servicios de la lista permitida desde Sistema y Motores. Pide confirmación para activarlo": "Allows starting, stopping and restarting the allowlisted services from System and Engines. Asks for confirmation to turn it on",
   "Modelo sano: superó el benchmark": "Healthy model: passed the benchmark",
-  "Probado {date}": "Tested {date}"
+  "Probado {date}": "Tested {date}",
+  "Abrir asistente": "Open assistant",
+  "Cerrar asistente": "Close assistant",
+  "Imagen, audio, vídeo y embeddings": "Image, audio, video and embeddings"
 }

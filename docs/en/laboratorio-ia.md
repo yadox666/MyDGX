@@ -11,7 +11,7 @@ sends the content directly to the local endpoint configured for each model.
    protocol.
 3. Activate the profile and start it.
 4. Check in **Engines** that the runtime or endpoint is available.
-5. Open **AI Lab** and press reload if you just changed the profile.
+5. Open **System → AI Lab** and press reload if you just changed the profile.
 
 The **Service** selector shows the enabled models of the active profile. If the
 managed ComfyUI installation is active, it also adds

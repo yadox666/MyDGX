@@ -545,3 +545,4 @@
 "¿Sobrescribir los archivos cloud-init?" = "Overwrite the cloud-init files?";
 "¿Tienes otro Spark? Abre Preferencias y pulsa el botón del asistente." = "Have another Spark? Open Settings and click the assistant button.";
 "¿Tu Spark es nuevo y aún no lo has encendido?" = "Is your Spark new and not started yet?";
+"%@ no responde en el puerto %lld del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app." = "%@ isn’t responding on port %lld on the DGX. Check in Profiles that the web port matches the one the app uses.";

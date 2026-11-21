@@ -1811,5 +1811,8 @@
   "Controlar servicios",
   "Permite iniciar, detener y reiniciar los servicios de la lista permitida desde Sistema y Motores. Pide confirmación para activarlo",
   "Modelo sano: superó el benchmark",
-  "Probado {date}"
+  "Probado {date}",
+  "Abrir asistente",
+  "Cerrar asistente",
+  "Imagen, audio, vídeo y embeddings"
 ]

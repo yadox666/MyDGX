@@ -11,7 +11,7 @@ envía el contenido directamente al endpoint local configurado para cada modelo.
    protocolo del modelo.
 3. Activar el perfil y arrancarlo.
 4. Comprobar en **Motores** que el runtime o endpoint está disponible.
-5. Abrir **Laboratorio IA** y pulsar recargar si se acaba de cambiar el perfil.
+5. Abrir **Sistema → Laboratorio IA** y pulsar recargar si se acaba de cambiar el perfil.
 
 El selector **Servicio** muestra los modelos habilitados del perfil activo. Si la
 instalación administrada de ComfyUI está activa, añade también

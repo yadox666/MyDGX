@@ -1181,6 +1181,10 @@ final class AppModel: ObservableObject {
     }
 
     func openWebApp(_ app: WebApp) {
+        if app.reachable == false {
+            reportWebAppProblem(app, String(localized: "\(app.alias) no responde en el puerto \(app.port) del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app."))
+            return
+        }
         let profile = configuration.activeConnection
         guard profile.tunnel.enabled else {
             var components = URLComponents()
@@ -1194,7 +1198,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard let url = app.localURL else {
-            lastError = String(localized: "\(app.alias) no tiene un puerto web válido")
+            reportWebAppProblem(app, String(localized: "\(app.alias) no tiene un puerto web válido"))
             return
         }
         Task {
@@ -1204,7 +1208,7 @@ final class AppModel: ObservableObject {
                 return
             }
             guard !operationInProgress else {
-                statusMessage = String(localized: "Espera a que termine la operación en curso para abrir \(app.alias)")
+                reportWebAppProblem(app, String(localized: "Espera a que termine la operación en curso para abrir \(app.alias)"))
                 return
             }
             startWebAppTunnel(app, url: url, profile: profile)
@@ -1228,13 +1232,19 @@ final class AppModel: ObservableObject {
                 throw RemoteActionError.webAppUnavailable(app.alias, app.port)
             } catch {
                 if let owner = await localPortListener(app.port), owner != "ssh" {
-                    lastError = String(localized: "El puerto \(app.port) de este Mac lo usa \(owner), así que el túnel no puede abrir \(app.alias). Cierra \(owner) o cambia el puerto web de la app en Perfiles.")
+                    reportWebAppProblem(app, String(localized: "El puerto \(app.port) de este Mac lo usa \(owner), así que el túnel no puede abrir \(app.alias). Cierra \(owner) o cambia el puerto web de la app en Perfiles."))
                 } else {
-                    lastError = error.localizedDescription
+                    reportWebAppProblem(app, error.localizedDescription)
                 }
-                statusMessage = String(localized: "\(app.alias) no disponible")
             }
         }
+    }
+
+    /// The menu has no room for error text, so a failed open is also reported as a notification.
+    private func reportWebAppProblem(_ app: WebApp, _ message: String) {
+        lastError = message
+        statusMessage = String(localized: "\(app.alias) no disponible")
+        AppNotifications.send(title: statusMessage, body: message)
     }
 
     /// Keeps a forward open for each running web app so the Summary links in the browser also work over the tunnel.

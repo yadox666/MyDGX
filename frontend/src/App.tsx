@@ -87,7 +87,7 @@ import {
   ZAxis,
 } from "recharts";
 
-type View = "dashboard" | "models" | "benchmarks" | "profiles" | "engines" | "chat" | "multimodal" | "storage" | "system" | "logs" | "settings";
+type View = "dashboard" | "models" | "benchmarks" | "profiles" | "engines" | "multimodal" | "storage" | "system" | "logs" | "settings";
 type Theme = "light" | "dark";
 type ThemePreference = Theme | "system";
 
@@ -2054,13 +2054,11 @@ const MANAGED_PROFILE_IDS = new Set(["mydgx-default", QUICK_PROFILE_ID]);
 
 const navItems: Array<{ id: View; label: string; icon: typeof Gauge }> = [
   { id: "dashboard", label: t("Resumen"), icon: Gauge },
-  { id: "chat", label: t("Chat"), icon: MessageSquare },
   { id: "models", label: t("Modelos"), icon: Boxes },
   { id: "profiles", label: t("Perfiles"), icon: SlidersHorizontal },
   { id: "benchmarks", label: t("Benchmarks"), icon: Activity },
   { id: "storage", label: t("Almacenamiento"), icon: HardDrive },
   { id: "engines", label: t("Motores"), icon: Cpu },
-  { id: "multimodal", label: t("Laboratorio IA"), icon: Sparkles },
   { id: "settings", label: t("Configuración"), icon: Settings },
   { id: "system", label: t("Sistema"), icon: Server },
   { id: "logs", label: t("Logs"), icon: Terminal },
@@ -5482,7 +5480,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       <Card className={`profile-card ${profile.active ? "active" : ""} ${running ? "running" : ""}`} key={profile.id}>
         <div className="profile-card-head">
           <div className="model-icon"><SlidersHorizontal /></div>
-          <div><strong>{profile.name}</strong><small>{profile.engine} · {profile.task} · {profile.model_repo || profile.model_ref}</small></div>
+          <div><strong title={profile.name}>{profile.name}</strong><small title={`${profile.engine} · ${profile.task} · ${profile.model_repo || profile.model_ref}`}>{profile.engine} · {profile.task} · {profile.model_repo || profile.model_ref}</small></div>
           <div className="profile-badges">
             {profile.source.startsWith("ARTIFEX") ? <span className="badge">ARTIFEX</span> : null}
             {profile.read_only ? <span className="badge" title={profile.id === QUICK_PROFILE_ID ? t("Modelos encendidos desde Modelos; no se restaura al reiniciar") : t("Modelos marcados como Default en Modelos; arranca siempre con MyDGX")}>{t("Solo lectura")}</span> : null}
@@ -6229,7 +6227,7 @@ function MultimodalLabView({ notify }: { notify: (message: string, error?: boole
   </div>;
 }
 
-function ChatView({ models, config, notify }: { models: Models | null; config: Config | null; notify: (message: string, error?: boolean) => void }) {
+function ChatView({ models, config, notify, onClose }: { models: Models | null; config: Config | null; notify: (message: string, error?: boolean) => void; onClose?: () => void }) {
   type AssistantAction = {
     id: string;
     name: string;
@@ -6441,6 +6439,7 @@ function ChatView({ models, config, notify }: { models: Models | null; config: C
           <select value={activeModel} onChange={(event) => setModel(event.target.value)}>
             {available.length ? available.map((item) => <option key={item.value} value={item.value}>{item.label}</option>) : <option value="">{t("Sin modelos")}</option>}
           </select>
+          {onClose && <button className="chat-close" type="button" onClick={onClose} aria-label={t("Cerrar asistente")} title={t("Cerrar asistente")}><X size={16} /></button>}
         </div>
       </div>
       <div className="messages">
@@ -7959,7 +7958,7 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
   );
 }
 
-function SystemView({ config, jobs, overview, notify }: { config: Config | null; jobs: Job[]; overview: Overview | null; notify: (message: string, error?: boolean) => void }) {
+function SystemView({ config, jobs, overview, notify, onOpenLab }: { config: Config | null; jobs: Job[]; overview: Overview | null; notify: (message: string, error?: boolean) => void; onOpenLab: () => void }) {
   const [services, setServices] = useState<Array<Record<string, unknown>>>([]);
   const [updates, setUpdates] = useState<SystemUpdates | null>(null);
   const [versions, setVersions] = useState<{ components: Array<{ name: string; version?: string; available: boolean; detail: string; category?: string }>; packages: Array<{ name: string; version: string }> } | null>(null);
@@ -8071,7 +8070,10 @@ function SystemView({ config, jobs, overview, notify }: { config: Config | null;
       <SectionHeading
         eyebrow={overview?.host.is_dgx_spark ? t("PLATAFORMA NVIDIA GB10") : (overview?.host.os_family ? overview.host.os_family.toUpperCase() : t("SISTEMA"))}
         title={t("Sistema y servicios")}
-        action={<button className="icon-button" onClick={load}><RefreshCw size={17} /></button>}
+        action={<div className="system-heading-actions">
+          <button className="button secondary" onClick={onOpenLab} title={t("Imagen, audio, vídeo y embeddings")}><Sparkles size={15} />{" "}{t("Laboratorio IA")}</button>
+          <button className="icon-button" onClick={load}><RefreshCw size={17} /></button>
+        </div>}
       />
       {overview && systemBranding && (
         <Card className={`system-device-banner device-${overview.host.device_variant}`}>
@@ -8817,8 +8819,10 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   });
   const [view, setView] = useState<View>(() => {
     const stored = localStorage.getItem("mydgx-view");
-    return navItems.some((item) => item.id === stored) ? stored as View : "dashboard";
+    return navItems.some((item) => item.id === stored) || stored === "multimodal" ? stored as View : "dashboard";
   });
+  const [chatOpen, setChatOpen] = useState(() => localStorage.getItem("mydgx-chat-open") === "1");
+  const [chatMounted, setChatMounted] = useState(chatOpen);
   const [menuOpen, setMenuOpen] = useState(false);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [modelMetrics, setModelMetrics] = useState<ModelMetricsResponse>({ current: [], history: [], retention_hours: 0 });
@@ -8985,6 +8989,16 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
 
   useEffect(() => {
     localStorage.setItem("mydgx-view", view);
+  }, [view]);
+  useEffect(() => {
+    localStorage.setItem("mydgx-chat-open", chatOpen ? "1" : "0");
+    if (!chatOpen) return;
+    setChatMounted(true);
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setChatOpen(false); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [chatOpen]);
+  useEffect(() => {
     const scrollKey = `mydgx-scroll-${view}`;
     const frame = window.requestAnimationFrame(() => {
       const stored = Number(localStorage.getItem(scrollKey) || 0);
@@ -9030,7 +9044,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
     models: { value: loadedModelTotal, title: t(loadedModelTotal === 1 ? "{count} modelo cargado" : "{count} modelos cargados", { count: loadedModelTotal }) },
     benchmarks: { value: pendingBenchmarks, title: t(pendingBenchmarks === 1 ? "{count} benchmark pendiente" : "{count} benchmarks pendientes", { count: pendingBenchmarks }) },
   };
-  const currentLabel = useMemo(() => navItems.find((item) => item.id === view)?.label ?? "MyDGX", [view]);
+  const currentLabel = useMemo(() => view === "multimodal" ? t("Laboratorio IA") : navItems.find((item) => item.id === view)?.label ?? "MyDGX", [view]);
   const benchmarkSuiteJob = jobs.find(
     (job) => job.kind === "benchmark.suite" && activeJobStatuses.has(job.status),
   );
@@ -9044,10 +9058,9 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   else if (view === "benchmarks") content = <BenchmarksView jobs={jobs} notify={notify} />;
   else if (view === "profiles") content = <ProfilesView jobs={jobs} notify={notify} />;
   else if (view === "engines") content = <EnginesView notify={notify} />;
-  else if (view === "chat") content = <ChatView models={models} config={config} notify={notify} />;
   else if (view === "multimodal") content = <MultimodalLabView notify={notify} />;
   else if (view === "storage") content = <StorageView notify={notify} />;
-  else if (view === "system") content = <SystemView config={config} jobs={jobs} overview={overview} notify={notify} />;
+  else if (view === "system") content = <SystemView config={config} jobs={jobs} overview={overview} notify={notify} onOpenLab={() => { setView("multimodal"); window.scrollTo({ top: 0 }); }} />;
   else if (view === "logs") content = <LogsView notify={notify} notifications={notifications} onReadNotifications={readNotifications} />;
   else content = <SettingsView config={config} themePreference={themePreference} setThemePreference={setThemePreference} notify={notify} />;
 
@@ -9098,6 +9111,14 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
               <FontSizeControl onChange={setFontScale} />
               <button className="header-pref language-toggle" onClick={() => setLanguagePreference(language === "es" ? "en" : "es")} title={language === "es" ? t("Switch to English") : t("Cambiar a español")} aria-label={language === "es" ? t("Switch to English") : t("Cambiar a español")}><Languages size={15} /><span>{language.toUpperCase()}</span></button>
             </div>
+            <button
+              className={`header-icon-button chat-toggle ${chatOpen ? "active" : ""}`}
+              onClick={() => setChatOpen((open) => !open)}
+              title={chatOpen ? t("Cerrar asistente") : t("Abrir asistente")}
+              aria-label={chatOpen ? t("Cerrar asistente") : t("Abrir asistente")}
+              aria-expanded={chatOpen}
+              aria-controls="chat-dock"
+            ><Bot size={17} /></button>
             <NotificationBell
               unread={notifications?.unread ?? 0}
               popup={notificationPopup}
@@ -9114,6 +9135,9 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
         {error && <div className="error-banner"><ShieldCheck size={18} /><span>{error}</span><button onClick={() => { void refreshOverview(); void refreshCore(); void refreshModels(); }}>{t("Reintentar")}</button></div>}
         <div className="content">{content}</div>
       </main>
+      {chatMounted && <div id="chat-dock" className="chat-dock" role="dialog" aria-label={t("MyDGX Copilot")} hidden={!chatOpen}>
+        <ChatView models={models} config={config} notify={notify} onClose={() => setChatOpen(false)} />
+      </div>}
       {toast && <div className={`toast ${toast.error ? "error" : ""}`}>{toast.error ? <ShieldCheck /> : <Sparkles />}<span>{toast.message}</span></div>}
     </div>
   );

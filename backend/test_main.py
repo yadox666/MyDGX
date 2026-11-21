@@ -6516,6 +6516,28 @@ class ProfileApiTests(unittest.TestCase):
             self.assertEqual(db.rows("SELECT runtime_requirement FROM profiles WHERE id='artifex-gpt-oss'")[0]["runtime_requirement"], "Requiere llama.cpp b11429")
         db.path = original_path
 
+    def test_deleted_seed_profiles_are_not_seeded_again(self) -> None:
+        original_path = db.path
+        deleted = {"artifex-v8", "artifex-gpt-oss", "security-tools-bughunter-v8"}
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "seed-dismissed.db"
+                db.initialize()
+                seed_artifex_profiles()
+                main_module.seed_default_profiles()
+                for profile_id in sorted(deleted):
+                    name = db.rows("SELECT name FROM profiles WHERE id=?", (profile_id,))[0]["name"]
+                    asyncio.run(main_module.delete_profile(profile_id, confirm=name))
+                seed_artifex_profiles()
+                main_module.seed_default_profiles()
+                remaining = {row["id"] for row in db.rows("SELECT id FROM profiles")}
+                self.assertFalse(deleted & remaining)
+                self.assertTrue((set(main_module.ARTIFEX_PROFILE_IDS) - deleted) <= remaining)
+                self.assertIn("ragkit-paramita", remaining)
+                self.assertEqual(main_module.dismissed_seed_profiles(), deleted)
+        finally:
+            db.path = original_path
+
     def test_recovered_default_profiles_are_seeded_once_without_overwriting(self) -> None:
         original_path = db.path
         with tempfile.TemporaryDirectory() as directory:

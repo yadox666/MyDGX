@@ -2287,9 +2287,38 @@ ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
 )
 
 
+SEED_DISMISSED_KEY = "profiles.seed_dismissed"
+ARTIFEX_PROFILE_IDS = frozenset(preset["id"] for preset in ARTIFEX_PROFILES)
+
+
+def default_catalog_profile_ids() -> set[str]:
+    try:
+        catalog = json.loads((ROOT / "config" / "default-profiles.json").read_text(encoding="utf-8"))
+        return {str(item.get("id")) for item in catalog.get("profiles", []) if isinstance(item, dict) and item.get("id")}
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return set()
+
+
+def dismissed_seed_profiles() -> set[str]:
+    try:
+        values = json.loads(preference_value(SEED_DISMISSED_KEY) or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return set()
+    return {str(item) for item in values} if isinstance(values, list) else set()
+
+
+def dismiss_seed_profile(profile_id: str) -> None:
+    """A deleted ARTIFEX or catalog preset stays deleted; otherwise the next start would seed it again."""
+    if profile_id in ARTIFEX_PROFILE_IDS or profile_id in default_catalog_profile_ids():
+        save_preference(SEED_DISMISSED_KEY, json.dumps(sorted(dismissed_seed_profiles() | {profile_id})))
+
+
 def seed_artifex_profiles() -> None:
     now = utc_now()
+    dismissed = dismissed_seed_profiles()
     for preset in ARTIFEX_PROFILES:
+        if preset["id"] in dismissed:
+            continue
         files = preset["files"]
         db.execute(
             """
@@ -11278,7 +11307,7 @@ def seed_default_profiles() -> None:
         raise RuntimeError("El catálogo de perfiles predeterminados no es válido")
     now = utc_now()
     statement = PROFILE_INSERT_SQL.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
-    existing = {str(row["id"]) for row in db.rows("SELECT id FROM profiles")}
+    existing = {str(row["id"]) for row in db.rows("SELECT id FROM profiles")} | dismissed_seed_profiles()
     with db.connect() as connection:
         for value in catalog["profiles"]:
             if not isinstance(value, dict):
@@ -12180,6 +12209,7 @@ async def delete_profile(profile_id: str, confirm: str = Query()) -> dict[str, b
         await stop_runtime_profile(profile_id)
     remove_desired_profile_id(profile_id)
     db.execute("DELETE FROM profiles WHERE id=?", (profile_id,))
+    dismiss_seed_profile(profile_id)
     db.audit("profile.delete", profile["name"], True)
     return {"deleted": True}
 

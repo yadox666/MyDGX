@@ -477,9 +477,20 @@ function storedHfSearches() {
 
 const UNCENSORED_PATTERN = /uncensored|abliterat|\bablit|heretic|derestrict|unrestrict|unleashed|unfiltered|nsfw|dolphin/i;
 
-function UncensoredBadge({ name, flagged = false }: { name: string; flagged?: boolean }) {
+const UNCENSORED_KINDS: Array<[RegExp, string]> = [
+  [/abliterat|ablit/i, "Abliterated"],
+  [/heretic/i, "Heretic"],
+  [/derestrict/i, "Derestricted"],
+  [/unrestrict/i, "Unrestricted"],
+  [/unleashed/i, "Unleashed"],
+  [/unfiltered/i, "Unfiltered"],
+  [/nsfw/i, "NSFW"],
+];
+
+function UncensoredBadge({ name, flagged = false, showKind = false }: { name: string; flagged?: boolean; showKind?: boolean }) {
   if (!flagged && !UNCENSORED_PATTERN.test(name)) return null;
-  return <span className="badge uncensored" title={t("Modelo sin filtros de seguridad (uncensored, abliterated o similar), según su nombre o las etiquetas y el modelo base de su ficha")}>{t("Uncensored")}</span>;
+  const kind = showKind ? UNCENSORED_KINDS.find(([pattern]) => pattern.test(name))?.[1] : undefined;
+  return <span className="badge uncensored" title={t("Modelo sin filtros de seguridad (uncensored, abliterated o similar), según su nombre o las etiquetas y el modelo base de su ficha")}>{kind ?? t("Uncensored")}</span>;
 }
 
 type ModelGlossaryEntry = {
@@ -1954,7 +1965,21 @@ type ProfileModel = ModelConfig & {
   id: string;
   name: string;
   downloaded: boolean;
+  spec_type?: string;
+  draft_filename?: string;
+  uncensored?: string;
 };
+
+const GGUF_QUANT_SUFFIX = /[-_.]((?:UD-)?(?:I?Q\d(?:_[A-Z0-9]+)*|BF16|F16|F32|MXFP4(?:_[A-Z0-9]+)*))$/i;
+
+function profileModelIdentity(model: ProfileModel) {
+  const file = (model.model_filename || model.model_file || model.model_files?.[0] || "").split("/").pop() ?? "";
+  const stem = file.replace(/(-\d{5}-of-\d{5})?\.gguf$/i, "");
+  const quant = stem.match(GGUF_QUANT_SUFFIX)?.[1] ?? "";
+  const reference = (model.model_repo || model.model_ref || "").split("/").pop()?.replace(/[-_.]gguf$/i, "") ?? "";
+  const name = (quant ? stem.slice(0, -quant.length - 1) : stem) || reference || model.name;
+  return { name, quant: quant.toUpperCase(), file };
+}
 
 type Profile = ModelConfig & {
   id: string;
@@ -5521,10 +5546,32 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             ));
             const modelRunning = Boolean(runtimeModel?.running);
             const effectiveContext = runtimeModel?.effective_context || model.context_size;
+            const identity = profileModelIdentity(model);
+            const aliases = [
+              model.name !== profile.name && model.name !== identity.name ? model.name : "",
+              model.model_alias && model.model_alias !== model.name ? t("alias {alias}", { alias: model.model_alias }) : "",
+            ].filter(Boolean);
+            const kvCache = model.cache_type_k && model.cache_type_k === model.cache_type_v ? model.cache_type_k : [model.cache_type_k, model.cache_type_v].filter(Boolean).join("/");
+            const details = [
+              identity.quant,
+              model.estimated_memory_mb > 0 ? `≈${(model.estimated_memory_mb / 1024).toFixed(1)} GB` : "",
+              ["chat", "vision", "embeddings"].includes(model.task) ? `${(effectiveContext / 1024).toLocaleString(locale)}K ctx${effectiveContext !== model.context_size ? ` ${t("(ajustado)")}` : ""}` : "",
+              kvCache ? `KV ${kvCache}` : "",
+              model.spec_type ? SPEC_LABELS[model.spec_type] ?? model.spec_type : "",
+              model.mmproj_filename || model.mmproj_file ? t("visión") : "",
+              model.task !== "chat" ? model.task : "",
+              `${model.engine} :${model.port}`,
+            ].filter(Boolean);
             return <div key={model.id}>
               <span className={`status-dot ${modelRunning ? "ok" : model.downloaded ? "online" : "warn"}`} />
-              <strong>{model.name}</strong>
-              <small>{model.engine} · {model.task} · :{model.port}{["chat", "vision", "embeddings"].includes(model.task) ? ` · ${(effectiveContext / 1024).toLocaleString(locale)}K ctx${effectiveContext !== model.context_size ? ` ${t("(ajustado)")}` : ""}` : ""}</small>
+              <span className="profile-model-id">
+                <span className="profile-model-name">
+                  <strong title={[identity.file || model.model_repo || model.model_ref, model.spec_type ? `${SPEC_LABELS[model.spec_type] ?? model.spec_type}: ${model.draft_filename || t("MTP integrado en el GGUF")}` : ""].filter(Boolean).join("\n")}>{identity.name}</strong>
+                  <UncensoredBadge name={`${model.uncensored ?? ""} ${identity.name}`} flagged={Boolean(model.uncensored)} showKind />
+                </span>
+                {aliases.length > 0 && <small>{aliases.join(" · ")}</small>}
+              </span>
+              <small className="profile-model-meta">{details.join(" · ")}</small>
               {!model.downloaded && ((model.engine === "llama.cpp" && model.model_repo) || model.engine === "ollama") && <button className="profile-model-download" disabled={downloads.isDownloading(profileDownloadTarget(model))} onClick={() => void downloadMissingModel(profile, model)}>{downloads.isDownloading(profileDownloadTarget(model)) ? <><RefreshCw className="spin" size={13} />{" "}{t("Descargando…")}</> : <><Download size={13} />{" "}{t("Descargar modelo")}</>}</button>}
             </div>;
           })}

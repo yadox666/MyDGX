@@ -6038,6 +6038,23 @@ def hf_card_front_matter(directory: Path, snapshots: list[dict[str, Any]]) -> st
     return ""
 
 
+def profile_model_uncensored(model: dict[str, Any]) -> str:
+    """Marker words (abliterated, heretic…) from the model names or its cached card header, or ''."""
+    evidence = " ".join(str(model.get(key) or "") for key in ("model_repo", "model_ref", "model_filename", "model_file"))
+    if markers := UNCENSORED_MODEL_PATTERN.findall(evidence):
+        return " ".join(dict.fromkeys(marker.lower() for marker in markers))
+    repo = str(model.get("model_repo") or "")
+    directory = hf_repo_cache_dir(repo) if "/" in repo else None
+    if directory is None or not (directory / "snapshots").is_dir():
+        return ""
+    try:
+        snapshots = [{"commit": path.name} for path in sorted((directory / "snapshots").iterdir(), key=lambda path: path.stat().st_mtime)]
+    except OSError:
+        return ""
+    markers = UNCENSORED_MODEL_PATTERN.findall(hf_card_front_matter(directory, snapshots))
+    return " ".join(dict.fromkeys(marker.lower() for marker in markers))
+
+
 def hf_card_task_hints(front_matter: str) -> tuple[str | None, list[str]]:
     """pipeline_tag plus tags/library_name from a card header, without a YAML parser."""
     pipeline = re.search(r"^pipeline_tag:\s*['\"]?([A-Za-z0-9_-]+)", front_matter, re.M)
@@ -11482,6 +11499,7 @@ async def profiles() -> dict[str, Any]:
                 if model["engine"] == "ollama"
                 else profile_model_is_downloaded(model)
             )
+            model["uncensored"] = profile_model_uncensored(model)
             model.pop("additional_models_json", None)
             model.pop("model_files_json", None)
         profile["downloaded"] = all(model["downloaded"] for model in models if model.get("enabled", True))
@@ -12012,6 +12030,9 @@ async def download_profile_models(job_id: str, profile: dict[str, Any]) -> None:
     if not repo or not files:
         db.update_job(job_id, "failed", 0, "El perfil no contiene archivos Hugging Face")
         return
+    draft = str(profile.get("draft_filename") or "")
+    if profile.get("spec_type") and draft and draft not in files:
+        files = [*files, draft]
     downloaded: list[str] = []
     try:
         _, total_bytes = await validate_hf_download(repo, "main", files)

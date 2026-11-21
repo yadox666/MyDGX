@@ -1839,5 +1839,7 @@
   "El repositorio incluye el drafter y la descarga recomendada lo trae": "The repository includes the drafter and the recommended download brings it",
   "(sin verificar)": "(unverified)",
   "llama.cpp no combina visión y especulativa; se descarga el drafter. Añade el mmproj desde Detalles si quieres imágenes.": "llama.cpp does not combine vision with speculative decoding, so the drafter is downloaded. Add the mmproj from Details if you want images.",
-  "Opcional": "Optional"
+  "Opcional": "Optional",
+  "alias {alias}": "alias {alias}",
+  "visión": "vision"
 }

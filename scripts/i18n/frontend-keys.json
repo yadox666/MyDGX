@@ -1824,5 +1824,7 @@
   "El repositorio incluye el drafter y la descarga recomendada lo trae",
   "(sin verificar)",
   "llama.cpp no combina visión y especulativa; se descarga el drafter. Añade el mmproj desde Detalles si quieres imágenes.",
-  "Opcional"
+  "Opcional",
+  "alias {alias}",
+  "visión"
 ]

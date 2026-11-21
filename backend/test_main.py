@@ -6611,8 +6611,16 @@ class ProfileApiTests(unittest.TestCase):
             rows = db.rows(
                 "SELECT id,name FROM profiles WHERE id NOT LIKE 'artifex-%' ORDER BY id"
             )
-            self.assertEqual(len(rows), 8)
+            self.assertEqual(len(rows), 9)
             self.assertIn("TTS Lab · Voces MLX", {row["name"] for row in rows})
+            recipe = db.rows(
+                "SELECT model_file,model_repo,spec_type,draft_filename,additional_models_json FROM profiles WHERE name=?",
+                ("NEW - Cybersecurity",),
+            )[0]
+            self.assertEqual(recipe["model_file"], "")
+            self.assertEqual(recipe["model_repo"], "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF")
+            self.assertEqual((recipe["spec_type"], recipe["draft_filename"]), ("draft-mtp", "mtp-Cyber-Tiel-Coder-35B-A3B.gguf"))
+            self.assertTrue(all(not model["model_file"] for model in json.loads(recipe["additional_models_json"])))
             db.execute(
                 "UPDATE profiles SET name=? WHERE id=?",
                 ("TTS Lab personalizado", "tts-lab-mlx"),

@@ -1036,7 +1036,13 @@ input { height: 36px; padding: 0 11px; }
 .profile-capacity.over > span { background: var(--red); }
 .profile-capacity small { position: absolute; top: 8px; left: 0; color: var(--text-muted); font-size: calc(12px * var(--font-scale)); }
 .profile-model-roster { margin-bottom: 13px; border-top: 1px solid var(--border); }
-.profile-model-roster > div { min-height: 34px; display: grid; grid-template-columns: 8px minmax(90px, .8fr) 1fr auto; align-items: center; gap: 7px; border-bottom: 1px solid var(--border); }
+.profile-model-roster > div { min-height: 34px; padding: 5px 0; display: grid; grid-template-columns: 8px minmax(120px, 1fr) minmax(0, 1.1fr) auto; align-items: center; gap: 7px; border-bottom: 1px solid var(--border); }
+.profile-model-roster .profile-model-id { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.profile-model-roster .profile-model-id small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--font-scale)); }
+.profile-model-roster .profile-model-meta { line-height: 1.35; }
+.profile-model-roster .profile-model-name { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.profile-model-roster .profile-model-name strong { min-width: 0; }
+.profile-model-roster .profile-model-name .badge { flex: none; padding: 2px 7px; font-size: calc(10px * var(--font-scale)); }
 .profile-model-roster strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(13px * var(--font-scale)); }
 .profile-model-roster small { color: var(--text-muted); font-size: calc(13px * var(--font-scale)); }
 .profile-model-roster .profile-app-open { padding: 4px 7px; display: inline-flex; align-items: center; gap: 4px; color: var(--accent-strong); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 6px; background: var(--accent-soft); font-size: calc(12px * var(--font-scale)); font-weight: 700; text-decoration: none; }

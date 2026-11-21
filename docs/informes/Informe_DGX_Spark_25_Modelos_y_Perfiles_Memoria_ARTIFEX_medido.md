@@ -287,7 +287,7 @@ Una batería común es la forma más fiable de decidir qué modelo se convierte 
 
 | **Rol propuesto**                | **Modelo**            | **Estado / siguiente acción**              |
 |----------------------------------|-----------------------|--------------------------------------------|
-| Motor técnico general            | Cyber-Tiel Q5 + MTP (rápido) o Q6 + MTP (calidad) | Activo: Q6 + MTP en 18081 para ARTIFEX; Q5 + MTP en los perfiles NEW |
+| Motor técnico general            | Cyber-Tiel Q5 + MTP (rápido) o Q6 + MTP (calidad) | Activo: Q6 + MTP en 18081 para ARTIFEX; Q5 + MTP en las recetas RECIPE · … |
 | Investigador de vulnerabilidades | BugHunter v8 (rápido) o v7 + MTP | v8 ya instalado; validar calidad frente a v7 con casos reales |
 | Defensa / multimodal             | OrcaCyber Nano        | Sin visión: MTP (73 % aceptación). Con visión: `mmproj` y sin MTP |
 | Agente de herramientas           | Bimo CyberAgent       | Bajo demanda: 32K máximo y ~31 tok/s       |
@@ -922,16 +922,16 @@ Las tablas dan estimaciones para pesos y, cuando se indica, proyectores concreto
 
 ## 25.0 PERFILES MEDIDOS EN EL DGX SPARK (prevalecen sobre 25.1–25.4)
 
-Creados en MyDGX como «NEW - …». Cargados a la vez sobre RAGKit · Paramita, con 128K de contexto, KV q8_0 y un slot por modelo. La memoria es el incremento real sobre RAGKit; la velocidad es de escritura con el perfil completo cargado.
+Creados en MyDGX como «RECIPE · …». Cargados a la vez sobre RAGKit · Paramita, con 128K de contexto, KV q8_0 y un slot por modelo. La memoria es el incremento real sobre RAGKit; la velocidad es de escritura con el perfil completo cargado.
 
 | **Perfil** | **Modelos** | **Memoria sobre RAGKit** | **Escritura** |
 |---|---|---|---|
-| **NEW - Cybersecurity** | Cyber-Tiel Q5 + MTP · BugHunter v8 · OrcaCyber + MTP (sin visión) | 70,7 GiB | 63 · 55 · 23 tok/s (aceptación MTP 72 % y 73 %) |
-| **NEW - Cybersecurity · Coding** | Cyber-Tiel Q5 + MTP · BugHunter v8 · 9B Heretic + MTP | 58,1 GiB | 62 · 60 · 30 tok/s |
-| **NEW - Advanced Coding** | Qwen3-Coder-Next Q4_K_M · 9B Heretic + MTP | 60,4 GiB | 51 · 34 tok/s |
-| **NEW - Coding · Cyber** | Qwen3-Coder-Next Q4_K_M · BugHunter v8 | 68,9 GiB | 50 · 60 tok/s |
+| **RECIPE · Cybersecurity** | Cyber-Tiel Q5 + MTP · BugHunter v8 · OrcaCyber + MTP (sin visión) | 70,7 GiB | 63 · 55 · 23 tok/s (aceptación MTP 72 % y 73 %) |
+| **RECIPE · Cybersecurity · Coding** | Cyber-Tiel Q5 + MTP · BugHunter v8 · 9B Heretic + MTP | 58,1 GiB | 62 · 60 · 30 tok/s |
+| **RECIPE · Advanced Coding** | Qwen3-Coder-Next Q4_K_M · 9B Heretic + MTP | 60,4 GiB | 51 · 34 tok/s |
+| **RECIPE · Coding · Cyber** | Qwen3-Coder-Next Q4_K_M · BugHunter v8 | 68,9 GiB | 50 · 60 tok/s |
 
-Equivalencias con el informe original: NEW - Cybersecurity sustituye a CY-E (Bimo queda bajo demanda); NEW - Cybersecurity · Coding sustituye a MIX-L; NEW - Advanced Coding es DEV-E sin Cyber-Tiel; NEW - Coding · Cyber es MIX-E sin OrcaCyber.
+Equivalencias con el informe original: RECIPE · Cybersecurity sustituye a CY-E (Bimo queda bajo demanda); RECIPE · Cybersecurity · Coding sustituye a MIX-L; RECIPE · Advanced Coding es DEV-E sin Cyber-Tiel; RECIPE · Coding · Cyber es MIX-E sin OrcaCyber.
 
 **DEV-E y MIX-E no caben con RAGKit cargado.** Con los datos medidos, DEV-E necesitaría unos 90 GiB sobre RAGKit (Advanced Coding 60,4 + Tiel Q5 30,2) y MIX-E unos 87 GiB (Coding · Cyber 68,9 + OrcaCyber ~18). Solo son viables parando RAGKit.
 
@@ -942,7 +942,7 @@ Un perfil se arranca cuando el anterior ha liberado la memoria: en las pruebas, 
 | **Perfil**                           | **Modelos simultáneos**                                                                            | **Pesos + extras** | **Resto nominal** |
 |--------------------------------------|----------------------------------------------------------------------------------------------------|--------------------|-------------------|
 | **CY-L / ligero**                    | Cyber-Tiel Q5 (26,6) + BugHunter v8 (21,2)                                                         | 47,8 GB            | 80,2 GB           |
-| **CY-E / equilibrado • sustituido por NEW - Cybersecurity** | Cyber-Tiel Q5 (26,6) + BugHunter v8 (21,2) + OrcaCyber (15,7) + Bimo (8,1) + 2 mmproj (1,8)        | 73,4 GB            | 54,6 GB           |
+| **CY-E / equilibrado • sustituido por RECIPE · Cybersecurity** | Cyber-Tiel Q5 (26,6) + BugHunter v8 (21,2) + OrcaCyber (15,7) + Bimo (8,1) + 2 mmproj (1,8)        | 73,4 GB            | 54,6 GB           |
 | **CY-Q / calidad de referencia**     | Cyber-Tiel Q6 actual (31,8) + BugHunter v8 (21,2) + OrcaCyber (15,7) + Bimo (8,1) + 2 mmproj (1,8) | 78,6 GB            | 49,4 GB           |
 
 **CY-L.** Dos analistas complementarios: revisión técnica/programación y bug bounty. El más fácil de mantener con bajo consumo y sin servicios defensivos adicionales. Requiere las dos descargas pendientes.
@@ -1032,7 +1032,7 @@ La clave no es emplear toda la memoria disponible, sino conservar margen para el
 | **1**    | BugHunter v8 Q4                          | 21,2 GB                            | **Hecho.** Falta la comparación de calidad con v7 en 20 casos.                    |
 | **2**    | Qwen3.5-9B original Q6 + mmproj opcional | 7,46 / 8,38 GB                     | Pendiente. Mejora la calidad/latencia del asistente ligero respecto a tus 9B/12B. |
 | **3**    | Cyber-Tiel Q5_K_XL + drafter MTP         | 28,1 GB                            | **Hecho.** Más rápido que Q6 y 4,8 GiB menos; falta medir la precisión.          |
-| **4**    | Qwen3-Coder-Next Q4_K_M                  | 48,56 GB                           | **Hecho.** Usado en los perfiles NEW de programación.                             |
+| **4**    | Qwen3-Coder-Next Q4_K_M                  | 48,56 GB                           | **Hecho.** Usado en las recetas de programación (RECIPE · …).                             |
 
 Queda pendiente el Qwen3.5-9B original: solo conviene mantenerlo si supera al 9B Heretic con MTP o a Gemma 4 12B en tus tareas.
 
@@ -1062,7 +1062,7 @@ Estas órdenes no modifican el servidor. Los dos primeros indicadores distinguen
 
 # 29. Recomendación final de ampliación
 
-**Recomendación medida.** Con RAGKit siempre activo, usar los cuatro perfiles de la sección 25.0. Para ciberseguridad, NEW - Cybersecurity (70,7 GiB). Para mezclar ciberseguridad y programación con margen, NEW - Cybersecurity · Coding (58,1 GiB). Para programación con un agente fuerte, NEW - Advanced Coding (60,4 GiB), o NEW - Coding · Cyber (68,9 GiB) si también hace falta revisión de seguridad web. DEV-E y MIX-E solo funcionan sin RAGKit.
+**Recomendación medida.** Con RAGKit siempre activo, usar los cuatro perfiles de la sección 25.0. Para ciberseguridad, RECIPE · Cybersecurity (70,7 GiB). Para mezclar ciberseguridad y programación con margen, RECIPE · Cybersecurity · Coding (58,1 GiB). Para programación con un agente fuerte, RECIPE · Advanced Coding (60,4 GiB), o RECIPE · Coding · Cyber (68,9 GiB) si también hace falta revisión de seguridad web. DEV-E y MIX-E solo funcionan sin RAGKit.
 
 **ARTIFEX.** Mantener Cyber-Tiel Q6 + MTP en 18081 como motor de calidad y BugHunter v8 como especialista rápido; pasar a Q5 + MTP si hace falta memoria o velocidad. BugHunter v7 + MTP queda como referencia hasta terminar la comparación v7/v8.
 

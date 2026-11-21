@@ -1405,7 +1405,7 @@
     },
     {
       "id": "aa132e06-5885-46ce-880d-9437b0027d56",
-      "name": "NEW - Cybersecurity",
+      "name": "RECIPE · Cybersecurity",
       "engine": "llama.cpp",
       "model_ref": "tiel-q5",
       "model_file": "",
@@ -1581,7 +1581,7 @@
     },
     {
       "id": "4605390e-9e92-4e70-8420-8a03c46be018",
-      "name": "NEW - Cybersecurity · Coding",
+      "name": "RECIPE · Cybersecurity · Coding",
       "engine": "llama.cpp",
       "model_ref": "tiel-q5",
       "model_file": "",
@@ -1757,7 +1757,7 @@
     },
     {
       "id": "e918cdc9-4e6a-4f7d-ae88-015b739a4c8f",
-      "name": "NEW - Advanced Coding",
+      "name": "RECIPE · Advanced Coding",
       "engine": "llama.cpp",
       "model_ref": "qwen3-coder-next",
       "model_file": "",
@@ -1876,7 +1876,7 @@
     },
     {
       "id": "5c1b2cb0-e05c-4e45-a32a-631a55fc7b4d",
-      "name": "NEW - Coding · Cyber",
+      "name": "RECIPE · Coding · Cyber",
       "engine": "llama.cpp",
       "model_ref": "qwen3-coder-next",
       "model_file": "",

@@ -6615,7 +6615,7 @@ class ProfileApiTests(unittest.TestCase):
             self.assertIn("TTS Lab · Voces MLX", {row["name"] for row in rows})
             recipe = db.rows(
                 "SELECT model_file,model_repo,spec_type,draft_filename,additional_models_json FROM profiles WHERE name=?",
-                ("NEW - Cybersecurity",),
+                ("RECIPE · Cybersecurity",),
             )[0]
             self.assertEqual(recipe["model_file"], "")
             self.assertEqual(recipe["model_repo"], "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF")

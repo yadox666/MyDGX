@@ -8488,6 +8488,35 @@ class ProfileAppTests(unittest.TestCase):
             self.assertIn("MYDGX_GATEWAY_URL=", (app / "env.txt").read_text())
             self.assertEqual(main_module._profile_app_state["demo"]["state"], "stopped")
 
+    def test_failed_app_start_notifies_the_user(self) -> None:
+        async def scenario() -> None:
+            main_module.schedule_profile_app({"id": "p1", "app": "demo"})
+            await main_module._profile_app_tasks["p1"]
+            main_module._runtime_profile_apps.pop("p1", None)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = self.make_app(root)
+            (app / "start.sh").write_text(
+                '#!/usr/bin/env bash\n[[ "$1" == status ]] && exit 3\necho "sudo: no new privileges"\nexit 1\n',
+                encoding="utf-8",
+            )
+            with (
+                patch.object(settings, "profile_apps_root", str(root / "apps")),
+                patch.object(settings, "profile_apps", ""),
+                patch.object(main_module, "ROOT", root),
+                patch.object(main_module.db, "log"),
+                patch.object(main_module, "notify_safely") as notify,
+            ):
+                asyncio.run(scenario())
+        self.assertEqual(main_module._profile_app_state["demo"]["state"], "error")
+        notify.assert_called_once()
+        kind, title, message = notify.call_args.args
+        self.assertEqual((kind, title), ("profile.app_failed", "La app no arrancó"))
+        self.assertIn("logs/apps/demo.log", message)
+        self.assertEqual(notify.call_args.kwargs["target"], "demo")
+        self.assertIn("no new privileges", notify.call_args.kwargs["log"])
+
     def test_web_app_alias_and_port_reach_start_script_summary_and_reject_conflicts(self) -> None:
         update = main_module.update_profile_app_web
         payload = main_module.ProfileAppWebPayload

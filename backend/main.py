@@ -4813,6 +4813,11 @@ async def ensure_profile_app(profile_id: str, name: str) -> None:
                 "warning", "profile", "profile.app.failed", f"La app {name} no arrancó: {message}",
                 entity_type="profile", entity_id=profile_id,
             )
+            notify_safely(
+                "profile.app_failed", "La app no arrancó",
+                f"{name} no arrancó con el perfil; la inferencia sigue cargada. Revisa logs/apps/{name}.log",
+                target=name, log=profile_app_log_tail(name, 4000),
+            )
 
 
 def schedule_profile_app(profile: dict[str, Any]) -> str:

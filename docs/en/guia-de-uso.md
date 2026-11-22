@@ -453,6 +453,10 @@ action. If a required collector fails, the header says *Partial diagnosis* and
 the coverage row shows which one; findings that depend on it are kept instead of
 being marked resolved. The panel re-evaluates every minute while open; the
 PyTorch probe is reused for ten minutes unless you press *Evaluate again*.
+The header badge next to notifications summarises the state: green when
+healthy, orange with warnings, and red with critical problems. Clicking it opens
+the Health Center. A full evaluation repeats in the background every five
+minutes even while the panel is closed.
 Important findings also reach *Notifications* as a single summarised alert.
 Critical findings notify immediately; warnings notify once they have stayed
 active for two minutes. A finding alerts again only if it gets worse or

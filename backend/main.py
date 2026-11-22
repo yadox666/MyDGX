@@ -5040,6 +5040,20 @@ async def memory_pressure_tick(now: float | None = None) -> bool:
     return True
 
 
+HEALTH_CENTER_INTERVAL_SECONDS = 300
+
+
+async def health_center_watchdog() -> None:
+    """Kernel, runtime and service rules only run in a full evaluation, so the header and alerts need one even with the panel closed."""
+    while True:
+        await asyncio.sleep(HEALTH_CENTER_INTERVAL_SECONDS)
+        try:
+            await system_health_center()
+        except Exception as exc:
+            with suppress(Exception):
+                db.log("error", "health", "health.evaluate.error", f"{type(exc).__name__}: {redact_log_text(str(exc), 300)}")
+
+
 async def memory_pressure_watchdog() -> None:
     while True:
         await asyncio.sleep(MEMORY_PRESSURE_INTERVAL_SECONDS)
@@ -5692,10 +5706,12 @@ async def lifespan(_: FastAPI):
     inventory_task = asyncio.create_task(warm_benchmark_inventory())
     unsafe_shutdown_task = asyncio.create_task(watch_nvme_unsafe_shutdowns())
     firmware_task = asyncio.create_task(firmware_update_watcher())
+    health_task = asyncio.create_task(health_center_watchdog())
     yield
     mark_clean_stop()
     unsafe_shutdown_task.cancel()
     firmware_task.cancel()
+    health_task.cancel()
     db.log(
         "info",
         "application",
@@ -23639,6 +23655,19 @@ async def system_health_center(refresh: bool = False) -> dict[str, Any]:
     ]
     checks = health_checks(sample, current_findings, kernel_status, runtime_status, service_values, systemd_available)
     return health_center_payload(kernel_status, runtime_status, collectors, checks)
+
+
+@app.get("/api/system/health-center/summary", dependencies=secure)
+async def system_health_center_summary() -> dict[str, Any]:
+    payload = health_center_payload()
+    active = [row for row in payload["findings"] if row["active"]]
+    last = db.rows("SELECT MAX(last_seen) AS last FROM health_findings")
+    return {
+        "status": payload["status"],
+        "summary": payload["summary"],
+        "top": [{"title": row["title"], "severity": row["severity"]} for row in active[:3]],
+        "last_seen": last[0]["last"] if last else None,
+    }
 
 
 @app.get("/api/system/health-center/report", dependencies=secure)

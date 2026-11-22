@@ -1954,5 +1954,6 @@
   "Ver resueltos": "View resolved",
   "{count} apariciones": "{count} occurrences",
   "{passing}/{total} comprobaciones correctas": "{passing}/{total} checks passing",
-  "Abrir Health Center": "Open Health Center"
+  "Abrir Health Center": "Open Health Center",
+  "Sano": "Healthy"
 }

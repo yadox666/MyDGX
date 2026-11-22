@@ -1778,6 +1778,23 @@ class CollectorTests(unittest.TestCase):
         finally:
             db.path = original_path
 
+    def test_health_summary_reports_status_without_evaluating(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "health-summary.db"
+                db.initialize()
+                healthy = asyncio.run(main_module.system_health_center_summary())
+                self.assertEqual((healthy["status"], healthy["top"]), ("healthy", []))
+                disk = main_module.health_finding("disk-space", "warning", "Almacenamiento", "Espacio libre bajo", "d", "e", "r")
+                main_module.sync_health_findings([disk], {"disk-space"})
+                with patch("backend.main.collect_metrics", side_effect=AssertionError("must not evaluate")):
+                    summary = asyncio.run(main_module.system_health_center_summary())
+                self.assertEqual(summary["status"], "warning")
+                self.assertEqual(summary["top"], [{"title": "Espacio libre bajo", "severity": "warning"}])
+        finally:
+            db.path = original_path
+
     def test_catalog_translates_summary_segments(self) -> None:
         catalog = Catalog({"Espacio libre bajo": "Low free space", "Temperatura GPU elevada": "High GPU temperature"})
         self.assertEqual(

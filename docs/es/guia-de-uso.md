@@ -458,6 +458,10 @@ recomendada. Si un colector obligatorio falla, el encabezado indica
 dependen de él se conservan en lugar de darse por resueltos. El panel se
 reevalúa cada minuto mientras está abierto; el sondeo de PyTorch se reutiliza
 durante diez minutos salvo al pulsar *Volver a evaluar*.
+La insignia de la cabecera, junto a las notificaciones, resume el estado: verde
+si todo está sano, naranja con advertencias y roja con problemas críticos. Al
+pulsarla se abre el Health Center. Una evaluación completa se repite en segundo
+plano cada cinco minutos aunque el panel esté cerrado.
 Los hallazgos importantes llegan además a *Notificaciones* como un único aviso
 resumido. Los críticos se notifican al momento; las advertencias, si siguen
 activas dos minutos. Cada hallazgo vuelve a avisar solo si empeora o si

@@ -9006,6 +9006,26 @@ type AppNotification = {
 };
 type NotificationsResponse = { unread: number; items: AppNotification[] };
 
+type HealthSummary = {
+  status: HealthCenter["status"];
+  summary: HealthCenter["summary"];
+  top: Array<{ title: string; severity: HealthFinding["severity"] }>;
+};
+
+function HealthBadge({ health, onOpen }: { health: HealthSummary | null; onOpen: () => void }) {
+  if (!health) return null;
+  const issues = health.summary.critical + health.summary.warning;
+  const label = health.status === "healthy" ? t("Sano") : health.status === "critical" ? t("Crítico") : t("Atención");
+  const detail = health.top.length
+    ? health.top.map((item) => `• ${item.title}`).join("\n")
+    : t("Todas las comprobaciones medidas están dentro de sus umbrales.");
+  return <button className={`health-badge ${health.status}`} onClick={onOpen} title={`${t("Health Center")} · ${label}\n${detail}`} aria-label={`${t("Abrir Health Center")}: ${label}`}>
+    {health.status === "healthy" ? <ShieldCheck size={14} /> : <TriangleAlert size={14} />}
+    <span>{label}</span>
+    {issues > 0 && <b>{issues}</b>}
+  </button>;
+}
+
 function NotificationBell({ unread, popup, onOpen }: { unread: number; popup: AppNotification | null; onOpen: () => void }) {
   return <div className="notification-bell-wrap">
     <button className={`header-icon-button notification-bell ${unread ? "has-unread" : ""}`} onClick={onOpen} title={t("Notificaciones")} aria-label={unread ? t("{count} notificación(es) sin leer", { count: unread }) : t("Notificaciones")}>
@@ -9546,6 +9566,13 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   const [notifications, setNotifications] = useState<NotificationsResponse | null>(null);
   const [notificationPopup, setNotificationPopup] = useState<AppNotification | null>(null);
   const [systemTabRequest, setSystemTabRequest] = useState<"overview" | "health">("overview");
+  const [healthSummary, setHealthSummary] = useState<HealthSummary | null>(null);
+  useEffect(() => {
+    const refresh = () => { api<HealthSummary>("/api/system/health-center/summary").then(setHealthSummary).catch(() => undefined); };
+    const initial = window.setTimeout(refresh, 0);
+    const timer = window.setInterval(refresh, 30_000);
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); };
+  }, []);
   const openHealthCenter = useCallback(() => {
     setSystemTabRequest("health");
     setView("system");
@@ -9809,6 +9836,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
           <button className="menu-button" onClick={() => setMenuOpen(true)}><Menu /></button>
           <span>{currentLabel}</span>
           <div className="appearance-row">
+            <HealthBadge health={healthSummary} onOpen={() => { setMenuOpen(false); openHealthCenter(); }} />
             {hasActiveModels && <StopAllModelsButton notify={notify} onDone={() => { void refreshOverview(); void refreshModels(); }} />}
             <div className="header-prefs" role="group" aria-label={t("Apariencia")}>
               <button className="header-pref theme-toggle" onClick={toggleTheme} title={`${theme === "dark" ? t("Modo día") : t("Modo noche")} · ${themePreference === "system" ? t("Tema automático según el sistema") : t("Tema fijo")}`} aria-label={theme === "dark" ? t("Modo día") : t("Modo noche")}>{theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}</button>

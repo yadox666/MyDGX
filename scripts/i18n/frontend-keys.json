@@ -1938,5 +1938,6 @@
   "Valores observados en esta evaluación frente a sus umbrales.",
   "Ver resueltos",
   "{count} apariciones",
-  "{passing}/{total} comprobaciones correctas"
+  "{passing}/{total} comprobaciones correctas",
+  "Abrir Health Center"
 ]

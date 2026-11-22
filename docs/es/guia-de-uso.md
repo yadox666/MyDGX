@@ -284,6 +284,28 @@ Las instalaciones nuevas reciben las recetas de la copia local al arrancar.
 La URL del catálogo se cambia con `MYDGX_RECIPES_URL` y solo se acepta
 `raw.githubusercontent.com`.
 
+#### Recetas de imagen y vídeo
+
+Una receta también puede traer un modelo de ComfyUI, como *RECIPE · Image ·
+Qwen-Image 2.1 Turbo*. Su modelo usa el motor y el protocolo `comfyui` y lleva
+un bloque `comfyui`:
+
+- `workflow`: un workflow en formato API de ComfyUI, en `config/comfyui`.
+  MyDGX escribe el prompt, la semilla, el tamaño y los pasos en los nodos
+  titulados `MyDGX Prompt`, `MyDGX Seed`, `MyDGX Size` y `MyDGX Steps`. Solo el
+  nodo del prompt es obligatorio; omite `MyDGX Steps` si el modelo tiene una
+  secuencia de pasos fija.
+- `files`: cada archivo con su `repo` de Hugging Face, `revision`, `filename`,
+  la carpeta de ComfyUI en `folder` (`diffusion_models`, `text_encoders`,
+  `vae`, `loras`…) y su `sha256`.
+
+*Instalar con modelos* o encender el perfil descarga los archivos en
+`ComfyUI/models/<carpeta>`, comprueba cada hash y no deja arrancar mientras
+falte alguno. Los repositorios con acceso restringido necesitan `HF_TOKEN` y
+haber aceptado las condiciones del modelo en Hugging Face. El benchmark de
+imagen ejecuta el workflow de la receta con sus propios pasos. Los modelos
+FLUX.1 Schnell y Wan integrados siguen igual.
+
 ### App del perfil
 
 Una app es un directorio con un `start.sh` que acepta `start`, `stop`, `restart`
@@ -436,6 +458,12 @@ recomendada. Si un colector obligatorio falla, el encabezado indica
 dependen de él se conservan en lugar de darse por resueltos. El panel se
 reevalúa cada minuto mientras está abierto; el sondeo de PyTorch se reutiliza
 durante diez minutos salvo al pulsar *Volver a evaluar*.
+Los hallazgos importantes llegan además a *Notificaciones* como un único aviso
+resumido. Los críticos se notifican al momento; las advertencias, si siguen
+activas dos minutos. Cada hallazgo vuelve a avisar solo si empeora o si
+reaparece pasadas seis horas. La memoria saturada y los fallos al cargar modelos
+no se duplican, porque ya tienen su propia notificación. El aviso incluye un
+botón para abrir el Health Center.
 Las apariciones, cambios de severidad y resoluciones se registran en *Logs*; las
 resoluciones permanecen visibles siete días. Una lectura que el equipo no puede
 obtener se muestra como desconocida, nunca como cero. Leer el journal depende de

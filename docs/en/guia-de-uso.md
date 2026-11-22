@@ -284,6 +284,26 @@ New installations get the recipes from the local copy at startup. Change the
 catalog URL with `MYDGX_RECIPES_URL`; only `raw.githubusercontent.com` is
 accepted.
 
+#### Image and video recipes
+
+A recipe can also bring a ComfyUI model, such as *RECIPE · Image · Qwen-Image
+2.1 Turbo*. Its model uses the `comfyui` engine and protocol and carries a
+`comfyui` block:
+
+- `workflow`: a workflow in ComfyUI API format, in `config/comfyui`. MyDGX
+  writes the prompt, seed, size and steps into the nodes titled `MyDGX Prompt`,
+  `MyDGX Seed`, `MyDGX Size` and `MyDGX Steps`. Only the prompt node is
+  required; leave out `MyDGX Steps` when the model has a fixed step schedule.
+- `files`: each file with its Hugging Face `repo`, `revision`, `filename`, the
+  ComfyUI `folder` (`diffusion_models`, `text_encoders`, `vae`, `loras`…) and
+  its `sha256`.
+
+*Install with models* or starting the profile downloads the files into
+`ComfyUI/models/<folder>`, checks each hash and refuses to start while any
+file is missing. Gated repositories need `HF_TOKEN` and the model terms
+accepted on Hugging Face. The image benchmark runs the recipe's workflow with
+its own steps. The built-in FLUX.1 Schnell and Wan models stay as they were.
+
 ### Profile app
 
 An app is a directory with a `start.sh` that accepts `start`, `stop`, `restart`,
@@ -433,6 +453,12 @@ action. If a required collector fails, the header says *Partial diagnosis* and
 the coverage row shows which one; findings that depend on it are kept instead of
 being marked resolved. The panel re-evaluates every minute while open; the
 PyTorch probe is reused for ten minutes unless you press *Evaluate again*.
+Important findings also reach *Notifications* as a single summarised alert.
+Critical findings notify immediately; warnings notify once they have stayed
+active for two minutes. A finding alerts again only if it gets worse or
+reappears after six hours. Memory saturation and model load failures are not
+duplicated, since they already have their own notification. The alert includes
+a button that opens the Health Center.
 Appearances, severity changes, and resolutions are recorded in *Logs*;
 resolutions remain visible for seven days. A reading the machine cannot obtain
 is shown as unknown, never as zero. Reading the journal depends on the

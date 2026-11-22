@@ -2272,7 +2272,13 @@ type ModelConfig = {
   estimated_memory_mb: number;
   max_input_mb: number;
   timeout_seconds: number;
+  comfyui?: ComfyUISpec | null;
   enabled: boolean;
+};
+
+type ComfyUISpec = {
+  workflow: string;
+  files: { repo: string; revision: string; filename: string; folder: string; sha256: string }[];
 };
 
 type ProfileModel = ModelConfig & {
@@ -5971,7 +5977,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
                 {aliases.length > 0 && <small>{aliases.join(" · ")}</small>}
               </span>
               <small className="profile-model-meta">{details.join(" · ")}</small>
-              {!model.downloaded && ((model.engine === "llama.cpp" && model.model_repo) || model.engine === "ollama") && <button className="profile-model-download" disabled={downloads.isDownloading(profileDownloadTarget(model))} onClick={() => void downloadMissingModel(profile, model)}>{downloads.isDownloading(profileDownloadTarget(model)) ? <><RefreshCw className="spin" size={13} />{" "}{t("Descargando…")}</> : <><Download size={13} />{" "}{t("Descargar modelo")}</>}</button>}
+              {!model.downloaded && ((model.engine === "llama.cpp" && model.model_repo) || model.engine === "ollama" || (model.engine === "comfyui" && model.comfyui?.files.length)) && <button className="profile-model-download" disabled={downloads.isDownloading(profileDownloadTarget(model))} onClick={() => void downloadMissingModel(profile, model)}>{downloads.isDownloading(profileDownloadTarget(model)) ? <><RefreshCw className="spin" size={13} />{" "}{t("Descargando…")}</> : <><Download size={13} />{" "}{t("Descargar modelo")}</>}</button>}
             </div>;
           })}
           {profile.app ? (() => {
@@ -8619,8 +8625,8 @@ function HealthCenterPanel({ health, loading, onRefresh, notify }: {
   </div>;
 }
 
-function SystemView({ config, jobs, overview, notify, onOpenLab }: { config: Config | null; jobs: Job[]; overview: Overview | null; notify: (message: string, error?: boolean) => void; onOpenLab: () => void }) {
-  const [systemTab, setSystemTab] = useState<"overview" | "health">("overview");
+function SystemView({ config, jobs, overview, notify, onOpenLab, initialTab = "overview" }: { config: Config | null; jobs: Job[]; overview: Overview | null; notify: (message: string, error?: boolean) => void; onOpenLab: () => void; initialTab?: "overview" | "health" }) {
+  const [systemTab, setSystemTab] = useState<"overview" | "health">(initialTab);
   const [healthCenter, setHealthCenter] = useState<HealthCenter | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [services, setServices] = useState<Array<Record<string, unknown>>>([]);
@@ -9013,7 +9019,7 @@ function NotificationBell({ unread, popup, onOpen }: { unread: number; popup: Ap
   </div>;
 }
 
-function NotificationsPanel({ data, onRead, notify }: { data: NotificationsResponse | null; onRead: (ids: number[] | "all") => void; notify: (message: string, error?: boolean) => void }) {
+function NotificationsPanel({ data, onRead, notify, onOpenHealth }: { data: NotificationsResponse | null; onRead: (ids: number[] | "all") => void; notify: (message: string, error?: boolean) => void; onOpenHealth: () => void }) {
   const [fresh, setFresh] = useState<Set<number>>(new Set());
   const unreadIds = useMemo(() => (data?.items ?? []).filter((item) => !item.read_at).map((item) => item.id), [data]);
   useEffect(() => {
@@ -9035,6 +9041,7 @@ function NotificationsPanel({ data, onRead, notify }: { data: NotificationsRespo
           <div className="notification-line"><strong>{item.title}</strong><time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString(locale)}</time></div>
           <p>{item.message}</p>
           {item.kind === "memory.pressure" && <div className="notification-actions"><StopAllModelsButton notify={notify} onDone={() => undefined} /></div>}
+          {item.kind === "health.alert" && <div className="notification-actions"><button className="button secondary compact" onClick={onOpenHealth}><Activity size={14} />{" "}{t("Abrir Health Center")}</button></div>}
           {item.log && <details><summary>{t("Log")}</summary><pre>{item.log}</pre></details>}
         </div>
       </li>)}
@@ -9042,7 +9049,7 @@ function NotificationsPanel({ data, onRead, notify }: { data: NotificationsRespo
   </Card>;
 }
 
-function LogsView({ notify, notifications, onReadNotifications }: { notify: (message: string, error?: boolean) => void; notifications: NotificationsResponse | null; onReadNotifications: (ids: number[] | "all") => void }) {
+function LogsView({ notify, notifications, onReadNotifications, onOpenHealth }: { notify: (message: string, error?: boolean) => void; notifications: NotificationsResponse | null; onReadNotifications: (ids: number[] | "all") => void; onOpenHealth: () => void }) {
   const [data, setData] = useState<SystemLogsResponse | null>(null);
   const [level, setLevel] = useState(() => localStorage.getItem("mydgx-logs-level") || "");
   const [category, setCategory] = useState(() => localStorage.getItem("mydgx-logs-category") || "");
@@ -9097,7 +9104,7 @@ function LogsView({ notify, notifications, onReadNotifications }: { notify: (mes
           <button className="icon-button" onClick={() => void load()} aria-label={t("Actualizar logs")}><RefreshCw size={16} /></button>
         </div>}
       />
-      <NotificationsPanel data={notifications} onRead={onReadNotifications} notify={notify} />
+      <NotificationsPanel data={notifications} onRead={onReadNotifications} notify={notify} onOpenHealth={onOpenHealth} />
       <div className="logs-summary">
         <Card><small>{t("Últimas 24 h")}</small><strong>{Object.values(counts).reduce((total, count) => total + (count ?? 0), 0)}</strong></Card>
         <Card className="warning"><small>{t("Warnings")}</small><strong>{counts.warning ?? 0}</strong></Card>
@@ -9538,6 +9545,12 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
 
   const [notifications, setNotifications] = useState<NotificationsResponse | null>(null);
   const [notificationPopup, setNotificationPopup] = useState<AppNotification | null>(null);
+  const [systemTabRequest, setSystemTabRequest] = useState<"overview" | "health">("overview");
+  const openHealthCenter = useCallback(() => {
+    setSystemTabRequest("health");
+    setView("system");
+    window.scrollTo({ top: 0 });
+  }, []);
   const lastNotificationId = useRef<number | null>(null);
   const popupTimer = useRef<number | undefined>(undefined);
   const refreshNotifications = useCallback(async () => {
@@ -9751,8 +9764,8 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   else if (view === "engines") content = <EnginesView notify={notify} />;
   else if (view === "multimodal") content = <MultimodalLabView notify={notify} />;
   else if (view === "storage") content = <StorageView notify={notify} />;
-  else if (view === "system") content = <SystemView config={config} jobs={jobs} overview={overview} notify={notify} onOpenLab={() => { setView("multimodal"); window.scrollTo({ top: 0 }); }} />;
-  else if (view === "logs") content = <LogsView notify={notify} notifications={notifications} onReadNotifications={readNotifications} />;
+  else if (view === "system") content = <SystemView key={systemTabRequest} config={config} jobs={jobs} overview={overview} notify={notify} initialTab={systemTabRequest} onOpenLab={() => { setView("multimodal"); window.scrollTo({ top: 0 }); }} />;
+  else if (view === "logs") content = <LogsView notify={notify} notifications={notifications} onReadNotifications={readNotifications} onOpenHealth={openHealthCenter} />;
   else content = <SettingsView config={config} themePreference={themePreference} setThemePreference={setThemePreference} notify={notify} />;
 
   return (
@@ -9763,7 +9776,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
           <span className="nav-label">{t("MENÚ PRINCIPAL")}</span>
           {navItems.map((item) => {
             const Icon = item.icon;
-            return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => { setView(item.id); setMenuOpen(false); }}><Icon size={18} /><span>{item.label}</span>{navCounts[item.id]?.value ? <b className="nav-count" title={navCounts[item.id]?.title} aria-label={navCounts[item.id]?.title}>{navCounts[item.id]?.value}</b> : null}{item.id === "benchmarks" && benchmarkSuiteJob ? <b className="nav-running-dot" title={t("Suite {progress}%", { progress: Math.round(benchmarkSuiteJob.progress) })} /> : null}{view === item.id && <ChevronRight size={14} />}</button>;
+            return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => { setView(item.id); setSystemTabRequest("overview"); setMenuOpen(false); }}><Icon size={18} /><span>{item.label}</span>{navCounts[item.id]?.value ? <b className="nav-count" title={navCounts[item.id]?.title} aria-label={navCounts[item.id]?.title}>{navCounts[item.id]?.value}</b> : null}{item.id === "benchmarks" && benchmarkSuiteJob ? <b className="nav-running-dot" title={t("Suite {progress}%", { progress: Math.round(benchmarkSuiteJob.progress) })} /> : null}{view === item.id && <ChevronRight size={14} />}</button>;
           })}
         </nav>
         <div className="sidebar-bottom">
@@ -9814,9 +9827,11 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
               unread={notifications?.unread ?? 0}
               popup={notificationPopup}
               onOpen={() => {
+                const popupKind = notificationPopup?.kind;
                 setNotificationPopup(null);
                 setMenuOpen(false);
-                setView("logs");
+                if (popupKind === "health.alert") openHealthCenter();
+                else setView("logs");
                 window.scrollTo({ top: 0 });
               }}
             />

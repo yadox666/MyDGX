@@ -796,7 +796,10 @@ class Database:
                     first_seen TEXT NOT NULL,
                     last_seen TEXT NOT NULL,
                     resolved_at TEXT,
-                    occurrences INTEGER NOT NULL DEFAULT 1
+                    occurrences INTEGER NOT NULL DEFAULT 1,
+                    active_since TEXT,
+                    notified_at TEXT,
+                    notified_severity TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_health_findings_active_severity
                 ON health_findings(active, severity, last_seen DESC);
@@ -1114,6 +1117,9 @@ class Database:
             health_additions = {
                 "confidence": "TEXT NOT NULL DEFAULT 'medium'",
                 "source_note": "TEXT NOT NULL DEFAULT ''",
+                "active_since": "TEXT",
+                "notified_at": "TEXT",
+                "notified_severity": "TEXT",
             }
             for column, definition in health_additions.items():
                 if column not in health_columns:
@@ -1185,6 +1191,7 @@ class Database:
                 "spec_draft_n_max": "INTEGER NOT NULL DEFAULT 0",
                 "recipe_id": "TEXT NOT NULL DEFAULT ''",
                 "recipe_version": "INTEGER NOT NULL DEFAULT 0",
+                "comfyui_json": "TEXT NOT NULL DEFAULT ''",
             }
             for column, definition in additions.items():
                 if column not in existing:
@@ -2676,13 +2683,14 @@ def sync_health_findings(findings: list[dict[str, str]], evaluated_ids: set[str]
                         """
                         UPDATE health_findings SET severity=?,category=?,title=?,detail=?,evidence=?,
                             remediation=?,confidence=?,source_note=?,active=1,last_seen=?,resolved_at=NULL,
-                            occurrences=occurrences+?
+                            occurrences=occurrences+?,
+                            active_since=CASE WHEN active=1 AND active_since IS NOT NULL THEN active_since ELSE ? END
                         WHERE id=?
                         """,
                         (
                             item["severity"], item["category"], item["title"], item["detail"],
                             item["evidence"], item["remediation"], item["confidence"], item["source_note"],
-                            now, int(not old["active"]), finding_id,
+                            now, int(not old["active"]), now, finding_id,
                         ),
                     )
                     if not old["active"]:
@@ -2694,14 +2702,14 @@ def sync_health_findings(findings: list[dict[str, str]], evaluated_ids: set[str]
                         """
                         INSERT INTO health_findings(
                             id,severity,category,title,detail,evidence,remediation,
-                            confidence,source_note,active,first_seen,last_seen,resolved_at,occurrences
-                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            confidence,source_note,active,first_seen,last_seen,resolved_at,occurrences,active_since
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         """,
                         (
                             finding_id, item["severity"], item["category"], item["title"],
                             item["detail"], item["evidence"], item["remediation"],
                             item["confidence"], item["source_note"], 1,
-                            now, now, None, 1,
+                            now, now, None, 1, now,
                         ),
                     )
                     transitions.append(("appeared", item["severity"], item["title"], item))
@@ -2721,6 +2729,84 @@ def sync_health_findings(findings: list[dict[str, str]], evaluated_ids: set[str]
             entity_type="health", entity_id=item["id"],
             detail={"transition": transition, "category": item["category"], "evidence": item.get("evidence", "")},
         )
+    notify_health_findings()
+
+
+HEALTH_NOTIFY_WARNING_SETTLE = timedelta(minutes=2)
+HEALTH_NOTIFY_COOLDOWN = timedelta(hours=6)
+# These conditions already raise their own notification at the moment they happen.
+HEALTH_NOTIFY_COVERED = {"model-runs-failed": "model.load_failed", "memory-available": "memory.pressure"}
+HEALTH_NOTIFY_COVERED_WINDOW = timedelta(minutes=15)
+
+
+def _parse_time(value: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return None
+
+
+def notify_health_findings(now: datetime | None = None) -> list[str]:
+    """Summarise findings that need attention into one notification; returns the ids notified."""
+    now = now or datetime.now(timezone.utc)
+    rows = db.rows(
+        "SELECT * FROM health_findings WHERE active=1 AND severity IN ('warning','critical') "
+        "ORDER BY CASE severity WHEN 'critical' THEN 0 ELSE 1 END, last_seen DESC"
+    )
+    if not rows:
+        return []
+    covered_since = (now - HEALTH_NOTIFY_COVERED_WINDOW).isoformat()
+    covered_kinds = {
+        str(row["kind"]) for row in db.rows(
+            "SELECT DISTINCT kind FROM notifications WHERE created_at >= ?", (covered_since,),
+        )
+    }
+    due: list[dict[str, Any]] = []
+    covered: list[dict[str, Any]] = []
+    for row in rows:
+        since = _parse_time(row.get("active_since")) or _parse_time(row["first_seen"]) or now
+        if row["severity"] == "warning" and now - since < HEALTH_NOTIFY_WARNING_SETTLE:
+            continue
+        notified_at = _parse_time(row.get("notified_at"))
+        previous = row.get("notified_severity")
+        escalated = previous not in HEALTH_SEVERITY_ORDER or (
+            HEALTH_SEVERITY_ORDER[row["severity"]] > HEALTH_SEVERITY_ORDER[previous]
+        )
+        if not escalated and notified_at and (notified_at >= since or now - notified_at < HEALTH_NOTIFY_COOLDOWN):
+            continue
+        (covered if HEALTH_NOTIFY_COVERED.get(row["id"]) in covered_kinds else due).append(row)
+    stamp = now.isoformat()
+    if covered:
+        with db.connect() as connection:
+            connection.executemany(
+                "UPDATE health_findings SET notified_at=?,notified_severity=? WHERE id=?",
+                [(stamp, row["severity"], row["id"]) for row in covered],
+            )
+            connection.commit()
+    if not due:
+        return []
+    critical = [row for row in due if row["severity"] == "critical"]
+    warning = [row for row in due if row["severity"] == "warning"]
+    if len(due) == 1:
+        title, message = str(due[0]["title"]), str(due[0]["detail"])
+    else:
+        title = f"Health Center: {len(critical)} crítico(s) y {len(warning)} advertencia(s)"
+        message = " · ".join(str(row["title"]) for row in due[:6]) + (" · …" if len(due) > 6 else "")
+    log = "\n\n".join(
+        f"[{row['severity'].upper()}] {row['title']}\n{row['evidence']}\n→ {row['remediation']}"
+        for row in due
+    )
+    notify_safely(
+        "health.alert", title, message,
+        target="health", log=log, level="error" if critical else "warning",
+    )
+    with db.connect() as connection:
+        connection.executemany(
+            "UPDATE health_findings SET notified_at=?,notified_severity=? WHERE id=?",
+            [(stamp, row["severity"], row["id"]) for row in due],
+        )
+        connection.commit()
+    return [str(row["id"]) for row in due]
 
 
 def health_check(
@@ -3384,6 +3470,20 @@ def serialize_additional_models(models: list[AdditionalModelPayload]) -> str:
     return json.dumps(values)
 
 
+def serialize_comfyui_spec(spec: ComfyUISpecPayload | None) -> str:
+    return json.dumps(spec.model_dump()) if spec else ""
+
+
+def stored_comfyui_spec(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        return raw
+    try:
+        value = json.loads(raw) if raw else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 PERSISTENT_MODELS_KEY = "models.persistent"
 QUICK_MODELS_KEY = "models.quick"
 DEFAULT_PROFILE_ID = "mydgx-default"
@@ -3577,6 +3677,7 @@ def profile_models(profile: dict[str, Any]) -> list[dict[str, Any]]:
     primary["name"] = managed_model_name(profile) if profile.get("id") in MANAGED_PROFILES else profile["name"]
     primary["enabled"] = True
     primary["estimated_memory_mb"] = profile.get("estimated_memory_mb", 0)
+    primary["comfyui"] = stored_comfyui_spec(primary.pop("comfyui_json", ""))
     for key, fallback in (
         ("input_modalities", ["text"]),
         ("output_modalities", ["text"]),
@@ -4009,7 +4110,7 @@ def profile_model_is_downloaded(model: dict[str, Any]) -> bool:
     if model["engine"] == "ollama":
         return True
     if model["engine"] != "llama.cpp":
-        return bool(model.get("endpoint_url"))
+        return bool(model.get("endpoint_url")) and not comfyui_missing_files(model)
     try:
         model_ready = resolve_profile_model_file(model).is_file()
         if model.get("task") == "vision":
@@ -5084,6 +5185,9 @@ async def launch_profile_model(
     if model["engine"] != "llama.cpp":
         if not str(model.get("endpoint_url") or "").strip():
             raise RuntimeError(f"{model['name']} no tiene endpoint configurado")
+        if missing := comfyui_missing_files(model):
+            names = ", ".join(Path(str(item["filename"])).name for item in missing)
+            raise RuntimeError(f"Faltan archivos ComfyUI de {model['name']}: {names}. Descarga los modelos del perfil")
         if not await external_endpoint_reachable(model, timeout=5):
             raise ExternalRuntimeUnavailable(
                 f"El endpoint de {model['name']} no está disponible"
@@ -12030,6 +12134,27 @@ async def delete_hf_model(repo_id: str, confirm: str = Query()) -> dict[str, boo
     return {"deleted": True}
 
 
+COMFYUI_MODEL_FOLDERS = (
+    "checkpoints", "diffusion_models", "text_encoders", "vae", "loras", "clip_vision", "model_patches",
+)
+
+
+class ComfyUIFilePayload(BaseModel):
+    repo: str = Field(min_length=3, max_length=200, pattern=r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+    revision: str = Field(default="main", min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._-]+$")
+    filename: str = Field(
+        min_length=1, max_length=300,
+        pattern=r"^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*\.safetensors$",
+    )
+    folder: Literal[COMFYUI_MODEL_FOLDERS]
+    sha256: str = Field(default="", pattern=r"^([0-9a-f]{64})?$")
+
+
+class ComfyUISpecPayload(BaseModel):
+    workflow: str = Field(min_length=6, max_length=120, pattern=r"^[A-Za-z0-9._-]+\.json$")
+    files: list[ComfyUIFilePayload] = Field(default_factory=list, max_length=16)
+
+
 class ModelPayload(BaseModel):
     engine: Literal[
         "llama.cpp", "ollama", "vllm", "sglang", "tensorrt-llm",
@@ -12090,6 +12215,7 @@ class ModelPayload(BaseModel):
     estimated_memory_mb: int = Field(default=0, ge=0, le=1_048_576)
     max_input_mb: int = Field(default=32, ge=1, le=1024)
     timeout_seconds: int = Field(default=600, ge=10, le=86_400)
+    comfyui: ComfyUISpecPayload | None = None
     enabled: bool = True
 
 
@@ -12200,6 +12326,23 @@ def validate_model(payload: ModelPayload) -> None:
             status_code=400,
             detail="Este protocolo requiere un runtime externo local",
         )
+    if payload.comfyui is not None:
+        if (
+            payload.engine != "comfyui"
+            or payload.api_protocol != "comfyui"
+            or payload.task not in {"image-generation", "video-generation"}
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="El bloque comfyui solo aplica a modelos ComfyUI de imagen o vídeo",
+            )
+        try:
+            load_comfyui_spec_workflow(payload.comfyui.workflow)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        targets = [(item.folder, Path(item.filename).name) for item in payload.comfyui.files]
+        if len(targets) != len(set(targets)):
+            raise HTTPException(status_code=400, detail="El bloque comfyui repite un archivo en la misma carpeta")
     expected = {
         "chat": ({"text"}, {"text"}),
         "vision": ({"image"}, {"text"}),
@@ -12271,6 +12414,7 @@ def profile_values(profile_id: str, payload: ProfilePayload, now: str) -> tuple[
         serialize_additional_models(payload.additional_models),
         payload.memory_reserve_mb, int(payload.auto_fit_context), payload.minimum_context_size,
         payload.spec_type, payload.draft_filename, payload.spec_draft_n_max,
+        serialize_comfyui_spec(payload.comfyui),
         0, now, now,
     )
 
@@ -12286,8 +12430,8 @@ PROFILE_INSERT_SQL = """
         output_modalities_json,runtime_backend,endpoint_url,api_protocol,
         estimated_memory_mb,max_input_mb,timeout_seconds,additional_models_json,
         memory_reserve_mb,auto_fit_context,minimum_context_size,spec_type,draft_filename,spec_draft_n_max,
-        active,created_at,updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        comfyui_json,active,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 PROFILE_INSERT_COLUMNS = [
     column.strip() for column in PROFILE_INSERT_SQL.split("(", 1)[1].split(")", 1)[0].split(",")
@@ -12485,6 +12629,7 @@ async def profiles() -> dict[str, Any]:
             profile["additional_models"] = json.loads(profile.pop("additional_models_json") or "[]")
         except json.JSONDecodeError:
             profile["additional_models"] = []
+        profile["comfyui"] = stored_comfyui_spec(profile.pop("comfyui_json", ""))
         for key, fallback in (
             ("input_modalities", ["text"]),
             ("output_modalities", ["text"]),
@@ -12604,7 +12749,10 @@ async def profile_recipes(refresh: bool = False) -> dict[str, Any]:
         missing = [
             model["name"]
             for model in (profile_models(installed) if installed else [])
-            if model.get("enabled", True) and model["engine"] == "llama.cpp" and not profile_model_is_downloaded(model)
+            if model.get("enabled", True) and (
+                (model["engine"] == "llama.cpp" and not profile_model_is_downloaded(model))
+                or comfyui_missing_files(model)
+            )
         ]
         recipes.append({
             **recipe,
@@ -12636,8 +12784,15 @@ def queue_profile_downloads(profile_id: str, background: BackgroundTasks) -> lis
     jobs: list[str] = []
     row = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))[0]
     for model in profile_models(row):
+        if not model.get("enabled", True):
+            continue
+        if model["engine"] == "comfyui" and comfyui_missing_files(model):
+            job_id = db.create_job("profile.download", model["name"])
+            background.add_task(download_comfyui_files, job_id, model)
+            jobs.append(job_id)
+            continue
         if (
-            not model.get("enabled", True) or model["engine"] != "llama.cpp"
+            model["engine"] != "llama.cpp"
             or not model.get("model_repo") or profile_model_is_downloaded(model)
         ):
             continue
@@ -12753,7 +12908,7 @@ async def update_profile(profile_id: str, payload: ProfilePayload) -> dict[str, 
                 min_free_memory_mb=?,source=?,runtime_requirement=?,task=?,
                 input_modalities_json=?,output_modalities_json=?,runtime_backend=?,endpoint_url=?,
                 api_protocol=?,estimated_memory_mb=?,max_input_mb=?,timeout_seconds=?,
-                additional_models_json=?,
+                additional_models_json=?,comfyui_json=?,
                 memory_reserve_mb=?,auto_fit_context=?,minimum_context_size=?,app=?,updated_at=?
             WHERE id=?
             """,
@@ -12774,6 +12929,7 @@ async def update_profile(profile_id: str, payload: ProfilePayload) -> dict[str, 
                 payload.endpoint_url.rstrip("/"), payload.api_protocol,
                 payload.estimated_memory_mb, payload.max_input_mb, payload.timeout_seconds,
                 serialize_additional_models(payload.additional_models),
+                serialize_comfyui_spec(payload.comfyui),
                 payload.memory_reserve_mb, int(payload.auto_fit_context),
                 payload.minimum_context_size, payload.app, utc_now(), profile_id,
             ),
@@ -13052,6 +13208,10 @@ async def prepare_profile_models(job_id: str, profile: dict[str, Any]) -> int:
             downloaded += int(
                 await ensure_ollama_profile_model(job_id, model, start, end)
             )
+        elif engine == "comfyui" and model.get("comfyui"):
+            downloaded += int(bool(
+                await ensure_comfyui_profile_files(job_id, model, start, end)
+            ))
         elif not model.get("endpoint_url"):
             raise RuntimeError(
                 f"{model['name']}: el motor externo no tiene endpoint configurado"
@@ -13107,8 +13267,10 @@ async def prepare_activate_and_start_profile(job_id: str, profile_id: str) -> No
                 model["name"]
                 for model in profile_models(refreshed)
                 if model.get("enabled", True)
-                and model["engine"] == "llama.cpp"
-                and not profile_model_is_downloaded(model)
+                and (
+                    (model["engine"] == "llama.cpp" and not profile_model_is_downloaded(model))
+                    or comfyui_missing_files(model)
+                )
             ]
             if missing:
                 raise RuntimeError(f"Descarga incompleta: {', '.join(missing)}")
@@ -13302,14 +13464,89 @@ async def download_profile_models(job_id: str, profile: dict[str, Any]) -> None:
         await stop_hf_progress(stop, monitor)
 
 
+def install_comfyui_file(item: dict[str, Any]) -> Path:
+    """Fetch one recipe file into the HF cache, verify its pin and link it into the ComfyUI model folder."""
+    cached = Path(hf_hub_download(
+        repo_id=str(item["repo"]),
+        filename=str(item["filename"]),
+        revision=str(item.get("revision") or "main"),
+        cache_dir=str(huggingface_cache_dir()),
+        token=huggingface_token(),
+    )).resolve(strict=True)
+    expected = str(item.get("sha256") or "")
+    if expected:
+        stat = cached.stat()
+        if sha256_file_identity(str(cached), stat.st_size, stat.st_mtime_ns) != expected:
+            cached.unlink(missing_ok=True)
+            raise ValueError(f"Checksum inválido para {item['filename']}")
+    target = comfyui_file_target(item)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f"{target.name}.new")
+    temporary.unlink(missing_ok=True)
+    try:
+        os.link(cached, temporary)
+    except OSError:
+        shutil.copy2(cached, temporary)
+    temporary.replace(target)
+    return target
+
+
+async def ensure_comfyui_profile_files(
+    job_id: str,
+    model: dict[str, Any],
+    progress_start: float,
+    progress_end: float,
+) -> int:
+    missing = comfyui_missing_files(model)
+    if not missing:
+        return 0
+    if not managed_comfyui_root().joinpath("enabled").is_file():
+        raise RuntimeError(f"{model['name']}: ComfyUI no está instalado en MyDGX")
+    for index, item in enumerate(missing):
+        db.update_job(
+            job_id, "running",
+            progress_start + (progress_end - progress_start) * index / len(missing),
+            f"{model['name']}: descargando {index + 1}/{len(missing)} {Path(str(item['filename'])).name}",
+        )
+        try:
+            await asyncio.to_thread(install_comfyui_file, item)
+        except Exception as exc:
+            message = (
+                huggingface_failure_reason(exc, str(item["repo"]))
+                or (str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}: descarga no completada")
+            )
+            db.audit("profile.download", model["name"], False, f"{item['repo']}: {type(exc).__name__}")
+            notify_safely(
+                "download.failed", "Descarga fallida", f"{model['name']} · {item['repo']}: {message}",
+                target=str(item["repo"]), log=f"{type(exc).__name__}: {exc}\n{item['filename']}",
+            )
+            raise RuntimeError(f"{model['name']}: {message}") from exc
+    db.audit("profile.download", model["name"], True, ", ".join(sorted({str(item["repo"]) for item in missing})))
+    return len(missing)
+
+
+async def download_comfyui_files(job_id: str, model: dict[str, Any]) -> None:
+    try:
+        count = await ensure_comfyui_profile_files(job_id, model, 0, 100)
+    except RuntimeError as exc:
+        db.update_job(job_id, "failed", 0, str(exc))
+        return
+    db.update_job(job_id, "completed", 100, f"{count} archivo(s) ComfyUI preparados")
+
+
 @app.post("/api/profiles/{profile_id}/download", dependencies=secure)
 async def download_profile(profile_id: str, background: BackgroundTasks) -> dict[str, str]:
     rows = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="Perfil no encontrado")
     profile = rows[0]
+    primary = profile_models(profile)[0]
+    if primary["engine"] == "comfyui" and comfyui_missing_files(primary):
+        job_id = db.create_job("profile.download", profile["name"])
+        background.add_task(download_comfyui_files, job_id, primary)
+        return {"job_id": job_id}
     if profile["engine"] != "llama.cpp":
-        raise HTTPException(status_code=400, detail="La descarga por perfil solo aplica a llama.cpp")
+        raise HTTPException(status_code=400, detail="La descarga por perfil solo aplica a llama.cpp y a recetas ComfyUI")
     job_id = db.create_job("profile.download", profile["name"])
     background.add_task(download_profile_models, job_id, profile)
     return {"job_id": job_id}
@@ -13327,8 +13564,12 @@ async def download_additional_profile_model(
     model = next((item for item in profile_models(rows[0]) if item["id"] == model_id), None)
     if not model:
         raise HTTPException(status_code=404, detail="Modelo no encontrado")
+    if model["engine"] == "comfyui" and comfyui_missing_files(model):
+        job_id = db.create_job("profile.download", model["name"])
+        background.add_task(download_comfyui_files, job_id, model)
+        return {"job_id": job_id}
     if model["engine"] != "llama.cpp":
-        raise HTTPException(status_code=400, detail="La descarga solo aplica a llama.cpp")
+        raise HTTPException(status_code=400, detail="La descarga solo aplica a llama.cpp y a recetas ComfyUI")
     model["_profile_id"] = profile_id
     model["_is_additional"] = model_id != "primary"
     job_id = db.create_job("profile.download", model["name"])
@@ -13842,6 +14083,18 @@ def managed_comfyui_source() -> Path:
     return installed if installed.is_dir() else root / "source"
 
 
+def comfyui_file_target(item: dict[str, Any]) -> Path:
+    folder = str(item.get("folder") or "")
+    if folder not in COMFYUI_MODEL_FOLDERS:
+        raise ValueError("Carpeta de modelos ComfyUI inválida")
+    return managed_comfyui_source() / "models" / folder / Path(str(item.get("filename") or "")).name
+
+
+def comfyui_missing_files(model: dict[str, Any]) -> list[dict[str, Any]]:
+    spec = model.get("comfyui") or {}
+    return [item for item in spec.get("files") or [] if not comfyui_file_target(item).is_file()]
+
+
 def managed_flux_checkpoint() -> Path:
     return (
         managed_comfyui_source()
@@ -13970,6 +14223,83 @@ def managed_comfyui_enabled() -> bool:
     )
 
 
+COMFYUI_SPEC_TITLES = {
+    "prompt": "MyDGX Prompt",
+    "seed": "MyDGX Seed",
+    "size": "MyDGX Size",
+    "steps": "MyDGX Steps",
+}
+COMFYUI_SAVE_IMAGE_NODES = {"SaveImage", "SaveImageAdvanced"}
+
+
+def comfyui_titled_nodes(workflow: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    title = COMFYUI_SPEC_TITLES[key]
+    return [
+        node for node in workflow.values()
+        if isinstance(node, dict) and (node.get("_meta") or {}).get("title") == title
+    ]
+
+
+def load_comfyui_spec_workflow(filename: str) -> dict[str, Any]:
+    """A recipe workflow in API format from config/comfyui; MyDGX fills the nodes titled MyDGX Prompt/Seed/Size/Steps."""
+    if Path(filename).name != filename or not re.fullmatch(r"[A-Za-z0-9._-]+\.json", filename):
+        raise ValueError("Nombre de workflow ComfyUI inválido")
+    try:
+        workflow = json.loads((COMFYUI_WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"El workflow {filename} no está en config/comfyui; actualiza MyDGX") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"El workflow {filename} no es JSON válido") from exc
+    if not isinstance(workflow, dict) or not workflow or not all(
+        isinstance(node, dict) and isinstance(node.get("class_type"), str) and isinstance(node.get("inputs"), dict)
+        for node in workflow.values()
+    ):
+        raise ValueError(f"El workflow {filename} no está en formato API de ComfyUI")
+    prompts = comfyui_titled_nodes(workflow, "prompt")
+    if len(prompts) != 1 or not any(isinstance(prompts[0]["inputs"].get(key), str) for key in ("text", "prompt")):
+        raise ValueError(f"El workflow {filename} necesita un único nodo titulado MyDGX Prompt con texto")
+    if not any(node["class_type"].startswith("Save") for node in workflow.values()):
+        raise ValueError(f"El workflow {filename} no guarda ninguna salida")
+    return workflow
+
+
+def apply_comfyui_spec_inputs(
+    workflow: dict[str, Any],
+    task: str,
+    prompt: str,
+    *,
+    seed: int | None,
+    width: int | None,
+    height: int | None,
+    steps: int | None,
+    frames: int | None,
+    persist_output: bool,
+) -> dict[str, Any]:
+    node = comfyui_titled_nodes(workflow, "prompt")[0]
+    node["inputs"]["text" if "text" in node["inputs"] else "prompt"] = prompt or "A detailed image"
+    seed_value = int(seed) if seed is not None else int.from_bytes(os.urandom(6), "big")
+    for node in comfyui_titled_nodes(workflow, "seed"):
+        for key in ("seed", "noise_seed"):
+            if key in node["inputs"]:
+                node["inputs"][key] = seed_value
+    for node in comfyui_titled_nodes(workflow, "size"):
+        for key, value in (("width", width), ("height", height), ("length", frames)):
+            if value is not None and key in node["inputs"]:
+                node["inputs"][key] = int(value)
+    if steps is not None:
+        for node in comfyui_titled_nodes(workflow, "steps"):
+            if "steps" in node["inputs"]:
+                node["inputs"]["steps"] = int(steps)
+    if task == "image-generation" and not persist_output:
+        for node_id, node in list(workflow.items()):
+            if node["class_type"] in COMFYUI_SAVE_IMAGE_NODES:
+                workflow[node_id] = {
+                    "inputs": {"images": node["inputs"]["images"]},
+                    "class_type": "PreviewImage",
+                }
+    return workflow
+
+
 def comfyui_workflow(
     task: str,
     prompt: str,
@@ -13980,7 +14310,18 @@ def comfyui_workflow(
     steps: int | None = None,
     frames: int | None = None,
     persist_output: bool = True,
+    spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if spec and spec.get("workflow"):
+        try:
+            workflow = load_comfyui_spec_workflow(str(spec["workflow"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return apply_comfyui_spec_inputs(
+            workflow, task, prompt,
+            seed=seed, width=width, height=height, steps=steps, frames=frames,
+            persist_output=persist_output,
+        )
     filename = (
         "image-workflow-api.json"
         if task == "image-generation"
@@ -14086,6 +14427,7 @@ async def execute_managed_comfyui(
     steps: int | None = None,
     frames: int | None = None,
     persist_output: bool = True,
+    spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     workflow = comfyui_workflow(
         task,
@@ -14096,6 +14438,7 @@ async def execute_managed_comfyui(
         steps=steps,
         frames=frames,
         persist_output=persist_output,
+        spec=spec,
     )
     client_id = str(uuid.uuid4())
     base_url = base_url.rstrip("/")
@@ -14313,6 +14656,7 @@ async def execute_multimodal_request(payload: MultimodalRunRequest) -> dict[str,
             payload.prompt,
             float(model.get("timeout_seconds") or 600),
             model_endpoint(model) or settings.comfyui_url,
+            spec=model.get("comfyui"),
         )
     if protocol == "tts-lab" and task != "tts":
         raise HTTPException(status_code=409, detail="El adaptador tts-lab solo admite síntesis de voz")
@@ -17188,6 +17532,15 @@ def benchmark_runtime_config(model: dict[str, Any]) -> tuple[dict[str, Any], str
             "endpoint": model_endpoint(model),
             "checkpoint_sha256": model.get("_benchmark_artifact_digest"),
         }
+        if spec := model.get("comfyui"):
+            runtime["effective"].update({"steps": None, "sampler": None, "scheduler": None})
+            runtime["comfyui"].update({
+                "workflow": spec.get("workflow"),
+                "files_sha256": {
+                    Path(str(item.get("filename"))).name: item.get("sha256") or None
+                    for item in spec.get("files") or []
+                },
+            })
     elif str(model.get("task") or "") == "video-generation":
         defaults = VIDEO_BENCHMARK_PROTOCOL["defaults"]
         runtime["effective"] = {
@@ -17530,6 +17883,9 @@ async def execute_image_benchmark_sample(
 ) -> dict[str, Any]:
     width = int(case["width"])
     height = int(case["height"])
+    spec = model.get("comfyui")
+    # Recipe workflows keep the step count their model was tuned for.
+    steps = None if spec else int(case["steps"])
     start = time.monotonic()
     result = await execute_managed_comfyui(
         "image-generation",
@@ -17539,8 +17895,9 @@ async def execute_image_benchmark_sample(
         seed=int(case["seed"]),
         width=width,
         height=height,
-        steps=int(case["steps"]),
+        steps=steps,
         persist_output=False,
+        spec=spec,
     )
     encoded = result.get("data_base64")
     if not isinstance(encoded, str):
@@ -17564,7 +17921,8 @@ async def execute_image_benchmark_sample(
         "native": {
             **native,
             "seed": int(case["seed"]),
-            "steps": int(case["steps"]),
+            "steps": steps,
+            "workflow": spec.get("workflow") if spec else None,
         },
         "valid": valid,
         "error": "" if valid else "El PNG no coincide con la resolución versionada",

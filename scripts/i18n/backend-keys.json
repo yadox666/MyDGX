@@ -1286,5 +1286,6 @@
   "aviso >8 GiB",
   "aviso <20 GiB · crítico <5 GiB",
   "runtime_backend=compose · docker ausente",
-  "Aviso: MemAvailable <10 %, PSI some ≥10 %, PSI full ≥1 % o swap >8 GiB. Crítico: MemAvailable <4 GiB o PSI full ≥5 %."
+  "Aviso: MemAvailable <10 %, PSI some ≥10 %, PSI full ≥1 % o swap >8 GiB. Crítico: MemAvailable <4 GiB o PSI full ≥5 %.",
+  "Health Center: {0} crítico(s) y {1} advertencia(s)"
 ]

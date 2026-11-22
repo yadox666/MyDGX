@@ -1743,6 +1743,49 @@ class CollectorTests(unittest.TestCase):
         finally:
             db.path = original_path
 
+    def test_health_alerts_are_summarised_into_rate_limited_notifications(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "health-notify.db"
+                db.initialize()
+                hot = main_module.health_finding(
+                    "gpu-temperature", "critical", "GPU", "Temperatura GPU elevada", "La GPU está por encima del umbral operativo recomendado.", "91 °C", "x",
+                )
+                disk = main_module.health_finding("disk-space", "warning", "Almacenamiento", "Espacio libre bajo", "d", "e", "r")
+                main_module.sync_health_findings([hot, disk], {"gpu-temperature", "disk-space"})
+                notes = db.rows("SELECT * FROM notifications WHERE kind='health.alert'")
+                self.assertEqual(len(notes), 1)
+                self.assertEqual(notes[0]["title"], "Temperatura GPU elevada")
+                self.assertEqual(notes[0]["level"], "error")
+
+                main_module.sync_health_findings([hot, disk], {"gpu-temperature", "disk-space"})
+                self.assertEqual(len(db.rows("SELECT * FROM notifications WHERE kind='health.alert'")), 1)
+
+                later = datetime.fromtimestamp(time.time() + 180, timezone.utc)
+                self.assertEqual(main_module.notify_health_findings(later), ["disk-space"])
+                self.assertEqual(main_module.notify_health_findings(later), [])
+
+                main_module.sync_health_findings([], {"gpu-temperature", "disk-space"})
+                main_module.sync_health_findings([hot], {"gpu-temperature"})
+                self.assertEqual(main_module.notify_health_findings(), [])
+
+                db.notify("memory.pressure", "Memoria saturada", "m")
+                memory = main_module.health_finding("memory-available", "critical", "Memoria", "Presión de memoria unificada", "d", "e", "r")
+                main_module.sync_health_findings([memory], {"memory-available"})
+                self.assertEqual(len(db.rows("SELECT * FROM notifications WHERE kind='health.alert'")), 2)
+                self.assertEqual(main_module.notify_health_findings(later), [])
+        finally:
+            db.path = original_path
+
+    def test_catalog_translates_summary_segments(self) -> None:
+        catalog = Catalog({"Espacio libre bajo": "Low free space", "Temperatura GPU elevada": "High GPU temperature"})
+        self.assertEqual(
+            catalog.translate("Temperatura GPU elevada · Espacio libre bajo · algo"),
+            "High GPU temperature · Low free space · algo",
+        )
+        self.assertEqual(catalog.translate("nada · que traducir"), "nada · que traducir")
+
     def test_health_checks_report_observed_values_when_healthy(self) -> None:
         gib = 1024 ** 3
         original_path = db.path
@@ -7043,8 +7086,14 @@ class ProfileApiTests(unittest.TestCase):
             rows = db.rows(
                 "SELECT id,name FROM profiles WHERE id NOT LIKE 'artifex-%' ORDER BY id"
             )
-            self.assertEqual(len(rows), 9)
+            self.assertEqual(len(rows), 10)
             self.assertIn("TTS Lab · Voces MLX", {row["name"] for row in rows})
+            image = db.rows(
+                "SELECT engine,task,comfyui_json FROM profiles WHERE name=?",
+                ("RECIPE · Image · Qwen-Image 2.1 Turbo",),
+            )[0]
+            self.assertEqual((image["engine"], image["task"]), ("comfyui", "image-generation"))
+            self.assertEqual(json.loads(image["comfyui_json"])["workflow"], "qwen-image-2.1-turbo-api.json")
             recipe = db.rows(
                 "SELECT model_file,model_repo,spec_type,draft_filename,additional_models_json FROM profiles WHERE name=?",
                 ("RECIPE · Cybersecurity",),
@@ -7395,6 +7444,98 @@ class ProfileApiTests(unittest.TestCase):
                 self.assertFalse([route for route in app.routes if "/api/deployments" in getattr(route, "path", "")])
             finally:
                 db.path = original_path
+
+
+class ComfyUIRecipeTests(unittest.TestCase):
+    RECIPE_ID = "7b3f0e52-2c41-4d8e-9a6f-5e1c9a2b7d40"
+
+    def image_recipe(self) -> dict[str, Any]:
+        return next(item for item in main_module.local_recipes() if item["id"] == self.RECIPE_ID)
+
+    def test_recipe_workflow_fills_titled_nodes_without_touching_the_file(self) -> None:
+        spec = {"workflow": "qwen-image-2.1-turbo-api.json"}
+        workflow = main_module.comfyui_workflow(
+            "image-generation", "un cartel", seed=7, width=768, height=512, steps=4,
+            persist_output=False, spec=spec,
+        )
+        self.assertEqual(workflow["5"]["inputs"]["prompt"], "un cartel")
+        self.assertEqual(workflow["7"]["inputs"]["noise_seed"], 7)
+        self.assertEqual((workflow["6"]["inputs"]["width"], workflow["6"]["inputs"]["height"]), (768, 512))
+        self.assertEqual(workflow["13"], {"inputs": {"images": ["12", 0]}, "class_type": "PreviewImage"})
+        self.assertFalse(any("steps" in node["inputs"] for node in workflow.values()))
+        fresh = main_module.load_comfyui_spec_workflow(spec["workflow"])
+        self.assertEqual(fresh["5"]["inputs"]["prompt"], "A detailed image")
+        self.assertEqual(fresh["13"]["class_type"], "SaveImage")
+        unchanged = main_module.comfyui_workflow("image-generation", "otro", seed=1, spec=spec)
+        self.assertEqual(unchanged["13"]["class_type"], "SaveImage")
+        self.assertEqual(unchanged["6"]["inputs"]["width"], 1024)
+
+    def test_comfyui_block_is_validated(self) -> None:
+        payload = main_module.recipe_profile_payload(self.image_recipe())
+        main_module.validate_model(payload)
+        cases = [
+            {"engine": "openai-compatible", "api_protocol": "openai"},
+            {"comfyui": {"workflow": "missing-api.json", "files": []}},
+            {"comfyui": {"workflow": "qwen-image-2.1-turbo-api.json", "files": [
+                payload.comfyui.files[0].model_dump(), payload.comfyui.files[0].model_dump(),
+            ]}},
+        ]
+        for update in cases:
+            values = {**payload.model_dump(), **update}
+            with self.subTest(update=update), self.assertRaises(HTTPException) as caught:
+                main_module.validate_model(main_module.ModelPayload.model_validate(values))
+            self.assertEqual(caught.exception.status_code, 400)
+        for bad in ({"folder": "../etc"}, {"filename": "../x.safetensors"}, {"sha256": "abc"}):
+            with self.subTest(bad=bad), self.assertRaises(main_module.ValidationError):
+                main_module.ComfyUIFilePayload.model_validate({**payload.comfyui.files[0].model_dump(), **bad})
+
+    def test_files_are_verified_and_linked_into_the_comfyui_folders(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            blob = root / "cache" / "blob.safetensors"
+            blob.parent.mkdir()
+            blob.write_bytes(b"weights")
+            item = {
+                "repo": "Comfy-Org/Qwen-Image-2.1", "revision": "abc", "folder": "vae",
+                "filename": "vae/qwen_image_2.1_vae_bf16.safetensors",
+                "sha256": hashlib.sha256(b"weights").hexdigest(),
+            }
+            model = {"name": "Qwen", "engine": "comfyui", "endpoint_url": "http://127.0.0.1:8188", "comfyui": {"files": [item]}}
+            digest = lambda path, *_: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            with patch.object(main_module, "managed_comfyui_source", return_value=root / "ComfyUI"), \
+                 patch.object(main_module, "hf_hub_download", return_value=str(blob)) as download, \
+                 patch.object(main_module, "sha256_file_identity", side_effect=digest):
+                self.assertFalse(main_module.profile_model_is_downloaded(model))
+                target = main_module.install_comfyui_file(item)
+                self.assertEqual(target, root / "ComfyUI" / "models" / "vae" / "qwen_image_2.1_vae_bf16.safetensors")
+                self.assertEqual(target.read_bytes(), b"weights")
+                self.assertEqual(download.call_args.kwargs["revision"], "abc")
+                self.assertTrue(main_module.profile_model_is_downloaded(model))
+                with self.assertRaises(ValueError):
+                    main_module.install_comfyui_file({**item, "folder": "loras", "sha256": "0" * 64})
+                self.assertFalse((root / "ComfyUI" / "models" / "loras").exists())
+
+    def test_comfyui_block_survives_storage_copy_and_listing(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "comfy.db"
+                db.initialize()
+                main_module.insert_recipe_profile(self.RECIPE_ID, self.image_recipe())
+                row = db.rows("SELECT * FROM profiles WHERE id=?", (self.RECIPE_ID,))[0]
+                primary = main_module.profile_models(row)[0]
+                self.assertEqual(primary["comfyui"]["workflow"], "qwen-image-2.1-turbo-api.json")
+                self.assertEqual(len(primary["comfyui"]["files"]), 3)
+                copy = main_module.profile_payload_from_row(row, "Qwen copia")
+                self.assertEqual(copy.comfyui, main_module.recipe_profile_payload(self.image_recipe()).comfyui)
+                with patch.object(main_module, "ollama_payload", AsyncMock(return_value={"models": []})):
+                    listed = asyncio.run(main_module.profiles())["profiles"]
+                profile = next(item for item in listed if item["id"] == self.RECIPE_ID)
+                self.assertNotIn("comfyui_json", profile)
+                self.assertEqual(profile["comfyui"]["workflow"], "qwen-image-2.1-turbo-api.json")
+                self.assertFalse(profile["downloaded"])
+        finally:
+            db.path = original_path
 
 
 class GatewayTests(unittest.TestCase):

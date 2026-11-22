@@ -96,6 +96,12 @@ class Catalog:
         head, separator, tail = text.partition(": ")
         if separator and head in self.exact:
             return f"{self.exact[head]}: {self.translate(tail)}"
+        # Summaries join catalog entries with " · "; each piece is translated on its own.
+        if " · " in text:
+            parts = text.split(" · ")
+            translated = [self.translate(part) for part in parts]
+            if translated != parts:
+                return " · ".join(translated)
         return text
 
 

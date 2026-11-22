@@ -552,6 +552,22 @@ La pestaña **Plataforma** mantiene:
   ConnectX-7 la actualiza el servicio de NVIDIA al arrancar, solo con un cable
   QSFP conectado. El estado OTA de NVIDIA se consulta en DGX Dashboard.
 
+### Copia de seguridad
+
+La pestaña *Copia de seguridad* de *Sistema* crea un archivo
+`mydgx-backup-AAAAMMDDTHHMMSSZ.tar.gz` y lo descarga en el navegador. Contiene
+una copia coherente de la base de datos (perfiles, recetas instaladas,
+benchmarks, métricas, notificaciones y auditoría), la carpeta `config` y los
+archivos de estado `data/*.json`, junto con un `manifest.json` que lista su
+contenido.
+
+No incluye secretos: deja fuera `.env` y cualquier archivo `*.env` (los
+`*.env.example` sí entran), además de `litellm.generated.json`, los modelos y
+los logs. Guarda tu `.env` aparte y en un sitio seguro. Las copias quedan
+también en `data/backups` del DGX, con permisos `0600`, hasta que las borres
+desde la lista. Antes de crearla, MyDGX comprueba que haya al menos el doble
+del tamaño de la base de datos libre en disco.
+
 ## Logs
 
 Diagnóstico persistente, filtrable por nivel, categoría y texto, con paginación.

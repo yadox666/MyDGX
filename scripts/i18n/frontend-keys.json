@@ -1949,5 +1949,19 @@
   "Este modelo no usa llama.cpp: arranca con su perfil {name}",
   "Encender el perfil {name}",
   "Arrancando {name}; espera a que termine",
-  "Ya hay otro perfil preparándose o arrancando"
+  "Ya hay otro perfil preparándose o arrancando",
+  "Copia de seguridad creada: {name}",
+  "¿Borrar la copia {name} del DGX? Si no la has descargado, se perderá.",
+  "Copia de seguridad borrada",
+  "COPIA DE SEGURIDAD",
+  "Guarda la configuración de MyDGX",
+  "Incluye la base de datos (perfiles, benchmarks, métricas, notificaciones y auditoría), la carpeta config y los archivos de estado. No incluye secretos (.env), modelos ni logs: guarda tu .env aparte y en un sitio seguro.",
+  "Creando copia…",
+  "Crear y descargar",
+  "Copias guardadas en el DGX",
+  "Todavía no hay copias de seguridad.",
+  "Descargar {name}",
+  "Borrar del DGX",
+  "Borrar {name}",
+  "Copia de seguridad"
 ]

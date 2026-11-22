@@ -1268,5 +1268,9 @@
   "aviso <20 GiB · crítico <5 GiB": "warning <20 GiB · critical <5 GiB",
   "runtime_backend=compose · docker ausente": "runtime_backend=compose · docker missing",
   "Aviso: MemAvailable <10 %, PSI some ≥10 %, PSI full ≥1 % o swap >8 GiB. Crítico: MemAvailable <4 GiB o PSI full ≥5 %.": "Warning: MemAvailable <10 %, PSI some ≥10 %, PSI full ≥1 % or swap >8 GiB. Critical: MemAvailable <4 GiB or PSI full ≥5 %.",
-  "Health Center: {0} crítico(s) y {1} advertencia(s)": "Health Center: {0} critical and {1} warning(s)"
+  "Health Center: {0} crítico(s) y {1} advertencia(s)": "Health Center: {0} critical and {1} warning(s)",
+  "Copia de seguridad no encontrada": "Backup not found",
+  "Ya se está creando una copia de seguridad": "A backup is already being created",
+  "No hay espacio libre suficiente para la copia de seguridad": "There is not enough free space for the backup",
+  "Ya existe una copia de seguridad de este segundo; inténtalo de nuevo": "A backup from this second already exists; try again"
 }

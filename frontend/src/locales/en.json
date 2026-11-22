@@ -1967,5 +1967,19 @@
   "Este modelo no usa llama.cpp: arranca con su perfil {name}": "This model does not use llama.cpp: it starts with its profile {name}",
   "Encender el perfil {name}": "Start the profile {name}",
   "Arrancando {name}; espera a que termine": "Starting {name}; wait for it to finish",
-  "Ya hay otro perfil preparándose o arrancando": "Another profile is already preparing or starting"
+  "Ya hay otro perfil preparándose o arrancando": "Another profile is already preparing or starting",
+  "Copia de seguridad creada: {name}": "Backup created: {name}",
+  "¿Borrar la copia {name} del DGX? Si no la has descargado, se perderá.": "Delete backup {name} from the DGX? If you have not downloaded it, it will be lost.",
+  "Copia de seguridad borrada": "Backup deleted",
+  "COPIA DE SEGURIDAD": "BACKUP",
+  "Guarda la configuración de MyDGX": "Save the MyDGX configuration",
+  "Incluye la base de datos (perfiles, benchmarks, métricas, notificaciones y auditoría), la carpeta config y los archivos de estado. No incluye secretos (.env), modelos ni logs: guarda tu .env aparte y en un sitio seguro.": "It includes the database (profiles, benchmarks, metrics, notifications and audit), the config folder and the state files. It does not include secrets (.env), models or logs: keep your .env separately, somewhere safe.",
+  "Creando copia…": "Creating backup…",
+  "Crear y descargar": "Create and download",
+  "Copias guardadas en el DGX": "Backups stored on the DGX",
+  "Todavía no hay copias de seguridad.": "There are no backups yet.",
+  "Descargar {name}": "Download {name}",
+  "Borrar del DGX": "Delete from the DGX",
+  "Borrar {name}": "Delete {name}",
+  "Copia de seguridad": "Backup"
 }

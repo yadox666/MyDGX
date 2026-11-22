@@ -2080,3 +2080,14 @@ select { height: 34px; min-width: 170px; padding: 0 30px 0 10px; }
 .add-to-profile-context > span { font-weight: 600; }
 .add-to-profile-context .quick-context-slider { flex: 1; }
 .add-to-profile-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.backup-hero { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.backup-hero-copy { flex: 1 1 420px; min-width: 0; }
+.backup-hero-copy h3 { margin: 4px 0 6px; }
+.backup-hero-copy p { margin: 0; color: var(--text-muted); }
+.backup-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.backup-list-heading small { color: var(--text-muted); }
+.backup-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.backup-list li { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.backup-list li > div { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
+.backup-list li strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backup-list li small { color: var(--text-muted); }

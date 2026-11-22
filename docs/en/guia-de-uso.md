@@ -545,6 +545,21 @@ The **Platform** tab retains:
   is updated by the NVIDIA service at boot, only with a QSFP cable connected.
   Check the NVIDIA OTA status in DGX Dashboard.
 
+### Backup
+
+The *Backup* tab in *System* creates a
+`mydgx-backup-YYYYMMDDTHHMMSSZ.tar.gz` archive and downloads it in the browser.
+It holds a consistent copy of the database (profiles, installed recipes,
+benchmarks, metrics, notifications and audit), the `config` folder and the
+`data/*.json` state files, plus a `manifest.json` listing its contents.
+
+It does not include secrets: it leaves out `.env` and any `*.env` file
+(`*.env.example` files are included), as well as `litellm.generated.json`,
+models and logs. Keep your `.env` separately, somewhere safe. Backups also stay
+in `data/backups` on the DGX, with `0600` permissions, until you delete them
+from the list. Before creating one, MyDGX checks that at least twice the
+database size is free on disk.
+
 ## Logs
 
 Persistent diagnostics, filterable by level, category, and text, with pagination.

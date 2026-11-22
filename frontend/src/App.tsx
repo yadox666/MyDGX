@@ -12,6 +12,7 @@ import {
   Download,
   ExternalLink,
   Eye,
+  DatabaseBackup,
   FileArchive,
   Film,
   Folder,
@@ -8518,6 +8519,91 @@ function HealthFindingCard({ finding }: { finding: HealthFinding }) {
   </Card>;
 }
 
+type SystemBackup = { name: string; size: number; created_at: string };
+
+function BackupsPanel({ notify }: { notify: (message: string, error?: boolean) => void }) {
+  const [backups, setBackups] = useState<SystemBackup[] | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [downloading, setDownloading] = useState("");
+
+  const load = useCallback(() => {
+    api<{ backups: SystemBackup[] }>("/api/system/backups")
+      .then((data) => setBackups(data.backups))
+      .catch((error: Error) => { notify(error.message, true); setBackups([]); });
+  }, [notify]);
+  useEffect(load, [load]);
+
+  async function download(name: string) {
+    setDownloading(name);
+    try {
+      const url = URL.createObjectURL(await apiBlob(`/api/system/backups/${encodeURIComponent(name)}`));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setDownloading("");
+    }
+  }
+
+  async function create() {
+    setCreating(true);
+    try {
+      const entry = await api<SystemBackup>("/api/system/backups", { method: "POST" });
+      notify(t("Copia de seguridad creada: {name}", { name: entry.name }));
+      load();
+      await download(entry.name);
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function remove(name: string) {
+    if (!window.confirm(t("¿Borrar la copia {name} del DGX? Si no la has descargado, se perderá.", { name }))) return;
+    try {
+      await api(`/api/system/backups/${encodeURIComponent(name)}`, { method: "DELETE" });
+      notify(t("Copia de seguridad borrada"));
+      load();
+    } catch (error) {
+      notify((error as Error).message, true);
+    }
+  }
+
+  return <div className="view-stack">
+    <Card className="backup-hero">
+      <div className="backup-hero-copy">
+        <span className="card-kicker">{t("COPIA DE SEGURIDAD")}</span>
+        <h3>{t("Guarda la configuración de MyDGX")}</h3>
+        <p>{t("Incluye la base de datos (perfiles, benchmarks, métricas, notificaciones y auditoría), la carpeta config y los archivos de estado. No incluye secretos (.env), modelos ni logs: guarda tu .env aparte y en un sitio seguro.")}</p>
+      </div>
+      <button className="button primary" disabled={creating} onClick={() => void create()}>
+        {creating ? <RefreshCw className="spin" size={15} /> : <DatabaseBackup size={15} />}{" "}{creating ? t("Creando copia…") : t("Crear y descargar")}
+      </button>
+    </Card>
+    <Card>
+      <div className="backup-list-heading"><strong>{t("Copias guardadas en el DGX")}</strong><small>data/backups</small></div>
+      {backups === null
+        ? <p className="preflight-intro"><RefreshCw className="spin" size={14} />{" "}{t("Cargando…")}</p>
+        : backups.length === 0
+          ? <p className="preflight-intro">{t("Todavía no hay copias de seguridad.")}</p>
+          : <ul className="backup-list">
+            {backups.map((backup) => <li key={backup.name}>
+              <div><strong>{backup.name}</strong><small>{new Date(backup.created_at).toLocaleString(locale)} · {bytes(backup.size)}</small></div>
+              <button className="button secondary compact" disabled={downloading !== ""} onClick={() => void download(backup.name)} aria-label={t("Descargar {name}", { name: backup.name })}>
+                {downloading === backup.name ? <RefreshCw className="spin" size={13} /> : <Download size={13} />}{" "}{t("Descargar")}
+              </button>
+              <button className="icon-button danger" onClick={() => void remove(backup.name)} title={t("Borrar del DGX")} aria-label={t("Borrar {name}", { name: backup.name })}><Trash2 size={15} /></button>
+            </li>)}
+          </ul>}
+    </Card>
+  </div>;
+}
+
 function HealthCenterPanel({ health, loading, onRefresh, notify }: {
   health: HealthCenter | null;
   loading: boolean;
@@ -8663,7 +8749,7 @@ function HealthCenterPanel({ health, loading, onRefresh, notify }: {
 }
 
 function SystemView({ config, jobs, overview, notify, onOpenLab, initialTab = "overview" }: { config: Config | null; jobs: Job[]; overview: Overview | null; notify: (message: string, error?: boolean) => void; onOpenLab: () => void; initialTab?: "overview" | "health" }) {
-  const [systemTab, setSystemTab] = useState<"overview" | "health">(initialTab);
+  const [systemTab, setSystemTab] = useState<"overview" | "health" | "backups">(initialTab);
   const [healthCenter, setHealthCenter] = useState<HealthCenter | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [services, setServices] = useState<Array<Record<string, unknown>>>([]);
@@ -8804,8 +8890,11 @@ function SystemView({ config, jobs, overview, notify, onOpenLab, initialTab = "o
           <Activity size={14} />{" "}{t("Health Center")}
           {healthCenter && (healthCenter.summary.critical + healthCenter.summary.warning) > 0 && <b className={`tab-count ${healthCenter.summary.critical ? "critical" : "warning"}`}>{healthCenter.summary.critical + healthCenter.summary.warning}</b>}
         </button>
+        <button className={systemTab === "backups" ? "active" : ""} onClick={() => setSystemTab("backups")}><DatabaseBackup size={14} />{" "}{t("Copia de seguridad")}</button>
       </div>
-      {systemTab === "health"
+      {systemTab === "backups"
+        ? <BackupsPanel notify={notify} />
+        : systemTab === "health"
         ? <HealthCenterPanel health={healthCenter} loading={healthLoading} onRefresh={loadHealth} notify={notify} />
         : <>
       {overview && systemBranding && (

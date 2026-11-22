@@ -8818,5 +8818,58 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(spanish.json()["name"], main_module.settings.app_name)
 
 
+
+class BackupTests(unittest.TestCase):
+    def test_backup_archives_database_and_config_without_secrets(self) -> None:
+        import tarfile
+
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                data = root / "data"
+                data.mkdir()
+                (data / "memory-mode.json").write_text("{}", encoding="utf-8")
+                (data / "litellm.generated.json").write_text("{}", encoding="utf-8")
+                config = root / "config" / "tool"
+                config.mkdir(parents=True)
+                (config / "settings.json").write_text("{}", encoding="utf-8")
+                (config / "tool.env").write_text("PLACEHOLDER=1\n", encoding="utf-8")
+                (config / "tool.env.example").write_text("PLACEHOLDER=\n", encoding="utf-8")
+                (root / "config" / ".env").write_text("PLACEHOLDER=1\n", encoding="utf-8")
+                db.path = data / "mydgx.db"
+                db.initialize()
+                db.audit("probe", "before-backup", True)
+                with patch.object(main_module, "ROOT", root), patch.object(main_module.settings, "database_path", str(db.path)):
+                    entry = asyncio.run(main_module.create_system_backup())
+                    path = data / "backups" / entry["name"]
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                    with tarfile.open(path) as archive:
+                        names = set(archive.getnames())
+                        manifest = json.load(archive.extractfile("mydgx/manifest.json"))
+                    self.assertIn("mydgx/data/mydgx.db", names)
+                    self.assertIn("mydgx/data/memory-mode.json", names)
+                    self.assertIn("mydgx/config/tool/settings.json", names)
+                    self.assertIn("mydgx/config/tool/tool.env.example", names)
+                    self.assertFalse({"mydgx/config/tool/tool.env", "mydgx/config/.env", "mydgx/data/litellm.generated.json"} & names)
+                    self.assertEqual(manifest["schema_version"], "mydgx-backup-v1")
+                    self.assertEqual(asyncio.run(main_module.system_backups())["backups"][0]["name"], entry["name"])
+                    for name in ("../mydgx.db", "mydgx.db", "mydgx-backup-x.tar.gz"):
+                        with self.assertRaises(HTTPException) as missing:
+                            main_module.backup_path(name)
+                        self.assertEqual(missing.exception.status_code, 404)
+                    main_module._backup_lock.acquire()
+                    try:
+                        with self.assertRaises(HTTPException) as busy:
+                            main_module.create_backup_archive()
+                        self.assertEqual(busy.exception.status_code, 409)
+                    finally:
+                        main_module._backup_lock.release()
+                    self.assertEqual(asyncio.run(main_module.delete_system_backup(entry["name"])), {"deleted": True})
+                    self.assertEqual(asyncio.run(main_module.system_backups())["backups"], [])
+        finally:
+            db.path = original_path
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,6 +23,9 @@ import sqlite3
 import struct
 import subprocess
 import sys
+import tarfile
+import tempfile
+import threading
 import time
 import unicodedata
 import uuid
@@ -23980,6 +23983,146 @@ async def system_health_center_summary() -> dict[str, Any]:
         "top": [{"title": row["title"], "severity": row["severity"]} for row in active[:3]],
         "last_seen": last[0]["last"] if last else None,
     }
+
+
+BACKUP_NAME_PATTERN = re.compile(r"mydgx-backup-\d{8}T\d{6}Z\.tar\.gz")
+BACKUP_SKIPPED_DATA_FILES = frozenset({"litellm.generated.json"})
+_backup_lock = threading.Lock()
+
+
+def backups_directory() -> Path:
+    return Path(settings.database_path).expanduser().resolve().parent / "backups"
+
+
+def backup_excluded(path: Path) -> bool:
+    """Secrets live in .env files, which are never archived: a downloaded backup leaves the DGX."""
+    name = path.name.casefold()
+    if name.endswith(".example"):
+        return False
+    return name == ".env" or name.startswith(".env.") or name.endswith(".env")
+
+
+def backup_entry(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    return {
+        "name": path.name,
+        "size": stat.st_size,
+        "created_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+    }
+
+
+def list_backups() -> list[dict[str, Any]]:
+    directory = backups_directory()
+    if not directory.is_dir():
+        return []
+    entries = [
+        backup_entry(path) for path in directory.iterdir()
+        if BACKUP_NAME_PATTERN.fullmatch(path.name) and path.is_file() and not path.is_symlink()
+    ]
+    return sorted(entries, key=lambda item: item["name"], reverse=True)
+
+
+def backup_path(name: str) -> Path:
+    path = backups_directory() / name
+    if not BACKUP_NAME_PATTERN.fullmatch(name) or not path.is_file() or path.is_symlink():
+        raise HTTPException(status_code=404, detail="Copia de seguridad no encontrada")
+    return path
+
+
+def create_backup_archive() -> dict[str, Any]:
+    """Archive a consistent copy of the database, the configuration and the small state files."""
+    if not _backup_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Ya se está creando una copia de seguridad")
+    try:
+        database = Path(settings.database_path).expanduser().resolve()
+        directory = backups_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        os.chmod(directory, 0o700)
+        if database.is_file() and shutil.disk_usage(directory).free < database.stat().st_size * 2:
+            raise HTTPException(status_code=507, detail="No hay espacio libre suficiente para la copia de seguridad")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        target = directory / f"mydgx-backup-{stamp}.tar.gz"
+        if target.exists():
+            raise HTTPException(status_code=409, detail="Ya existe una copia de seguridad de este segundo; inténtalo de nuevo")
+        members: list[tuple[Path, str]] = []
+        config_root = ROOT / "config"
+        if config_root.is_dir():
+            for path in sorted(config_root.rglob("*")):
+                if path.is_file() and not path.is_symlink() and not backup_excluded(path):
+                    members.append((path, f"mydgx/config/{path.relative_to(config_root).as_posix()}"))
+        for path in sorted(database.parent.glob("*.json")):
+            if path.is_file() and not path.is_symlink() and path.name not in BACKUP_SKIPPED_DATA_FILES:
+                members.append((path, f"mydgx/data/{path.name}"))
+        partial = directory / f".{target.name}.partial"
+        with tempfile.TemporaryDirectory(dir=directory) as staging:
+            snapshot = Path(staging) / "mydgx.db"
+            if database.is_file():
+                source = sqlite3.connect(database)
+                destination = sqlite3.connect(snapshot)
+                try:
+                    source.backup(destination)
+                finally:
+                    destination.close()
+                    source.close()
+            manifest = {
+                "schema_version": "mydgx-backup-v1",
+                "created_at": utc_now(),
+                "mydgx_version": app.version,
+                "hostname": socket.gethostname(),
+                "database": "mydgx/data/mydgx.db" if database.is_file() else None,
+                "files": [name for _, name in members],
+                "excluded": [".env and *.env files (secrets)", *sorted(BACKUP_SKIPPED_DATA_FILES), "model caches", "logs"],
+            }
+            try:
+                with tarfile.open(partial, "w:gz") as archive:
+                    encoded = json.dumps(manifest, ensure_ascii=False, indent=2).encode()
+                    info = tarfile.TarInfo("mydgx/manifest.json")
+                    info.size = len(encoded)
+                    info.mtime = int(time.time())
+                    info.mode = 0o600
+                    archive.addfile(info, io.BytesIO(encoded))
+                    if database.is_file():
+                        archive.add(snapshot, "mydgx/data/mydgx.db", recursive=False)
+                    for path, name in members:
+                        archive.add(path, name, recursive=False)
+                os.chmod(partial, 0o600)
+                partial.rename(target)
+            finally:
+                partial.unlink(missing_ok=True)
+        return backup_entry(target)
+    finally:
+        _backup_lock.release()
+
+
+@app.get("/api/system/backups", dependencies=secure)
+async def system_backups() -> dict[str, Any]:
+    return {"backups": await asyncio.to_thread(list_backups)}
+
+
+@app.post("/api/system/backups", dependencies=secure)
+async def create_system_backup() -> dict[str, Any]:
+    try:
+        entry = await asyncio.to_thread(create_backup_archive)
+    except HTTPException as exc:
+        db.audit("system.backup.create", "backup", False, str(exc.detail))
+        raise
+    db.audit("system.backup.create", entry["name"], True, f"{entry['size']} bytes")
+    return entry
+
+
+@app.get("/api/system/backups/{name}", dependencies=secure)
+async def download_system_backup(name: str) -> FileResponse:
+    path = backup_path(name)
+    db.audit("system.backup.download", name, True)
+    return FileResponse(path, media_type="application/gzip", filename=path.name)
+
+
+@app.delete("/api/system/backups/{name}", dependencies=secure)
+async def delete_system_backup(name: str) -> dict[str, bool]:
+    path = backup_path(name)
+    path.unlink()
+    db.audit("system.backup.delete", name, True)
+    return {"deleted": True}
 
 
 @app.get("/api/system/health-center/report", dependencies=secure)

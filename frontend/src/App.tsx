@@ -8574,26 +8574,70 @@ function BackupsPanel({ notify }: { notify: (message: string, error?: boolean) =
     }
   }
 
-  return <div className="view-stack">
+  const totalSize = (backups ?? []).reduce((sum, backup) => sum + backup.size, 0);
+  const latest = backups?.[0];
+  const included = [
+    { icon: Database, label: t("Base de datos"), detail: t("Perfiles, recetas, benchmarks, métricas y auditoría") },
+    { icon: SlidersHorizontal, label: "config/", detail: t("Recetas, workflows y ajustes") },
+    { icon: FileArchive, label: "data/*.json", detail: t("Estado de MyDGX") },
+  ];
+  const excluded = [t("Secretos (.env)"), t("Modelos"), t("Logs")];
+
+  return <div className="backup-panel">
     <Card className="backup-hero">
+      <div className="backup-hero-icon"><DatabaseBackup size={26} /></div>
       <div className="backup-hero-copy">
-        <span className="card-kicker">{t("COPIA DE SEGURIDAD")}</span>
+        <span className="backup-eyebrow">{t("COPIA DE SEGURIDAD")}</span>
         <h3>{t("Guarda la configuración de MyDGX")}</h3>
-        <p>{t("Incluye la base de datos (perfiles, benchmarks, métricas, notificaciones y auditoría), la carpeta config y los archivos de estado. No incluye secretos (.env), modelos ni logs: guarda tu .env aparte y en un sitio seguro.")}</p>
+        <p>{t("Un archivo .tar.gz con todo lo necesario para recuperar MyDGX en este u otro DGX.")}</p>
       </div>
-      <button className="button primary" disabled={creating} onClick={() => void create()}>
-        {creating ? <RefreshCw className="spin" size={15} /> : <DatabaseBackup size={15} />}{" "}{creating ? t("Creando copia…") : t("Crear y descargar")}
-      </button>
+      <div className="backup-hero-action">
+        <button className="button primary" disabled={creating} onClick={() => void create()}>
+          {creating ? <RefreshCw className="spin" size={15} /> : <Download size={15} />}{" "}{creating ? t("Creando copia…") : t("Crear y descargar")}
+        </button>
+        <small>{creating ? t("Copiando la base de datos y comprimiendo") : latest ? t("Última: {date}", { date: new Date(latest.created_at).toLocaleString(locale) }) : t("Aún no hay ninguna copia")}</small>
+      </div>
+      <div className="backup-contents">
+        {included.map(({ icon: Icon, label, detail }) => <div className="backup-content-item" key={label}>
+          <span><Icon size={15} /></span>
+          <div><strong>{label}</strong><small>{detail}</small></div>
+        </div>)}
+      </div>
+      <div className="backup-excluded">
+        <ShieldCheck size={15} />
+        <span>{t("No incluye")}</span>
+        {excluded.map((item) => <b key={item}>{item}</b>)}
+        <em>{t("Guarda tu .env aparte, en un sitio seguro.")}</em>
+      </div>
     </Card>
-    <Card>
-      <div className="backup-list-heading"><strong>{t("Copias guardadas en el DGX")}</strong><small>data/backups</small></div>
+
+    <Card className="backup-stored">
+      <header>
+        <div>
+          <strong>{t("Copias guardadas en el DGX")}</strong>
+          <small><Folder size={12} /> data/backups · {t("solo legibles por tu usuario")}</small>
+        </div>
+        {backups && backups.length > 0 && <span className="backup-totals">
+          <span className="badge">{t(backups.length === 1 ? "{count} copia" : "{count} copias", { count: backups.length })}</span>
+          <span className="badge">{bytes(totalSize)}</span>
+        </span>}
+      </header>
       {backups === null
-        ? <p className="preflight-intro"><RefreshCw className="spin" size={14} />{" "}{t("Cargando…")}</p>
+        ? <div className="backup-empty"><RefreshCw className="spin" size={18} /><span>{t("Cargando…")}</span></div>
         : backups.length === 0
-          ? <p className="preflight-intro">{t("Todavía no hay copias de seguridad.")}</p>
+          ? <div className="backup-empty">
+            <FileArchive size={30} />
+            <strong>{t("Todavía no hay copias de seguridad.")}</strong>
+            <span>{t("Crea la primera: se descarga en tu navegador y queda también aquí.")}</span>
+          </div>
           : <ul className="backup-list">
-            {backups.map((backup) => <li key={backup.name}>
-              <div><strong>{backup.name}</strong><small>{new Date(backup.created_at).toLocaleString(locale)} · {bytes(backup.size)}</small></div>
+            {backups.map((backup, index) => <li key={backup.name}>
+              <span className="backup-file-icon"><FileArchive size={17} /></span>
+              <div className="backup-file">
+                <strong title={backup.name}>{backup.name}</strong>
+                <small>{new Date(backup.created_at).toLocaleString(locale)}{index === 0 && <b className="badge live">{t("Más reciente")}</b>}</small>
+              </div>
+              <span className="backup-size">{bytes(backup.size)}</span>
               <button className="button secondary compact" disabled={downloading !== ""} onClick={() => void download(backup.name)} aria-label={t("Descargar {name}", { name: backup.name })}>
                 {downloading === backup.name ? <RefreshCw className="spin" size={13} /> : <Download size={13} />}{" "}{t("Descargar")}
               </button>

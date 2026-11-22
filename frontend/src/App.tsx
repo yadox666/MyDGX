@@ -453,6 +453,7 @@ type Models = {
     quick: boolean;
     loaded: boolean;
     loaded_by: string[];
+    profile_starts?: { id: string; name: string }[];
     assistant: boolean;
     uncensored?: boolean;
     tasks?: string[];
@@ -4374,6 +4375,19 @@ function ModelsView({
     }
   }
 
+  async function startProfileFor(repoId: string, profile: { id: string; name: string }) {
+    setQuickBusy(`profile:${repoId}`);
+    try {
+      await api<{ job_id: string }>(`/api/profiles/${encodeURIComponent(profile.id)}/start`, { method: "POST" });
+      notify(t("Preparando {name}", { name: profile.name }));
+      refresh();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setQuickBusy(null);
+    }
+  }
+
   async function verifyIntegrity(repoId: string) {
     try {
       await api<{ job_id: string }>(`/api/models/huggingface/integrity/${encodeURIComponent(repoId)}`, { method: "POST" });
@@ -4833,6 +4847,8 @@ function ModelsView({
                       ? <button className="button danger compact" disabled={quickBusy !== null} onClick={() => void quickModel("huggingface", model.repo_id, false)} aria-label={t("Apagar {repo_id}", { repo_id: model.repo_id })}><Square size={13} /> {quickBusy === `huggingface:${model.repo_id}` ? t("Apagando…") : t("Apagar")}</button>
                       : model.loaded_by.includes("ComfyUI")
                         ? <button className="button secondary compact" disabled={quickBusy !== null} onClick={() => void releaseComfyUI(model.repo_id)} title={t("ComfyUI descarga de memoria todos los modelos que tenga cargados; se vuelven a cargar en la siguiente generación")} aria-label={t("Liberar {repo_id} de ComfyUI", { repo_id: model.repo_id })}><Square size={13} /> {quickBusy === `comfyui:${model.repo_id}` ? t("Liberando…") : t("Liberar")}</button>
+                      : !model.loaded && !incomplete && unsupportedReason && model.profile_starts?.length
+                        ? <button className="button primary compact" disabled={quickBusy !== null} onClick={() => void startProfileFor(model.repo_id, model.profile_starts![0])} title={t("Este modelo no usa llama.cpp: arranca con su perfil {name}", { name: model.profile_starts[0].name })} aria-label={t("Encender el perfil {name}", { name: model.profile_starts[0].name })}><Play size={13} />{" "}{quickBusy === `profile:${model.repo_id}` ? t("Encendiendo…") : t("Encender perfil")}</button>
                       : !model.loaded && !incomplete
                         && <QuickStartButton label={model.repo_id} availability={model.quick_start} defaultContext={model.memory_estimate?.context_size} unsupportedReason={unsupportedReason} busy={quickBusy !== null} pending={quickBusy === `huggingface:${model.repo_id}`} title={t("Cargar ahora con llama.cpp en el perfil Quick; no se restaura al reiniciar el equipo")} onStart={(contextSize) => void quickModel("huggingface", model.repo_id, true, contextSize)} onContextChange={(contextSize) => setChosenContexts((current) => ({ ...current, [model.repo_id]: contextSize }))} />}
                     <a className="icon-button" href={`https://huggingface.co/${model.repo_id}`} target="_blank" rel="noreferrer noopener" title={t("Abrir en Hugging Face")} aria-label={t("Abrir {repo_id} en Hugging Face", { repo_id: model.repo_id })}><ExternalLink size={15} /></a>

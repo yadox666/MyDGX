@@ -335,7 +335,9 @@ registro en `logs/privacy-filter-install.log`. Al encender el perfil, MyDGX
 ejecuta el servicio en `http://127.0.0.1:8190`. Funciona sin conexión, con los
 pesos y el tokenizador ya en disco, y sin secretos de MyDGX en su entorno. El watchdog lo relanza igual que a un modelo
 llama.cpp. No ocupa ninguno de los dos huecos de modelo, así que funciona junto
-a dos perfiles.
+a dos perfiles. En *Modelos*, la tarjeta de `openai/privacy-filter` no usa
+*Encender* (que es solo para llama.cpp): muestra *Encender perfil* y arranca la
+receta.
 
 Se llama a través del gateway con la clave habitual:
 

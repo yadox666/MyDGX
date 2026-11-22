@@ -1961,5 +1961,9 @@
   "Actualizar {name} a v{version} sustituye tus cambios locales de modelos y parámetros; la app de arranque se conserva si la receta no define otra. ¿Continuar?": "Updating {name} to v{version} replaces your local model and parameter changes; the start app is kept unless the recipe sets another. Continue?",
   "Redacción de datos personales": "Personal data redaction",
   "Privacidad": "Privacy",
-  "Texto con datos personales que quieres ocultar": "Text with personal data you want to hide"
+  "Texto con datos personales que quieres ocultar": "Text with personal data you want to hide",
+  "Preparando {name}": "Preparing {name}",
+  "Encender perfil": "Start profile",
+  "Este modelo no usa llama.cpp: arranca con su perfil {name}": "This model does not use llama.cpp: it starts with its profile {name}",
+  "Encender el perfil {name}": "Start the profile {name}"
 }

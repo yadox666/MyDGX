@@ -8493,6 +8493,31 @@ class ReviewRegressionTests(unittest.TestCase):
         rmtree.assert_not_called()
 
 
+    def test_profile_only_model_offers_its_profile_instead_of_quick_start(self) -> None:
+        from fastapi import BackgroundTasks
+
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "profile-only.db"
+                db.initialize()
+                recipe = next(item for item in main_module.local_recipes() if item.get("engine") == "privacy-filter")
+                asyncio.run(main_module.install_profile_recipe(recipe["id"], main_module.RecipeInstallPayload(), BackgroundTasks()))
+                hf = [{"repo_id": "openai/privacy-filter", "quantizations": [], "formats": ["safetensors"]}]
+                with (
+                    patch("backend.main.ollama_payload", new=AsyncMock(side_effect=HTTPException(status_code=503))),
+                    patch("backend.main.resolved_assistant_reference", new=AsyncMock(return_value=None)),
+                    patch("backend.main.local_hf_models", return_value=hf),
+                    patch("backend.main.comfyui_loaded_model_files", new=AsyncMock(return_value=set())),
+                    patch("backend.main.running_profiles", return_value=[]),
+                ):
+                    listed = asyncio.run(main_module.models())["huggingface"][0]
+                self.assertEqual(listed["profile_starts"], [{"id": recipe["id"], "name": recipe["name"]}])
+                self.assertFalse(listed["loaded"])
+        finally:
+            db.path = original_path
+
+
 FAKE_APP_SCRIPT = """#!/usr/bin/env bash
 case "$1" in
   start) env > env.txt; touch running; echo start >> calls.txt ;;

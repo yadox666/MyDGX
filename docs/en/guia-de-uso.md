@@ -331,7 +331,9 @@ That step takes a few minutes and logs to `logs/privacy-filter-install.log`.
 When the profile starts, MyDGX runs the service itself on
 `http://127.0.0.1:8190`. It works offline, with the weights and tokenizer
 already on disk, and without MyDGX secrets in its environment. The watchdog restarts it like a llama.cpp model. It does not take
-one of the two model slots, so it runs next to two profiles.
+one of the two model slots, so it runs next to two profiles. In *Models*, the
+`openai/privacy-filter` card does not use *Start* (which is only for
+llama.cpp): it shows *Start profile* and starts the recipe.
 
 Call it through the gateway with the usual key:
 

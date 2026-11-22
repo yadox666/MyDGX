@@ -3273,6 +3273,7 @@ ARTIFEX_PROFILE_IDS = frozenset(preset["id"] for preset in ARTIFEX_PROFILES)
 
 RECIPES_PATH = ROOT / "config" / "recipes.json"
 RECIPE_ONLY_KEYS = ("id", "description", "memory_gib", "version", "changelog", "categories")
+PROFILE_ONLY_ENGINES = frozenset({"privacy-filter"})
 RECIPE_CATEGORIES = ("text", "code", "vision", "embeddings", "image", "video", "audio", "privacy")
 
 
@@ -7868,7 +7869,18 @@ async def models() -> dict[str, Any]:
         str(model.get("model_repo") or "").casefold()
         for _, model in loaded_profile_models
         if model.get("engine") != "ollama" and model.get("model_repo")
+    } | {
+        str(model.get("model_ref") or "").casefold()
+        for _, model in loaded_profile_models
+        if model.get("engine") in PROFILE_ONLY_ENGINES and model.get("model_ref")
     }
+    profile_starters: dict[str, list[dict[str, str]]] = {}
+    for row in db.rows("SELECT * FROM profiles ORDER BY name"):
+        for model in profile_models(row):
+            if model.get("engine") in PROFILE_ONLY_ENGINES and model.get("enabled", True):
+                repo = str(model.get("model_repo") or model.get("model_ref") or "").casefold()
+                if repo and not any(item["id"] == row["id"] for item in profile_starters.get(repo, [])):
+                    profile_starters.setdefault(repo, []).append({"id": row["id"], "name": row["name"]})
     assistant_reference = await resolved_assistant_reference(
         installed_names,
         loaded_profile_models,
@@ -7917,6 +7929,7 @@ async def models() -> dict[str, Any]:
             loaded_by.append("ComfyUI")
         model["loaded"] = bool(loaded_by)
         model["loaded_by"] = loaded_by
+        model["profile_starts"] = profile_starters.get(model["repo_id"].casefold(), [])
         model["assistant"] = bool(
             assistant_hf_repo and model["repo_id"].casefold() == assistant_hf_repo
         )

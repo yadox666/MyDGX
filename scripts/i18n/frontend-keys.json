@@ -1943,5 +1943,9 @@
   "Sano",
   "Receta",
   "editada",
-  "Actualizar {name} a v{version} sustituye tus cambios locales de modelos y parámetros; la app de arranque se conserva si la receta no define otra. ¿Continuar?"
+  "Actualizar {name} a v{version} sustituye tus cambios locales de modelos y parámetros; la app de arranque se conserva si la receta no define otra. ¿Continuar?",
+  "Preparando {name}",
+  "Encender perfil",
+  "Este modelo no usa llama.cpp: arranca con su perfil {name}",
+  "Encender el perfil {name}"
 ]

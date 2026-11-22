@@ -335,6 +335,12 @@ one of the two model slots, so it runs next to two profiles. In *Models*, the
 `openai/privacy-filter` card does not use *Start* (which is only for
 llama.cpp): it shows *Start profile* and starts the recipe.
 
+The first start can take several minutes because Triton compiles the MoE
+kernels for the GB10; MyDGX allows up to 10 minutes. Triton's bundled `ptxas`
+does not know `sm_121a`, so MyDGX passes it the system CUDA 13 one
+(`/usr/local/cuda/bin/ptxas`, or the one in `CUDA_HOME`) when available.
+Without it, the service falls back to the slower PyTorch kernels.
+
 Call it through the gateway with the usual key:
 
 ```bash

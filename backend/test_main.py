@@ -8819,6 +8819,25 @@ class TranslationTests(unittest.TestCase):
 
 
 
+class PrivacyFilterRuntimeTests(unittest.TestCase):
+    def test_triton_gets_a_ptxas_that_knows_gb10(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ptxas = Path(directory) / "bin" / "ptxas"
+            ptxas.parent.mkdir()
+            ptxas.write_text("#!/bin/sh\necho '--gpu-name sm_100a sm_121a'\n", encoding="utf-8")
+            ptxas.chmod(0o755)
+            main_module.privacy_filter_ptxas.cache_clear()
+            try:
+                with patch.dict(os.environ, {"CUDA_HOME": directory}), patch.object(main_module.Path, "is_file", autospec=True, side_effect=lambda path: str(path) == str(ptxas)):
+                    self.assertEqual(main_module.privacy_filter_ptxas(), str(ptxas))
+                main_module.privacy_filter_ptxas.cache_clear()
+                ptxas.write_text("#!/bin/sh\necho '--gpu-name sm_90a'\n", encoding="utf-8")
+                with patch.dict(os.environ, {"CUDA_HOME": directory}), patch.object(main_module.Path, "is_file", autospec=True, side_effect=lambda path: str(path) == str(ptxas)):
+                    self.assertEqual(main_module.privacy_filter_ptxas(), "")
+            finally:
+                main_module.privacy_filter_ptxas.cache_clear()
+
+
 class BackupTests(unittest.TestCase):
     def test_backup_archives_database_and_config_without_secrets(self) -> None:
         import tarfile

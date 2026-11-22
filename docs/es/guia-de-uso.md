@@ -339,6 +339,12 @@ a dos perfiles. En *Modelos*, la tarjeta de `openai/privacy-filter` no usa
 *Encender* (que es solo para llama.cpp): muestra *Encender perfil* y arranca la
 receta.
 
+El primer arranque puede tardar varios minutos, porque Triton compila los
+kernels MoE para la GB10; MyDGX le da hasta 10 minutos. El `ptxas` que trae
+Triton no reconoce `sm_121a`, así que MyDGX le pasa el del CUDA 13 del sistema
+(`/usr/local/cuda/bin/ptxas`, o el de `CUDA_HOME`) cuando lo tiene. Sin él, el
+servicio usa los kernels de PyTorch, más lentos.
+
 Se llama a través del gateway con la clave habitual:
 
 ```bash

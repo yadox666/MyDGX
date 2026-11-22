@@ -5204,6 +5204,7 @@ async def launch_privacy_filter(
         PRIVACY_FILTER_CHECKPOINT=str(privacy_filter_snapshot() / "original"),
         PRIVACY_FILTER_MODEL_ID=str(model["model_ref"]),
         PRIVACY_FILTER_MAX_CHARS=str(int(model.get("max_input_mb") or 1) * 1_000_000),
+        **({"TRITON_PTXAS_PATH": ptxas} if (ptxas := privacy_filter_ptxas()) else {}),
     )
     try:
         process = await asyncio.create_subprocess_exec(
@@ -5222,7 +5223,9 @@ async def launch_privacy_filter(
         raise
     _profile_processes[model_id] = process
     _runtime_effective_contexts[model_id] = context
-    deadline = time.monotonic() + settings.profile_start_timeout_seconds
+    # The first start compiles Triton kernels and can coincide with other models reloading.
+    start_timeout = max(settings.profile_start_timeout_seconds, PRIVACY_FILTER_START_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + start_timeout
     async with httpx.AsyncClient(timeout=2) as client:
         while time.monotonic() < deadline:
             if process.returncode is not None:
@@ -5246,7 +5249,7 @@ async def launch_privacy_filter(
                 pass
             await asyncio.sleep(1)
     await stop_model_process(model_id)
-    raise RuntimeError(f"Privacy Filter agotó el tiempo de arranque ({settings.profile_start_timeout_seconds} s)")
+    raise RuntimeError(f"Privacy Filter agotó el tiempo de arranque ({start_timeout} s)")
 
 
 async def external_endpoint_reachable(model: dict[str, Any], timeout: float = 2) -> bool:
@@ -14414,6 +14417,24 @@ def privacy_filter_missing_files(model: dict[str, Any]) -> list[dict[str, Any]]:
 def recipe_missing_files(model: dict[str, Any]) -> list[dict[str, Any]]:
     """Files a ComfyUI or Privacy Filter profile downloads itself before it can start."""
     return comfyui_missing_files(model) + privacy_filter_missing_files(model)
+
+
+PRIVACY_FILTER_START_TIMEOUT_SECONDS = 600
+PRIVACY_FILTER_GPU_ARCH = "sm_121a"
+
+
+@lru_cache(maxsize=1)
+def privacy_filter_ptxas() -> str:
+    """Triton ships a ptxas that predates GB10 (sm_121a); the CUDA 13 toolkit's one compiles its MoE kernels."""
+    candidates = [os.environ.get("CUDA_HOME", ""), "/usr/local/cuda"]
+    for home in filter(None, candidates):
+        ptxas = Path(home) / "bin" / "ptxas"
+        if not ptxas.is_file() or not os.access(ptxas, os.X_OK):
+            continue
+        result = run_command([str(ptxas), "--help"], 10)
+        if result.returncode == 0 and PRIVACY_FILTER_GPU_ARCH in result.stdout:
+            return str(ptxas)
+    return ""
 
 
 def privacy_filter_env(**extra: str) -> dict[str, str]:

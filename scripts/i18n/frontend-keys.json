@@ -1995,5 +1995,8 @@
   "Restaura: pide la frase de paso y que escribas RESTAURAR; antes guarda el estado actual para poder deshacerlo",
   "Para MyDGX y sus servicios, restaura base de datos, Open WebUI y secretos, vuelve a arrancar y lista los modelos y motores que faltan por descargar o instalar.",
   "Secretos cifrados",
-  "Antes de restaurar"
+  "Antes de restaurar",
+  "+{count} desactivados",
+  "desactivado",
+  "{count} desactivado(s): no arrancan ni cuentan en memoria"
 ]

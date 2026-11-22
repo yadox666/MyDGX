@@ -5947,6 +5947,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
       return !job || ["queued", "running", "cancelling"].includes(job.status);
     });
     const missingModels = profile.models.filter((model) => model.enabled && !model.downloaded).length;
+    const enabledModels = profile.models.filter((model) => model.enabled !== false);
+    const disabledCount = profile.models.length - enabledModels.length;
     return (
       <Card className={`profile-card ${profile.active ? "active" : ""} ${running ? "running" : ""}`} key={profile.id}>
         <div className="profile-card-head">
@@ -5969,8 +5971,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
           </button>
         </div>
         <div className="profile-specs">
-          <span><small>{t("Modelos")}</small><strong>{profile.models.length}</strong></span>
-          <span><small>{t("Puertos")}</small><strong>{profile.models.map((item) => item.port).join(", ")}</strong></span>
+          <span title={disabledCount ? t("{count} desactivado(s): no arrancan ni cuentan en memoria", { count: disabledCount }) : undefined}><small>{t("Modelos")}</small><strong>{enabledModels.length}{disabledCount ? <em className="profile-specs-muted"> {t("+{count} desactivados", { count: disabledCount })}</em> : null}</strong></span>
+          <span><small>{t("Puertos")}</small><strong>{enabledModels.map((item) => item.port).join(", ") || "—"}</strong></span>
           <span><small>{t("Memoria estimada")}</small><strong>{(profile.memory_plan.required_mb / 1024).toFixed(1)} GB</strong></span>
           <span><small>{t("Capacidad segura")}</small><strong>{(profile.memory_plan.capacity_mb / 1024).toFixed(1)} GB</strong></span>
         </div>
@@ -6002,8 +6004,10 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
               model.task !== "chat" ? model.task : "",
               `${model.engine} :${model.port}`,
             ].filter(Boolean);
-            return <div key={model.id}>
-              <span className={`status-dot ${modelRunning ? "ok" : model.downloaded ? "online" : "warn"}`} />
+            const modelDisabled = model.enabled === false;
+            if (modelDisabled) details.unshift(t("desactivado"));
+            return <div key={model.id} className={modelDisabled ? "disabled" : undefined}>
+              <span className={`status-dot ${modelDisabled ? "off" : modelRunning ? "ok" : model.downloaded ? "online" : "warn"}`} />
               <span className="profile-model-id">
                 <span className="profile-model-name">
                   <strong title={[identity.file || model.model_repo || model.model_ref, model.spec_type ? `${SPEC_LABELS[model.spec_type] ?? model.spec_type}: ${model.draft_filename || t("MTP integrado en el GGUF")}` : ""].filter(Boolean).join("\n")}>{identity.name}</strong>

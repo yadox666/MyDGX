@@ -2013,5 +2013,8 @@
   "Restaura: pide la frase de paso y que escribas RESTAURAR; antes guarda el estado actual para poder deshacerlo": "Restore: asks for the passphrase and for you to type RESTORE; it first saves the current state so it can be undone",
   "Para MyDGX y sus servicios, restaura base de datos, Open WebUI y secretos, vuelve a arrancar y lista los modelos y motores que faltan por descargar o instalar.": "It stops MyDGX and its services, restores the database, Open WebUI and secrets, starts again and lists the models and engines still to download or install.",
   "Secretos cifrados": "Encrypted secrets",
-  "Antes de restaurar": "Before restore"
+  "Antes de restaurar": "Before restore",
+  "{count} desactivado(s): no arrancan ni cuentan en memoria": "{count} disabled: they do not start or count toward memory",
+  "+{count} desactivados": "+{count} disabled",
+  "desactivado": "disabled"
 }

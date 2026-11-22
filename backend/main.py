@@ -4148,6 +4148,85 @@ def cached_hf_file(repo: str, filename: str) -> Path:
     raise FileNotFoundError(filename) from failure
 
 
+HF_BLOB_NAME = re.compile(r"[0-9a-f]{40,64}")
+
+
+def hf_snapshot_path(path: str | Path) -> str:
+    # Never follow the snapshot symlink: the blob is named by its hash, so the model
+    # name and the "-00001-of-0000N" split pattern llama.cpp needs would be lost.
+    return str(Path(path).expanduser().absolute())
+
+
+def is_hf_blob_path(value: str) -> bool:
+    path = Path(value)
+    return path.parent.name == "blobs" and bool(HF_BLOB_NAME.fullmatch(path.name))
+
+
+def repaired_hf_path(value: str, repo: str, filename: str) -> str:
+    if not value or not is_hf_blob_path(value):
+        return value
+    if repo and filename:
+        with suppress(Exception):
+            return hf_snapshot_path(cached_hf_file(repo, filename))
+    return ""
+
+
+def repair_profile_blob_paths() -> int:
+    """Rewrite stored blob paths to their snapshot path, or clear them so the launcher uses repo + filename."""
+    repaired = 0
+    rows = db.rows(
+        """
+        SELECT id,model_file,model_repo,model_filename,model_files_json,
+               mmproj_file,mmproj_repo,mmproj_filename,additional_models_json
+        FROM profiles
+        """
+    )
+
+    def fixed(model: dict[str, Any]) -> tuple[str, str]:
+        files = model.get("model_files")
+        if not isinstance(files, list):
+            with suppress(Exception):
+                files = json.loads(model.get("model_files_json") or "[]")
+        filename = str(model.get("model_filename") or (files[0] if files else "") or "")
+        repo = str(model.get("model_repo") or "")
+        return (
+            repaired_hf_path(str(model.get("model_file") or ""), repo, filename),
+            repaired_hf_path(
+                str(model.get("mmproj_file") or ""),
+                str(model.get("mmproj_repo") or repo),
+                str(model.get("mmproj_filename") or ""),
+            ),
+        )
+
+    for row in rows:
+        model_file, mmproj_file = fixed(row)
+        if (model_file, mmproj_file) != (row["model_file"] or "", row["mmproj_file"] or ""):
+            db.execute(
+                "UPDATE profiles SET model_file=?,mmproj_file=?,updated_at=? WHERE id=?",
+                (model_file, mmproj_file, utc_now(), row["id"]),
+            )
+            repaired += 1
+        try:
+            extras = json.loads(row["additional_models_json"] or "[]")
+        except ValueError:
+            continue
+        changed = False
+        for extra in extras if isinstance(extras, list) else []:
+            if not isinstance(extra, dict):
+                continue
+            extra_file, extra_mmproj = fixed(extra)
+            if (extra_file, extra_mmproj) != (str(extra.get("model_file") or ""), str(extra.get("mmproj_file") or "")):
+                extra["model_file"], extra["mmproj_file"] = extra_file, extra_mmproj
+                changed = True
+                repaired += 1
+        if changed:
+            db.execute(
+                "UPDATE profiles SET additional_models_json=?,updated_at=? WHERE id=?",
+                (json.dumps(extras), utc_now(), row["id"]),
+            )
+    return repaired
+
+
 def resolve_profile_model_file(profile: dict[str, Any]) -> Path:
     # Keep the snapshot name instead of following the symlink to the hashed blob:
     # llama.cpp finds the rest of a split GGUF from the "-00001-of-0000N" filename.
@@ -4170,7 +4249,7 @@ def resolve_profile_model_file(profile: dict[str, Any]) -> Path:
 def resolve_mmproj_file(model: dict[str, Any]) -> Path | None:
     configured = str(model.get("mmproj_file") or "")
     if configured:
-        path = Path(configured).expanduser().resolve()
+        path = Path(hf_snapshot_path(configured))
         if path.is_file() and path.suffix.lower() == ".gguf":
             return path
     repo = str(model.get("mmproj_repo") or model.get("model_repo") or "")
@@ -4178,7 +4257,7 @@ def resolve_mmproj_file(model: dict[str, Any]) -> Path | None:
     if repo and filename:
         try:
             cached = cached_hf_file(repo, filename)
-            return Path(cached).resolve()
+            return Path(hf_snapshot_path(cached))
         except Exception as exc:
             raise RuntimeError("El proyector multimodal no está descargado") from exc
     return None
@@ -5762,6 +5841,11 @@ async def boot_restore_runtime(legacy_profile: dict[str, Any] | None) -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     db.initialize()
+    try:
+        if repaired_paths := repair_profile_blob_paths():
+            db.audit("profile.repair_paths", "startup", True, f"{repaired_paths} ruta(s) de blob")
+    except Exception as exc:
+        db.audit("profile.repair_paths", "startup", False, type(exc).__name__)
     stale_download_jobs = db.rows(
         """
         SELECT id,status,cancel_requested FROM jobs
@@ -6383,11 +6467,19 @@ class GatewayConfigPayload(BaseModel):
     web_search: bool = True
 
 
+GGUF_SHARD_SUFFIX = re.compile(r"-\d{5}-of-\d{5}$", re.IGNORECASE)
+
+
 def gateway_model_full_name(model: dict[str, Any]) -> str:
-    model_file = str(model.get("model_file") or "").strip()
-    if model_file:
-        return re.sub(r"\.gguf$", "", Path(model_file).name, flags=re.IGNORECASE)
-    return str(model.get("model_repo") or model.get("model_ref") or model.get("model_alias") or "")
+    """Model name without author or path; never the hash of a Hugging Face blob."""
+    for value in (model.get("model_file"), model.get("model_filename")):
+        name = Path(str(value or "").strip()).name
+        if name.lower().endswith(".gguf"):
+            return GGUF_SHARD_SUFFIX.sub("", name[:-5])
+    reference = str(model.get("model_repo") or model.get("model_ref") or "").strip().rstrip("/")
+    if reference:
+        return reference.rsplit("/", 1)[-1]
+    return str(model.get("model_alias") or "")
 
 
 def gateway_published_model(model: dict[str, Any]) -> dict[str, Any]:
@@ -13236,7 +13328,7 @@ async def download_hf_profile_file(
             resolved = Path(path)
             if not resolved.is_file() or resolved.stat().st_size <= 0:
                 raise RuntimeError("el archivo descargado está vacío")
-            return str(resolved.resolve())
+            return hf_snapshot_path(resolved)
         except ProfileStartCancelled:
             raise
         except Exception as exc:
@@ -13299,7 +13391,7 @@ async def ensure_hf_profile_model(
                 persist_profile_model_paths(
                     profile_id,
                     model,
-                    str(Path(cached_files[0]).resolve()),
+                    hf_snapshot_path(cached_files[0]),
                     str(mmproj) if mmproj else "",
                 )
                 return False

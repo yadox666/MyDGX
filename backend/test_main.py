@@ -464,7 +464,53 @@ class DatabaseTests(unittest.TestCase):
         ollama = {"engine": "ollama", "model_ref": "qwen3.6:35b-a3b-q8_0", "model_alias": "chat"}
         self.assertEqual(main_module.gateway_model_full_name(ollama), "qwen3.6:35b-a3b-q8_0")
         whisper = {"engine": "whisper", "model_ref": "turbo", "model_repo": "openai/whisper-large-v3-turbo"}
-        self.assertEqual(main_module.gateway_model_full_name(whisper), "openai/whisper-large-v3-turbo")
+        self.assertEqual(main_module.gateway_model_full_name(whisper), "whisper-large-v3-turbo")
+
+    def test_gateway_model_name_never_shows_blob_hash_or_author(self) -> None:
+        blob = "/hub/models--unsloth--Qwen3.8-27B-GGUF/blobs/" + "6cac55f8" * 8
+        rag = {"engine": "llama.cpp", "model_ref": "unsloth/Qwen3.8-27B-GGUF", "model_alias": "rag",
+               "model_file": blob, "model_repo": "unsloth/Qwen3.8-27B-GGUF",
+               "model_filename": "Qwen3.8-27B-UD-Q6_K.gguf"}
+        self.assertEqual(main_module.gateway_model_full_name(rag), "Qwen3.8-27B-UD-Q6_K")
+        split = {**rag, "model_file": "", "model_filename": "Q6_K/Big-Q6_K-00001-of-00003.gguf"}
+        self.assertEqual(main_module.gateway_model_full_name(split), "Big-Q6_K")
+        no_file = {**rag, "model_file": blob, "model_filename": ""}
+        self.assertEqual(main_module.gateway_model_full_name(no_file), "Qwen3.8-27B-GGUF")
+
+    def test_startup_repairs_profile_blob_paths_to_snapshot_names(self) -> None:
+        original_path = db.path
+        with tempfile.TemporaryDirectory() as directory:
+            db.path = Path(directory) / "test.db"
+            db.initialize()
+            hub = Path(directory) / "hub" / "models--org--demo-GGUF"
+            blob = hub / "blobs" / ("ab" * 32)
+            snapshot = hub / "snapshots" / "rev" / "demo-Q6_K.gguf"
+            blob.parent.mkdir(parents=True)
+            snapshot.parent.mkdir(parents=True)
+            blob.write_bytes(b"gguf")
+            snapshot.symlink_to(blob)
+            missing_blob = hub / "blobs" / ("cd" * 32)
+            extra = [{"id": "second", "model_file": str(missing_blob), "model_repo": "org/missing",
+                      "model_filename": "gone.gguf"}]
+            db.execute(
+                """
+                INSERT INTO profiles(id,name,engine,model_ref,model_file,model_repo,model_filename,
+                    additional_models_json,port,context_size,gpu_layers,threads,batch_size,
+                    temperature,top_p,repeat_penalty,created_at,updated_at)
+                VALUES('p','P','llama.cpp','org/demo-GGUF',?,'org/demo-GGUF','demo-Q6_K.gguf',?,
+                    18190,8192,-1,4,256,0.2,0.9,1.0,?,?)
+                """,
+                (str(blob), json.dumps(extra), main_module.utc_now(), main_module.utc_now()),
+            )
+            with patch("backend.main.cached_hf_file", side_effect=lambda repo, name: (
+                snapshot if repo == "org/demo-GGUF" else (_ for _ in ()).throw(FileNotFoundError(name))
+            )):
+                self.assertEqual(main_module.repair_profile_blob_paths(), 2)
+                self.assertEqual(main_module.repair_profile_blob_paths(), 0)
+            row = db.rows("SELECT model_file,additional_models_json FROM profiles WHERE id='p'")[0]
+            self.assertEqual(Path(row["model_file"]).name, "demo-Q6_K.gguf")
+            self.assertEqual(json.loads(row["additional_models_json"])[0]["model_file"], "")
+        db.path = original_path
 
     def test_parameter_counts_cover_named_moe_and_size_estimates(self) -> None:
         self.assertEqual(main_module.estimated_parameter_counts(["ggml-org/gpt-oss-120b-GGUF"], 63_000_000_000, "MXFP4"), (116.8, 5.1, False))
@@ -740,7 +786,7 @@ class DatabaseTests(unittest.TestCase):
                 "cache_type_k": "", "cache_type_v": "", "mmproj_file": str(mmproj),
             }
             args = build_llama_args("/usr/bin/llama-server", Path("/models/vision.gguf"), profile)
-            self.assertEqual(args[args.index("--mmproj") + 1], str(mmproj.resolve()))
+            self.assertEqual(Path(args[args.index("--mmproj") + 1]).resolve(), mmproj.resolve())
 
     def test_legacy_profile_schema_is_migrated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7230,7 +7276,8 @@ class ProfileApiTests(unittest.TestCase):
                 profile = db.rows("SELECT * FROM profiles WHERE id=?", (profile_id,))[0]
                 self.assertEqual(job["status"], "completed")
                 self.assertEqual(profile["active"], 1)
-                self.assertEqual(Path(profile["model_file"]), model_path.resolve())
+                self.assertEqual(Path(profile["model_file"]).resolve(), model_path.resolve())
+                self.assertEqual(Path(profile["model_file"]).name, "model.gguf")
                 launch.assert_awaited_once()
         db.path = original_path
 

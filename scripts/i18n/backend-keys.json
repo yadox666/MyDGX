@@ -1298,5 +1298,6 @@
   "sin ptxas de CUDA con sm_121a en CUDA_HOME ni /usr/local/cuda",
   "último arranque del Privacy Filter: Triton MoE kernels failed (PTXASError)",
   "Triton / ptxas para GB10",
-  "Sin perfiles Privacy Filter"
+  "Sin perfiles Privacy Filter",
+  "La frase de paso debe tener al menos 12 caracteres"
 ]

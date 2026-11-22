@@ -565,16 +565,57 @@ La pestaña **Plataforma** mantiene:
 La pestaña *Copia de seguridad* de *Sistema* crea un archivo
 `mydgx-backup-AAAAMMDDTHHMMSSZ.tar.gz` y lo descarga en el navegador. Contiene
 una copia coherente de la base de datos (perfiles, recetas instaladas,
-benchmarks, métricas, notificaciones y auditoría), la carpeta `config` y los
-archivos de estado `data/*.json`, junto con un `manifest.json` que lista su
-contenido.
+benchmarks, métricas, notificaciones y auditoría), la carpeta `config`, los
+archivos de estado `data/*.json` y los datos de Open WebUI (usuarios, chats y
+adjuntos, sin su caché), junto con un `manifest.json` que lista su contenido.
 
-No incluye secretos: deja fuera `.env` y cualquier archivo `*.env` (los
-`*.env.example` sí entran), además de `litellm.generated.json`, los modelos y
-los logs. Guarda tu `.env` aparte y en un sitio seguro. Las copias quedan
-también en `data/backups` del DGX, con permisos `0600`, hasta que las borres
-desde la lista. Antes de crearla, MyDGX comprueba que haya al menos el doble
-del tamaño de la base de datos libre en disco.
+Por defecto no incluye secretos: deja fuera `.env` y cualquier archivo `*.env`
+(los `*.env.example` sí entran). Si marcas *Incluir secretos cifrados* y eliges
+una frase de paso de al menos 12 caracteres, la copia añade `secrets.enc` con el
+`.env` de MyDGX, los `*.env` de `config` y los de los motores de
+`~/.local/share/mydgx` (Open WebUI, ComfyUI…), cifrados con AES-256-GCM y una
+clave derivada con scrypt. MyDGX no guarda la frase de paso: sin ella, los
+secretos no se pueden recuperar. Nunca entran `litellm.generated.json`, los
+modelos, los entornos de los motores ni los logs. Las copias quedan también en
+`data/backups` del DGX, con permisos `0600`, hasta que las borres desde la
+lista. Antes de crearla, MyDGX comprueba que haya al menos el doble del tamaño
+de la base de datos libre en disco.
+
+#### Recuperar MyDGX desde una copia
+
+Tras un desastre, una reinstalación o en un DGX nuevo, clona o despliega
+MyDGX, copia el archivo al equipo y, desde la carpeta de MyDGX y con su usuario
+(no como root):
+
+```bash
+./start.sh --recover mydgx-backup-AAAAMMDDTHHMMSSZ.tar.gz --check   # valida, no cambia nada
+./start.sh --recover mydgx-backup-AAAAMMDDTHHMMSSZ.tar.gz
+```
+
+Si falta el entorno de Python, `--recover` ejecuta antes `setup`. La
+recuperación:
+
+1. Valida la copia sin tocar el sistema: solo admite rutas bajo `mydgx/`, sin
+   enlaces ni `..`, exige un manifiesto `mydgx-backup-v1` y comprueba la base de
+   datos con `PRAGMA integrity_check`.
+2. Muestra un resumen (fecha, equipo de origen, perfiles, benchmarks, archivos
+   y secretos) y, si hay secretos, pide la frase de paso y la verifica.
+3. Pide que escribas `RESTAURAR` (`RESTORE` con el shell en inglés). Sin
+   terminal, se confirma con `--confirm RESTORE-MYDGX-BACKUP` y la frase de
+   paso con `--passphrase-file RUTA`.
+4. Para MyDGX y sus servicios, y guarda el estado actual en `data/backups`
+   como otra copia marcada *Antes de restaurar* (con los secretos cifrados con
+   la misma frase de paso). Para deshacer, recupera esa copia.
+5. Sustituye la base de datos (borrando su `-wal` y `-shm`), los
+   `data/*.json`, los datos de Open WebUI y los secretos. De `config` solo
+   añade los archivos que falten: los que trae MyDGX conservan la versión
+   instalada para que una copia antigua no revierta recetas ni workflows.
+6. Arranca MyDGX, espera a que responda y lista lo pendiente: motores que
+   había en el origen y no están instalados (con su `scripts/install-*.sh`),
+   perfiles cuyo modelo no está en disco y, si faltan, los servicios systemd.
+
+Opciones: `--skip-secrets` restaura sin los secretos y deja el `.env` actual;
+`--no-start` no arranca MyDGX al terminar.
 
 ## Logs
 

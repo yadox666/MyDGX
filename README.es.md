@@ -657,10 +657,13 @@ Comandos:
 ./start.sh opencode
 ./start.sh install-claude-code
 ./start.sh claude
+./start.sh --recover mydgx-backup-AAAAMMDDTHHMMSSZ.tar.gz [--check]
 ```
 
 `start.sh` es idempotente: puede ejecutarse de nuevo sin borrar la base de datos,
-los perfiles ni los modelos descargados.
+los perfiles ni los modelos descargados. `--recover` es la excepción: restaura
+una copia hecha en *Sistema → Copia de seguridad* tras mostrar un resumen y
+pedir que escribas `RESTAURAR`; consulta la guía de uso.
 
 ### OpenCode
 

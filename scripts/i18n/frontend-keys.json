@@ -1978,5 +1978,22 @@
   "{count} copia",
   "{count} copias",
   "Crea la primera: se descarga en tu navegador y queda también aquí.",
-  "Más reciente"
+  "Más reciente",
+  "Mínimo {count} caracteres",
+  "Las frases de paso no coinciden",
+  "Usuarios, chats y adjuntos",
+  "Entornos de motores",
+  "mydgx-backup-AAAAMMDDTHHMMSSZ.tar.gz",
+  "Incluir secretos cifrados",
+  ".env de MyDGX, Open WebUI y motores, cifrados con AES-256-GCM. Sin ellos, tras un desastre tendrás que volver a introducir contraseñas y tokens.",
+  "Frase de paso",
+  "Repite la frase de paso",
+  "MyDGX no la guarda: sin ella no se pueden recuperar los secretos.",
+  "Recuperar desde una copia",
+  "Tras un desastre o en un DGX nuevo, desde la carpeta de MyDGX y con su usuario, no como root.",
+  "Comprueba la copia sin cambiar nada",
+  "Restaura: pide la frase de paso y que escribas RESTAURAR; antes guarda el estado actual para poder deshacerlo",
+  "Para MyDGX y sus servicios, restaura base de datos, Open WebUI y secretos, vuelve a arrancar y lista los modelos y motores que faltan por descargar o instalar.",
+  "Secretos cifrados",
+  "Antes de restaurar"
 ]

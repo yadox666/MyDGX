@@ -8519,12 +8519,20 @@ function HealthFindingCard({ finding }: { finding: HealthFinding }) {
   </Card>;
 }
 
-type SystemBackup = { name: string; size: number; created_at: string };
+type SystemBackup = { name: string; size: number; created_at: string; secrets?: boolean; openwebui?: boolean; reason?: string };
+
+const BACKUP_MIN_PASSPHRASE = 12;
 
 function BackupsPanel({ notify }: { notify: (message: string, error?: boolean) => void }) {
   const [backups, setBackups] = useState<SystemBackup[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [downloading, setDownloading] = useState("");
+  const [includeSecrets, setIncludeSecrets] = useState(false);
+  const [passphrase, setPassphrase] = useState("");
+  const [passphraseRepeat, setPassphraseRepeat] = useState("");
+  const passphraseProblem = !includeSecrets ? ""
+    : passphrase.length < BACKUP_MIN_PASSPHRASE ? t("Mínimo {count} caracteres", { count: BACKUP_MIN_PASSPHRASE })
+      : passphrase !== passphraseRepeat ? t("Las frases de paso no coinciden") : "";
 
   const load = useCallback(() => {
     api<{ backups: SystemBackup[] }>("/api/system/backups")
@@ -8550,9 +8558,15 @@ function BackupsPanel({ notify }: { notify: (message: string, error?: boolean) =
   }
 
   async function create() {
+    if (passphraseProblem) return;
     setCreating(true);
     try {
-      const entry = await api<SystemBackup>("/api/system/backups", { method: "POST" });
+      const entry = await api<SystemBackup>("/api/system/backups", {
+        method: "POST",
+        body: JSON.stringify(includeSecrets ? { passphrase } : {}),
+      });
+      setPassphrase("");
+      setPassphraseRepeat("");
       notify(t("Copia de seguridad creada: {name}", { name: entry.name }));
       load();
       await download(entry.name);
@@ -8580,8 +8594,10 @@ function BackupsPanel({ notify }: { notify: (message: string, error?: boolean) =
     { icon: Database, label: t("Base de datos"), detail: t("Perfiles, recetas, benchmarks, métricas y auditoría") },
     { icon: SlidersHorizontal, label: "config/", detail: t("Recetas, workflows y ajustes") },
     { icon: FileArchive, label: "data/*.json", detail: t("Estado de MyDGX") },
+    { icon: MessageSquare, label: "Open WebUI", detail: t("Usuarios, chats y adjuntos") },
   ];
-  const excluded = [t("Secretos (.env)"), t("Modelos"), t("Logs")];
+  const excluded = [...(includeSecrets ? [] : [t("Secretos (.env)")]), t("Modelos"), t("Entornos de motores"), t("Logs")];
+  const example = latest?.name ?? t("mydgx-backup-AAAAMMDDTHHMMSSZ.tar.gz");
 
   return <div className="backup-panel">
     <Card className="backup-hero">
@@ -8592,7 +8608,7 @@ function BackupsPanel({ notify }: { notify: (message: string, error?: boolean) =
         <p>{t("Un archivo .tar.gz con todo lo necesario para recuperar MyDGX en este u otro DGX.")}</p>
       </div>
       <div className="backup-hero-action">
-        <button className="button primary" disabled={creating} onClick={() => void create()}>
+        <button className="button primary" disabled={creating || passphraseProblem !== ""} onClick={() => void create()}>
           {creating ? <RefreshCw className="spin" size={15} /> : <Download size={15} />}{" "}{creating ? t("Creando copia…") : t("Crear y descargar")}
         </button>
         <small>{creating ? t("Copiando la base de datos y comprimiendo") : latest ? t("Última: {date}", { date: new Date(latest.created_at).toLocaleString(locale) }) : t("Aún no hay ninguna copia")}</small>
@@ -8603,12 +8619,44 @@ function BackupsPanel({ notify }: { notify: (message: string, error?: boolean) =
           <div><strong>{label}</strong><small>{detail}</small></div>
         </div>)}
       </div>
+      <div className={`backup-secrets${includeSecrets ? " on" : ""}`}>
+        <label className="backup-secrets-toggle">
+          <input type="checkbox" checked={includeSecrets} disabled={creating} onChange={(event) => setIncludeSecrets(event.target.checked)} />
+          <span><KeyRound size={15} /></span>
+          <div>
+            <strong>{t("Incluir secretos cifrados")}</strong>
+            <small>{t(".env de MyDGX, Open WebUI y motores, cifrados con AES-256-GCM. Sin ellos, tras un desastre tendrás que volver a introducir contraseñas y tokens.")}</small>
+          </div>
+        </label>
+        {includeSecrets && <div className="backup-passphrase">
+          <input type="password" autoComplete="new-password" placeholder={t("Frase de paso")} aria-label={t("Frase de paso")} value={passphrase} disabled={creating} onChange={(event) => setPassphrase(event.target.value)} />
+          <input type="password" autoComplete="new-password" placeholder={t("Repite la frase de paso")} aria-label={t("Repite la frase de paso")} value={passphraseRepeat} disabled={creating} onChange={(event) => setPassphraseRepeat(event.target.value)} />
+          <small className={passphraseProblem ? "problem" : ""}>
+            {passphraseProblem || t("MyDGX no la guarda: sin ella no se pueden recuperar los secretos.")}
+          </small>
+        </div>}
+      </div>
       <div className="backup-excluded">
         <ShieldCheck size={15} />
         <span>{t("No incluye")}</span>
         {excluded.map((item) => <b key={item}>{item}</b>)}
-        <em>{t("Guarda tu .env aparte, en un sitio seguro.")}</em>
+        {!includeSecrets && <em>{t("Guarda tu .env aparte, en un sitio seguro.")}</em>}
       </div>
+    </Card>
+
+    <Card className="backup-restore">
+      <header>
+        <span><History size={17} /></span>
+        <div>
+          <strong>{t("Recuperar desde una copia")}</strong>
+          <small>{t("Tras un desastre o en un DGX nuevo, desde la carpeta de MyDGX y con su usuario, no como root.")}</small>
+        </div>
+      </header>
+      <ol>
+        <li><span>{t("Comprueba la copia sin cambiar nada")}</span><code>./start.sh --recover {example} --check</code></li>
+        <li><span>{t("Restaura: pide la frase de paso y que escribas RESTAURAR; antes guarda el estado actual para poder deshacerlo")}</span><code>./start.sh --recover {example}</code></li>
+      </ol>
+      <p>{t("Para MyDGX y sus servicios, restaura base de datos, Open WebUI y secretos, vuelve a arrancar y lista los modelos y motores que faltan por descargar o instalar.")}</p>
     </Card>
 
     <Card className="backup-stored">
@@ -8635,7 +8683,12 @@ function BackupsPanel({ notify }: { notify: (message: string, error?: boolean) =
               <span className="backup-file-icon"><FileArchive size={17} /></span>
               <div className="backup-file">
                 <strong title={backup.name}>{backup.name}</strong>
-                <small>{new Date(backup.created_at).toLocaleString(locale)}{index === 0 && <b className="badge live">{t("Más reciente")}</b>}</small>
+                <small>
+                  {new Date(backup.created_at).toLocaleString(locale)}
+                  {index === 0 && <b className="badge live">{t("Más reciente")}</b>}
+                  {backup.secrets && <b className="badge"><KeyRound size={11} /> {t("Secretos cifrados")}</b>}
+                  {backup.reason === "pre-restore" && <b className="badge">{t("Antes de restaurar")}</b>}
+                </small>
               </div>
               <span className="backup-size">{bytes(backup.size)}</span>
               <button className="button secondary compact" disabled={downloading !== ""} onClick={() => void download(backup.name)} aria-label={t("Descargar {name}", { name: backup.name })}>
@@ -10006,8 +10059,8 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
           <button className="menu-button" onClick={() => setMenuOpen(true)}><Menu /></button>
           <span>{currentLabel}</span>
           <div className="appearance-row">
-            <HealthBadge health={healthSummary} onOpen={() => { setMenuOpen(false); openHealthCenter(); }} />
             {hasActiveModels && <StopAllModelsButton notify={notify} onDone={() => { void refreshOverview(); void refreshModels(); }} />}
+            <HealthBadge health={healthSummary} onOpen={() => { setMenuOpen(false); openHealthCenter(); }} />
             <div className="header-prefs" role="group" aria-label={t("Apariencia")}>
               <button className="header-pref theme-toggle" onClick={toggleTheme} title={`${theme === "dark" ? t("Modo día") : t("Modo noche")} · ${themePreference === "system" ? t("Tema automático según el sistema") : t("Tema fijo")}`} aria-label={theme === "dark" ? t("Modo día") : t("Modo noche")}>{theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}</button>
               <FontSizeControl onChange={setFontScale} />

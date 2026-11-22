@@ -1996,5 +1996,22 @@
   "{count} copia": "{count} backup",
   "{count} copias": "{count} backups",
   "Crea la primera: se descarga en tu navegador y queda también aquí.": "Create the first one: it downloads in your browser and is also kept here.",
-  "Más reciente": "Latest"
+  "Más reciente": "Latest",
+  "Mínimo {count} caracteres": "At least {count} characters",
+  "Las frases de paso no coinciden": "The passphrases do not match",
+  "Usuarios, chats y adjuntos": "Users, chats and attachments",
+  "Entornos de motores": "Engine environments",
+  "mydgx-backup-AAAAMMDDTHHMMSSZ.tar.gz": "mydgx-backup-YYYYMMDDTHHMMSSZ.tar.gz",
+  "Incluir secretos cifrados": "Include encrypted secrets",
+  ".env de MyDGX, Open WebUI y motores, cifrados con AES-256-GCM. Sin ellos, tras un desastre tendrás que volver a introducir contraseñas y tokens.": ".env files of MyDGX, Open WebUI and engines, encrypted with AES-256-GCM. Without them, after a disaster you will have to enter passwords and tokens again.",
+  "Frase de paso": "Passphrase",
+  "Repite la frase de paso": "Repeat the passphrase",
+  "MyDGX no la guarda: sin ella no se pueden recuperar los secretos.": "MyDGX does not store it: without it the secrets cannot be recovered.",
+  "Recuperar desde una copia": "Recover from a backup",
+  "Tras un desastre o en un DGX nuevo, desde la carpeta de MyDGX y con su usuario, no como root.": "After a disaster or on a new DGX, from the MyDGX folder and as its user, not as root.",
+  "Comprueba la copia sin cambiar nada": "Check the backup without changing anything",
+  "Restaura: pide la frase de paso y que escribas RESTAURAR; antes guarda el estado actual para poder deshacerlo": "Restore: asks for the passphrase and for you to type RESTORE; it first saves the current state so it can be undone",
+  "Para MyDGX y sus servicios, restaura base de datos, Open WebUI y secretos, vuelve a arrancar y lista los modelos y motores que faltan por descargar o instalar.": "It stops MyDGX and its services, restores the database, Open WebUI and secrets, starts again and lists the models and engines still to download or install.",
+  "Secretos cifrados": "Encrypted secrets",
+  "Antes de restaurar": "Before restore"
 }

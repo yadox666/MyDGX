@@ -23,8 +23,6 @@ import sqlite3
 import struct
 import subprocess
 import sys
-import tarfile
-import tempfile
 import threading
 import time
 import unicodedata
@@ -60,6 +58,7 @@ from huggingface_hub.utils import (
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from backend import recovery as backup_recovery
 from backend.i18n import DEFAULT_LANGUAGE, request_language, translate_payload
 
 
@@ -24066,28 +24065,27 @@ async def system_health_center_summary() -> dict[str, Any]:
 
 
 BACKUP_NAME_PATTERN = re.compile(r"mydgx-backup-\d{8}T\d{6}Z\.tar\.gz")
-BACKUP_SKIPPED_DATA_FILES = frozenset({"litellm.generated.json"})
 _backup_lock = threading.Lock()
+
+
+class BackupCreatePayload(BaseModel):
+    passphrase: str | None = Field(default=None, max_length=1024)
 
 
 def backups_directory() -> Path:
     return Path(settings.database_path).expanduser().resolve().parent / "backups"
 
 
-def backup_excluded(path: Path) -> bool:
-    """Secrets live in .env files, which are never archived: a downloaded backup leaves the DGX."""
-    name = path.name.casefold()
-    if name.endswith(".example"):
-        return False
-    return name == ".env" or name.startswith(".env.") or name.endswith(".env")
-
-
 def backup_entry(path: Path) -> dict[str, Any]:
     stat = path.stat()
+    manifest = backup_recovery.read_manifest(path) or {}
     return {
         "name": path.name,
         "size": stat.st_size,
         "created_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        "secrets": bool((manifest.get("secrets") or {}).get("encrypted")),
+        "openwebui": bool(manifest.get("openwebui")),
+        "reason": manifest.get("reason") or "manual",
     }
 
 
@@ -24109,8 +24107,10 @@ def backup_path(name: str) -> Path:
     return path
 
 
-def create_backup_archive() -> dict[str, Any]:
-    """Archive a consistent copy of the database, the configuration and the small state files."""
+def create_backup_archive(passphrase: str | None = None) -> dict[str, Any]:
+    """Archive the database, configuration, state files and Open WebUI data; secrets only encrypted."""
+    if passphrase is not None and len(passphrase) < backup_recovery.MIN_PASSPHRASE_LENGTH:
+        raise HTTPException(status_code=400, detail="La frase de paso debe tener al menos 12 caracteres")
     if not _backup_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Ya se está creando una copia de seguridad")
     try:
@@ -24124,51 +24124,10 @@ def create_backup_archive() -> dict[str, Any]:
         target = directory / f"mydgx-backup-{stamp}.tar.gz"
         if target.exists():
             raise HTTPException(status_code=409, detail="Ya existe una copia de seguridad de este segundo; inténtalo de nuevo")
-        members: list[tuple[Path, str]] = []
-        config_root = ROOT / "config"
-        if config_root.is_dir():
-            for path in sorted(config_root.rglob("*")):
-                if path.is_file() and not path.is_symlink() and not backup_excluded(path):
-                    members.append((path, f"mydgx/config/{path.relative_to(config_root).as_posix()}"))
-        for path in sorted(database.parent.glob("*.json")):
-            if path.is_file() and not path.is_symlink() and path.name not in BACKUP_SKIPPED_DATA_FILES:
-                members.append((path, f"mydgx/data/{path.name}"))
-        partial = directory / f".{target.name}.partial"
-        with tempfile.TemporaryDirectory(dir=directory) as staging:
-            snapshot = Path(staging) / "mydgx.db"
-            if database.is_file():
-                source = sqlite3.connect(database)
-                destination = sqlite3.connect(snapshot)
-                try:
-                    source.backup(destination)
-                finally:
-                    destination.close()
-                    source.close()
-            manifest = {
-                "schema_version": "mydgx-backup-v1",
-                "created_at": utc_now(),
-                "mydgx_version": app.version,
-                "hostname": socket.gethostname(),
-                "database": "mydgx/data/mydgx.db" if database.is_file() else None,
-                "files": [name for _, name in members],
-                "excluded": [".env and *.env files (secrets)", *sorted(BACKUP_SKIPPED_DATA_FILES), "model caches", "logs"],
-            }
-            try:
-                with tarfile.open(partial, "w:gz") as archive:
-                    encoded = json.dumps(manifest, ensure_ascii=False, indent=2).encode()
-                    info = tarfile.TarInfo("mydgx/manifest.json")
-                    info.size = len(encoded)
-                    info.mtime = int(time.time())
-                    info.mode = 0o600
-                    archive.addfile(info, io.BytesIO(encoded))
-                    if database.is_file():
-                        archive.add(snapshot, "mydgx/data/mydgx.db", recursive=False)
-                    for path, name in members:
-                        archive.add(path, name, recursive=False)
-                os.chmod(partial, 0o600)
-                partial.rename(target)
-            finally:
-                partial.unlink(missing_ok=True)
+        backup_recovery.build_archive(
+            target, root=ROOT, database=database, share=backup_recovery.default_share(),
+            version=app.version, passphrase=passphrase,
+        )
         return backup_entry(target)
     finally:
         _backup_lock.release()
@@ -24180,13 +24139,14 @@ async def system_backups() -> dict[str, Any]:
 
 
 @app.post("/api/system/backups", dependencies=secure)
-async def create_system_backup() -> dict[str, Any]:
+async def create_system_backup(payload: BackupCreatePayload | None = None) -> dict[str, Any]:
+    passphrase = payload.passphrase if payload else None
     try:
-        entry = await asyncio.to_thread(create_backup_archive)
+        entry = await asyncio.to_thread(create_backup_archive, passphrase)
     except HTTPException as exc:
         db.audit("system.backup.create", "backup", False, str(exc.detail))
         raise
-    db.audit("system.backup.create", entry["name"], True, f"{entry['size']} bytes")
+    db.audit("system.backup.create", entry["name"], True, f"{entry['size']} bytes" + (", encrypted secrets" if entry["secrets"] else ""))
     return entry
 
 

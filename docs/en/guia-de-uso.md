@@ -558,15 +558,58 @@ The **Platform** tab retains:
 The *Backup* tab in *System* creates a
 `mydgx-backup-YYYYMMDDTHHMMSSZ.tar.gz` archive and downloads it in the browser.
 It holds a consistent copy of the database (profiles, installed recipes,
-benchmarks, metrics, notifications and audit), the `config` folder and the
-`data/*.json` state files, plus a `manifest.json` listing its contents.
+benchmarks, metrics, notifications and audit), the `config` folder, the
+`data/*.json` state files and the Open WebUI data (users, chats and
+attachments, without its cache), plus a `manifest.json` listing its contents.
 
-It does not include secrets: it leaves out `.env` and any `*.env` file
-(`*.env.example` files are included), as well as `litellm.generated.json`,
-models and logs. Keep your `.env` separately, somewhere safe. Backups also stay
-in `data/backups` on the DGX, with `0600` permissions, until you delete them
-from the list. Before creating one, MyDGX checks that at least twice the
-database size is free on disk.
+By default it does not include secrets: it leaves out `.env` and any `*.env`
+file (`*.env.example` files are included). If you tick *Include encrypted
+secrets* and choose a passphrase of at least 12 characters, the backup adds
+`secrets.enc` with the MyDGX `.env`, the `*.env` files in `config` and those of
+the engines in `~/.local/share/mydgx` (Open WebUI, ComfyUI…), encrypted with
+AES-256-GCM and a scrypt-derived key. MyDGX does not store the passphrase:
+without it, the secrets cannot be recovered. `litellm.generated.json`, models,
+engine environments and logs are never included. Backups also stay in
+`data/backups` on the DGX, with `0600` permissions, until you delete them from
+the list. Before creating one, MyDGX checks that at least twice the database
+size is free on disk.
+
+#### Recovering MyDGX from a backup
+
+After a disaster, a reinstall or on a new DGX, clone or deploy MyDGX, copy the
+archive to the machine and, from the MyDGX folder and as its user (not as
+root):
+
+```bash
+./start.sh --recover mydgx-backup-YYYYMMDDTHHMMSSZ.tar.gz --check   # validates, changes nothing
+./start.sh --recover mydgx-backup-YYYYMMDDTHHMMSSZ.tar.gz
+```
+
+If the Python environment is missing, `--recover` runs `setup` first. The
+recovery:
+
+1. Validates the backup without touching the system: it only accepts paths
+   under `mydgx/`, with no links or `..`, requires a `mydgx-backup-v1` manifest
+   and checks the database with `PRAGMA integrity_check`.
+2. Shows a summary (date, source host, profiles, benchmarks, files and
+   secrets) and, if there are secrets, asks for the passphrase and verifies it.
+3. Asks you to type `RESTORE` (`RESTAURAR` with a Spanish shell). Without a
+   terminal, confirm with `--confirm RESTORE-MYDGX-BACKUP` and pass the
+   passphrase with `--passphrase-file PATH`.
+4. Stops MyDGX and its services and saves the current state in `data/backups`
+   as another backup marked *Before restore* (with the secrets encrypted with
+   the same passphrase). To undo, recover that backup.
+5. Replaces the database (deleting its `-wal` and `-shm`), the `data/*.json`
+   files, the Open WebUI data and the secrets. From `config` it only adds the
+   missing files: those shipped with MyDGX keep the installed version so an old
+   backup does not roll back recipes or workflows.
+6. Starts MyDGX, waits for it to respond and lists what is pending: engines
+   that were on the source and are not installed (with their
+   `scripts/install-*.sh`), profiles whose model is not on disk and, if
+   missing, the systemd services.
+
+Options: `--skip-secrets` restores without the secrets and keeps the current
+`.env`; `--no-start` does not start MyDGX afterwards.
 
 ## Logs
 

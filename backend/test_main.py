@@ -9,15 +9,17 @@ import hashlib
 import os
 import struct
 import subprocess
+import tarfile
 import tempfile
 import time
 import unittest
 import zlib
 from collections import namedtuple
+from contextlib import closing, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable, Optional
 from unittest.mock import AsyncMock, mock_open, patch
 
 import httpx
@@ -25,6 +27,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import backend.main as main_module
+from backend import recovery as backup_recovery
 from backend.i18n import Catalog, request_language, translate_payload
 from backend.gateway import (
     active_routes,
@@ -8896,8 +8899,14 @@ class BackupTests(unittest.TestCase):
                 db.path = data / "mydgx.db"
                 db.initialize()
                 db.audit("probe", "before-backup", True)
-                with patch.object(main_module, "ROOT", root), patch.object(main_module.settings, "database_path", str(db.path)):
+                with patch.object(main_module, "ROOT", root), patch.object(main_module.settings, "database_path", str(db.path)), \
+                        patch.object(main_module.backup_recovery, "default_share", return_value=root / "share"):
+                    with self.assertRaises(HTTPException) as short:
+                        main_module.create_backup_archive("too-short")
+                    self.assertEqual(short.exception.status_code, 400)
                     entry = asyncio.run(main_module.create_system_backup())
+                    self.assertFalse(entry["secrets"])
+                    self.assertEqual(entry["reason"], "manual")
                     path = data / "backups" / entry["name"]
                     self.assertEqual(path.stat().st_mode & 0o777, 0o600)
                     with tarfile.open(path) as archive:
@@ -8925,6 +8934,203 @@ class BackupTests(unittest.TestCase):
                     self.assertEqual(asyncio.run(main_module.system_backups())["backups"], [])
         finally:
             db.path = original_path
+
+
+class RecoveryTests(unittest.TestCase):
+    PASSPHRASE = "correct horse battery staple"
+
+    def make_database(self, path: Path, profiles: list[tuple[str, str]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(path)
+        connection.execute("CREATE TABLE profiles (name TEXT, model_file TEXT, model_repo TEXT)")
+        connection.executemany("INSERT INTO profiles VALUES (?, ?, '')", profiles)
+        connection.commit()
+        connection.close()
+
+    def make_source(self, base: Path) -> tuple[Path, Path, Path]:
+        root, share = base / "source", base / "source-share"
+        (root / "config" / "dgx").mkdir(parents=True)
+        (root / ".env").write_text("DATABASE_PATH=./data/mydgx.db\nMYDGX_DASHBOARD_PASSWORD=PLACEHOLDER_SOURCE\n", encoding="utf-8")
+        (root / "config" / "recipes.json").write_text('{"from": "backup"}', encoding="utf-8")
+        (root / "config" / "user-added.json").write_text("{}", encoding="utf-8")
+        (root / "config" / "dgx" / "dgx-spark.env").write_text("DGX_HOST=PLACEHOLDER\n", encoding="utf-8")
+        self.make_database(root / "data" / "mydgx.db", [("Chat", str(base / "missing.gguf"))])
+        (root / "data" / "state.json").write_text("{}", encoding="utf-8")
+        webui = share / "open-webui" / "data"
+        (webui / "uploads").mkdir(parents=True)
+        (webui / "cache").mkdir()
+        sqlite3.connect(webui / "webui.db").close()
+        (webui / "uploads" / "note.txt").write_text("chat attachment", encoding="utf-8")
+        (webui / "cache" / "embedding.bin").write_bytes(b"0" * 16)
+        (share / "open-webui" / "open-webui.env").write_text("WEBUI_SECRET_KEY=PLACEHOLDER\n", encoding="utf-8")
+        (share / "comfyui" / "venv").mkdir(parents=True)
+        archive = base / "mydgx-backup-20260101T000000Z.tar.gz"
+        backup_recovery.build_archive(
+            archive, root=root, database=root / "data" / "mydgx.db", share=share, version="test", passphrase=self.PASSPHRASE,
+        )
+        return archive, root, share
+
+    def make_target(self, base: Path) -> tuple[Path, Path]:
+        root, share = base / "target", base / "target-share"
+        (root / "config").mkdir(parents=True)
+        (root / ".env").write_text("DATABASE_PATH=./data/mydgx.db\nMYDGX_DASHBOARD_PASSWORD=PLACEHOLDER_TARGET\n", encoding="utf-8")
+        (root / "config" / "recipes.json").write_text('{"from": "install"}', encoding="utf-8")
+        self.make_database(root / "data" / "mydgx.db", [("Other", "")])
+        Path(f"{root / 'data' / 'mydgx.db'}-wal").write_bytes(b"stale")
+        share.mkdir()
+        return root, share
+
+    def recover(self, archive: Path, root: Path, share: Path, *extra: str, passphrase: Optional[str] = None) -> tuple[int, list[str]]:
+        self.calls: list[str] = []
+        calls = self.calls
+        argv = [str(archive), *extra]
+        if passphrase is not None:
+            secret = archive.parent / "passphrase.txt"
+            secret.write_text(passphrase + "\n", encoding="utf-8")
+            argv += ["--passphrase-file", str(secret)]
+        with patch.object(backup_recovery.sys, "stdin", io.StringIO()), redirect_stdout(io.StringIO()):
+            code = backup_recovery.recover(backup_recovery.parse_args(argv), root=root, share=share, run=calls.append, version="test")
+        return code, calls
+
+    def test_archive_encrypts_secrets_and_skips_open_webui_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            archive, _, _ = self.make_source(Path(directory))
+            with tarfile.open(archive) as bundle:
+                names = set(bundle.getnames())
+                raw = b"".join(bundle.extractfile(member).read() for member in bundle.getmembers() if member.isfile())
+            self.assertIn(backup_recovery.SECRETS_MEMBER, names)
+            self.assertIn("mydgx/openwebui/webui.db", names)
+            self.assertIn("mydgx/openwebui/uploads/note.txt", names)
+            self.assertNotIn("mydgx/openwebui/cache/embedding.bin", names)
+            self.assertFalse(any(name.endswith(".env") for name in names))
+            self.assertNotIn(b"PLACEHOLDER_SOURCE", raw)
+            manifest = backup_recovery.read_manifest(archive)
+            self.assertTrue(manifest["secrets"]["encrypted"])
+            self.assertIn("share/open-webui/open-webui.env", manifest["secrets"]["files"])
+            self.assertEqual(manifest["engines"], ["comfyui"])
+
+    def test_recover_restores_state_secrets_and_keeps_an_undo_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            archive, _, _ = self.make_source(base)
+            root, share = self.make_target(base)
+            code, calls = self.recover(archive, root, share, "--confirm", backup_recovery.CONFIRM_TOKEN, passphrase=self.PASSPHRASE)
+            self.assertEqual(code, 0)
+            self.assertEqual(calls, ["stop", "start", "wait-ready"])
+            database = root / "data" / "mydgx.db"
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute("SELECT name FROM profiles").fetchall(), [("Chat",)])
+            self.assertFalse(Path(f"{database}-wal").exists())
+            self.assertIn("PLACEHOLDER_SOURCE", (root / ".env").read_text(encoding="utf-8"))
+            self.assertEqual((root / ".env").stat().st_mode & 0o777, 0o600)
+            self.assertTrue((root / "config" / "dgx" / "dgx-spark.env").is_file())
+            self.assertTrue((share / "open-webui" / "open-webui.env").is_file())
+            self.assertEqual((root / "config" / "recipes.json").read_text(encoding="utf-8"), '{"from": "install"}')
+            self.assertTrue((root / "config" / "user-added.json").is_file())
+            self.assertTrue((root / "data" / "state.json").is_file())
+            self.assertEqual((share / "open-webui" / "data" / "uploads" / "note.txt").read_text(encoding="utf-8"), "chat attachment")
+            undo = list((root / "data" / "backups").glob("mydgx-backup-*.tar.gz"))
+            self.assertEqual(len(undo), 1)
+            manifest = backup_recovery.read_manifest(undo[0])
+            self.assertEqual(manifest["reason"], "pre-restore")
+            self.assertTrue(manifest["secrets"]["encrypted"])
+            self.assertEqual(backup_recovery.missing_models(database), [f"Chat: missing.gguf"])
+            self.assertFalse(any(path.name.startswith(".mydgx-restore-") for path in (root / "data").iterdir()))
+
+    def test_recover_changes_nothing_without_confirmation_or_with_a_wrong_passphrase(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            archive, _, _ = self.make_source(base)
+            root, share = self.make_target(base)
+            before = (root / "data" / "mydgx.db").read_bytes()
+            attempts = (
+                ((), self.PASSPHRASE),
+                (("--confirm", "yes"), self.PASSPHRASE),
+                (("--confirm", backup_recovery.CONFIRM_TOKEN), "wrong passphrase!"),
+                (("--confirm", backup_recovery.CONFIRM_TOKEN), None),
+            )
+            for extra, passphrase in attempts:
+                with self.subTest(extra=extra, passphrase=passphrase):
+                    with self.assertRaises(backup_recovery.BackupError):
+                        self.recover(archive, root, share, *extra, passphrase=passphrase)
+                    self.assertEqual(self.calls, [])
+            code, calls = self.recover(archive, root, share, "--check")
+            self.assertEqual((code, calls), (0, []))
+            self.assertEqual((root / "data" / "mydgx.db").read_bytes(), before)
+            self.assertIn("PLACEHOLDER_TARGET", (root / ".env").read_text(encoding="utf-8"))
+            self.assertFalse((root / "data" / "backups").exists())
+            self.assertFalse(any(path.name.startswith(".mydgx-restore-") for path in (root / "data").iterdir()))
+
+    def test_recover_skip_secrets_keeps_local_env(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            archive, _, _ = self.make_source(base)
+            root, share = self.make_target(base)
+            code, calls = self.recover(archive, root, share, "--skip-secrets", "--no-start", "--confirm", backup_recovery.CONFIRM_TOKEN)
+            self.assertEqual((code, calls), (0, ["stop"]))
+            self.assertIn("PLACEHOLDER_TARGET", (root / ".env").read_text(encoding="utf-8"))
+            undo = next((root / "data" / "backups").glob("mydgx-backup-*.tar.gz"))
+            self.assertFalse(backup_recovery.read_manifest(undo)["secrets"]["encrypted"])
+
+    def test_inspect_rejects_unsafe_members(self) -> None:
+        def archive_with(path: Path, add: Callable[[tarfile.TarFile], None]) -> None:
+            with tarfile.open(path, "w:gz") as bundle:
+                data = json.dumps({"schema_version": backup_recovery.SCHEMA_VERSION}).encode()
+                info = tarfile.TarInfo(backup_recovery.MANIFEST_MEMBER)
+                info.size = len(data)
+                bundle.addfile(info, io.BytesIO(data))
+                add(bundle)
+
+        def file_member(name: str) -> Callable[[tarfile.TarFile], None]:
+            def add(bundle: tarfile.TarFile) -> None:
+                info = tarfile.TarInfo(name)
+                info.size = 2
+                bundle.addfile(info, io.BytesIO(b"{}"))
+            return add
+
+        def link_member(bundle: tarfile.TarFile) -> None:
+            info = tarfile.TarInfo("mydgx/config/link.json")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "/etc/passwd"
+            bundle.addfile(info)
+
+        cases = {
+            "traversal": file_member("mydgx/config/../../escape.json"),
+            "outside": file_member("other/file.json"),
+            "plain-secret": file_member("mydgx/config/dgx/dgx-spark.env"),
+            "unknown-area": file_member("mydgx/scripts/run.sh"),
+            "nested-data": file_member("mydgx/data/sub/state.json"),
+            "symlink": link_member,
+            "no-database": lambda bundle: None,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            for label, add in cases.items():
+                path = base / f"{label}.tar.gz"
+                archive_with(path, add)
+                staging = base / f"staging-{label}"
+                staging.mkdir()
+                with self.subTest(label=label), self.assertRaises(backup_recovery.BackupError):
+                    backup_recovery.inspect_archive(path, staging)
+                self.assertFalse((base / "escape.json").exists())
+            (base / "not-a-backup.tar.gz").write_bytes(b"not gzip")
+            with self.assertRaises(backup_recovery.BackupError):
+                backup_recovery.inspect_archive(base / "not-a-backup.tar.gz", base)
+
+    def test_decrypt_rejects_tampering_and_unbounded_kdf(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            secret = Path(directory) / ".env"
+            secret.write_text("KEY=PLACEHOLDER\n", encoding="utf-8")
+            blob = backup_recovery.encrypt_secrets([(secret, "root/.env")], self.PASSPHRASE)
+            self.assertEqual(backup_recovery.decrypt_secrets(blob, self.PASSPHRASE), {"root/.env": b"KEY=PLACEHOLDER\n"})
+            with self.assertRaises(backup_recovery.BackupError):
+                backup_recovery.decrypt_secrets(blob[:-1] + bytes([blob[-1] ^ 1]), self.PASSPHRASE)
+            header, ciphertext = blob[len(backup_recovery.SECRETS_MAGIC):].split(b"\n", 1)
+            params = json.loads(header)
+            params["n"] = 2**30
+            forged = backup_recovery.SECRETS_MAGIC + json.dumps(params).encode() + b"\n" + ciphertext
+            with self.assertRaises(backup_recovery.BackupError):
+                backup_recovery.decrypt_secrets(forged, self.PASSPHRASE)
 
 
 if __name__ == "__main__":

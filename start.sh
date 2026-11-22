@@ -1084,8 +1084,28 @@ health_test() {
   exec "$DGX_TEST_SCRIPT" --config "$config" "${translated[@]}"
 }
 
+recover() {
+  [[ $# -ge 1 ]] || {
+    say "Uso: $0 --recover COPIA.tar.gz [--check] [--confirm RESTORE-MYDGX-BACKUP] [--passphrase-file RUTA] [--skip-secrets] [--no-start]" \
+      "Usage: $0 --recover BACKUP.tar.gz [--check] [--confirm RESTORE-MYDGX-BACKUP] [--passphrase-file PATH] [--skip-secrets] [--no-start]" >&2
+    exit 2
+  }
+  [[ "$(id -u)" != "0" ]] || {
+    say "Ejecuta la recuperación con el usuario de MyDGX, no como root: los archivos restaurados deben ser suyos." \
+      "Run the recovery as the MyDGX user, not as root: restored files must belong to it." >&2
+    exit 2
+  }
+  if [[ ! -x "$PYTHON" ]]; then
+    say "Preparando MyDGX antes de restaurar…" "Setting up MyDGX before restoring…"
+    setup
+  fi
+  cd "$ROOT"
+  exec "$PYTHON" -m backend.recovery "$@"
+}
+
 case "${1:-start}" in
   setup) setup ;;
+  recover|--recover) shift; recover "$@" ;;
   install-opencode) shift; exec "$ROOT/opencode.sh" install "$@" ;;
   opencode) shift; exec "$ROOT/opencode.sh" "$@" ;;
   install-claude-code) shift; exec "$ROOT/claude-code.sh" install "$@" ;;
@@ -1114,7 +1134,7 @@ case "${1:-start}" in
   build) npm --prefix "$ROOT/frontend" run build ;;
   deploy) shift; deploy "$@" ;;
   *)
-    say "Uso: $0 {setup|start|dev|stop|restart|status|logs|test [--autodiscover] [USUARIO@HOST [-pPUERTO] | OPCIONES]|--autodiscover [--add-to-tray] [--config [RUTA]]|serverize [--audit|--disable --confirm DISABLE-DESKTOP-SERVICES|--apply --confirm CONVERT-TO-HEADLESS-SERVER] [--keep PAQUETE]|build|deploy [--database RUTA] [--duckdns]|install-opencode [NOMBRE]|opencode [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]|install-claude-code|claude [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]}" "Usage: $0 {setup|start|dev|stop|restart|status|logs|test [--autodiscover] [USER@HOST [-pPORT] | OPTIONS]|--autodiscover [--add-to-tray] [--config [PATH]]|serverize [--audit|--disable --confirm DISABLE-DESKTOP-SERVICES|--apply --confirm CONVERT-TO-HEADLESS-SERVER] [--keep PACKAGE]|build|deploy [--database PATH] [--duckdns]|install-opencode [NAME]|opencode [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]|install-claude-code|claude [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]}" >&2
+    say "Uso: $0 {setup|--recover COPIA.tar.gz [--check]|start|dev|stop|restart|status|logs|test [--autodiscover] [USUARIO@HOST [-pPUERTO] | OPCIONES]|--autodiscover [--add-to-tray] [--config [RUTA]]|serverize [--audit|--disable --confirm DISABLE-DESKTOP-SERVICES|--apply --confirm CONVERT-TO-HEADLESS-SERVER] [--keep PAQUETE]|build|deploy [--database RUTA] [--duckdns]|install-opencode [NOMBRE]|opencode [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]|install-claude-code|claude [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]}" "Usage: $0 {setup|--recover BACKUP.tar.gz [--check]|start|dev|stop|restart|status|logs|test [--autodiscover] [USER@HOST [-pPORT] | OPTIONS]|--autodiscover [--add-to-tray] [--config [PATH]]|serverize [--audit|--disable --confirm DISABLE-DESKTOP-SERVICES|--apply --confirm CONVERT-TO-HEADLESS-SERVER] [--keep PACKAGE]|build|deploy [--database PATH] [--duckdns]|install-opencode [NAME]|opencode [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]|install-claude-code|claude [setup] [ALIAS|--model ALIAS] [--active] [-- ARGS]}" >&2
     exit 2
     ;;
 esac

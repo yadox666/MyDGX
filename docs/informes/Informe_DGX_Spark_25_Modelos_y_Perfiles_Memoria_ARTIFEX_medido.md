@@ -1070,6 +1070,51 @@ Estas órdenes no modifican el servidor. Los dos primeros indicadores distinguen
 
 **La decisión importante.** Prioriza un modelo de código, un especialista en seguridad y, si el flujo lo exige, un generalista pequeño o analista defensivo. La especialización útil se obtiene con tareas reales, herramientas verificadas y rutas claras de activación, no con cinco variantes uncensored redundantes.
 
+# 30. Recomendaciones: modelos que faltan en el DGX (noviembre de 2026)
+
+Inventario leído en el DGX el 22 de noviembre de 2026 (Ollama y caché de Hugging Face), comparado con las mediciones publicadas en GB10 \[R01\]–\[R09\].
+
+El DGX ya tiene la mayoría de los modelos pesados que se ejecutan en un Spark. Según las mediciones en GB10, los mayores huecos son tres modelos MoE rápidos (mixture-of-experts: solo unos pocos miles de millones de parámetros activos por token) y el modelo con la calidad medida más alta, Qwen3-Next-80B. Tampoco hay nada actual para búsqueda multimodal (imágenes además de texto), generación de imágenes con texto legible ni vídeo. El disco no es un límite: hay 2,0 TB libres.
+
+**Ya instalados, no hace falta añadirlos:** Qwen3.8-27B, Qwen3.8-Flash-Next, GLM-5.3-Flash, gpt-oss-120b, Gemma 4 31B, Qwen3-Coder-Next, DeepSeek V4.1 Flash, Kimi-Dev-72B, Whisper y suficientes modelos de texto a voz. Algunos solo están instalados en versión uncensored: gpt-oss-120b (Derestricted), Gemma 4 31B (heretic) y Qwen3-Coder-Next (abliterated). Conviene añadir las versiones oficiales solo si se quieren referencias sin modificar.
+
+## 30.1 Modelos de texto que faltan, por prioridad
+
+La calidad y la velocidad proceden de QAI EdgeBench del 7 de noviembre de 2026 (112 configuraciones en un único GB10) \[R01\], salvo que se indique otra fuente.
+
+| # | Modelo | Repositorio en Hugging Face | Medido en el Spark | Motivo |
+|---|---|---|---|---|
+| 1 | Qwen3-Next-80B-A3B-Instruct | `nvidia/Qwen3-Next-80B-A3B-Instruct-NVFP4` | 98,6 % de calidad, 37 tok/s | La calidad medida más alta en el Spark |
+| 2 | Gemma 4 26B-A4B | `unsloth/gemma-4-26B-A4B-it-GGUF` o `nvidia/Gemma-4-26B-A4B-NVFP4` | 93–96 %, unos 50–60 tok/s en 4 bits | El modelo más ejecutado en Sparks según llamaperf \[R03\]; también lee imágenes |
+| 3 | Ornith 1.5 35B-A3B | `ornith-ai/Ornith-1.5-35B-A3B-NVFP4` (o `-GGUF`) | 92,6 %, 94 tok/s con MTP | La mejor calidad entre los modelos rápidos |
+| 4 | Qwen3.6-35B-A3B | `nvidia/Qwen3.6-35B-A3B-NVFP4` | 86–88 %, 85–98 tok/s con MTP | Modelo rápido de uso diario; solo están instaladas las versiones 3.5 |
+| 5 | Nemotron 3.5 Lightning 30B-A3B | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` | 80 tok/s en prosa, 144 tok/s en código con modelo borrador (medido por Kevin Welter \[R02\]) | El modelo más rápido medido |
+| 6 | Nemotron 3.5 Super VL 120B-A12B | `nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4` | Aún sin benchmark en el Spark; el Super anterior iba a unos 16 tok/s | Publicado el 12 de octubre; lee imágenes y vídeo, 51,8 % en SWE-bench Pro \[R06\] |
+| 7 | Ling 3.0 Flash 124B-A5B | `AtomicChat/Ling-3.0-flash-GGUF` | 97,2 %, 22,5 tok/s (probado en INT4) | Calidad casi máxima |
+| 8 | Nanbeige4.3-33B | `bartowski/Nanbeige_Nanbeige4.3-33B-GGUF` | Sin medición en el Spark; 29,8 % en Terminal-Bench 4.0 \[R04\] | El modelo pequeño de programación más fuerte (unos 21 GB) |
+
+Dos extras opcionales:
+
+- **DiffusionGemma 26B-A4B** (`nvidia/diffusiongemma-26B-A4B-it-NVFP4`) es el más rápido en llegar a una respuesta correcta (168 tok/s). Necesita vLLM, y el motor fija su temperatura en 1,0.
+- **Nemotron 3 Nano Omni** (`nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4`) entiende audio, imágenes y vídeo en un solo modelo.
+
+## 30.2 Otros huecos
+
+- **Embeddings:** solo hay embeddings de texto (bge-m3, MiniLM). Para búsquedas que también cubran imágenes, añadir `Qwen/Qwen3-VL-Embedding-8B` y `Qwen/Qwen3-VL-Reranker-8B`; ambos están en la lista de NVIDIA de modelos compatibles con el Spark \[R05\].
+- **Imagen:** Flux 1 Schnell ya está desfasado \[R07\]\[R09\].
+  - Z-Image-Turbo es Apache-2.0, tarda unos 7,5 s por imagen en el Spark y fue el único modelo probado que escribió correctamente el titular.
+  - FLUX 3 Image Klein empata en calidad máxima, pero solo es gratuito para empresas con menos de 5 M$ de facturación.
+  - Qwen-Image 2.1, ya instalado, sigue en primera posición, pero su licencia no permite uso comercial.
+- **Vídeo:** Wan 2.1 es antiguo y lento. LTX-2.5 (NVFP4, destilado) genera un clip de 5 segundos con audio en unos 70 s en el Spark. Wan 2.2 tarda unos 14 minutos en un clip similar \[R08\].
+
+## 30.3 Precauciones
+
+- Los porcentajes de calidad proceden de la batería de tareas de un único benchmark. Dentro de unos 3 puntos están estadísticamente empatados, así que los cinco primeros deben tratarse como equivalentes.
+- Las versiones NVFP4 necesitan vLLM o SGLang. Para llama.cpp, usar los repositorios GGUF.
+- Los grandes modelos publicados este otoño (Kimi K3.1, DeepSeek V4.1 Pro, Muse Spark Open, Mistral Large 4) no caben en un único Spark con una cuantización utilizable.
+
+Aparte, los dos modelos de Ollama (deepseek-coder 6.7B y llama3.2 3B) quedan muy por detrás de todo lo anterior; no se ha borrado nada. Siguiente paso propuesto: instalar los cuatro primeros desde la pestaña Modelos o crear recetas para ellos.
+
 # Fuentes nuevas y ficheros recomendados
 
 Enlaces directos a fichas y archivos verificados para la ampliación. Las cifras de velocidad y benchmarks proceden de sus respectivos autores salvo que se indique otra cosa.
@@ -1093,3 +1138,23 @@ Enlaces directos a fichas y archivos verificados para la ampliación. Las cifras
 **\[A09\]** [bartowski · Qwen3.5-35B-A3B original, cuantizaciones](https://huggingface.co/bartowski/Qwen_Qwen3.5-35B-A3B-GGUF)
 
 **\[A10\]** [Qwen · Qwen3-Coder-Next, ficha de arquitectura y contexto](https://huggingface.co/Qwen/Qwen3-Coder-Next)
+
+Fuentes de la sección 30 (consultadas el 22 de noviembre de 2026):
+
+**\[R01\]** [QAI EdgeBench · qué funciona mejor en un DGX Spark (112 configuraciones, 7 nov 2026)](https://qai.io/bench/edgebench/dgx-spark)
+
+**\[R02\]** [Kevin Welter · los mejores LLM para el DGX Spark, medidos](https://kevinwelter.com/en/blog/beste-modelle-dgx-spark)
+
+**\[R03\]** [llamaperf · rendimiento de LLM locales en el DGX Spark](https://llamaperf.com/gpu/dgx-spark)
+
+**\[R04\]** [GPUwerk · mejores modelos de programación de pesos abiertos, noviembre 2026](https://gpuwerk.com/blog/best-open-weight-coding-models/)
+
+**\[R05\]** [NVIDIA DGX Spark playbooks · matriz de modelos compatibles con vLLM](https://github.com/NVIDIA/dgx-spark-playbooks/blob/main/nvidia/vllm/README.md)
+
+**\[R06\]** [NVIDIA · Nemotron 3.5 Super y Lightning (arXiv)](https://arxiv.org/html/2610.38095v1)
+
+**\[R07\]** [LocalAgentBoard · Z-Image-Turbo, Qwen-Image 2.1 Turbo y FLUX.2 klein en un DGX Spark](https://localagentboard.com/news/local-image-models-dgx-spark-z-image-qwen-flux-klein/)
+
+**\[R08\]** [GPUwerk · generación de vídeo en el DGX Spark, noviembre 2026](https://gpuwerk.com/dgx-spark/guides/video-generation-on-dgx-spark/)
+
+**\[R09\]** [GPUwerk · mejores modelos locales de generación de imagen 2026](https://gpuwerk.com/blog/local-image-generation-models/)

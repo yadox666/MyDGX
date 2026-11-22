@@ -1650,8 +1650,12 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(evaluated, {
             "kernel-xid-hardware", "kernel-xid-application",
             "kernel-oom-host", "kernel-oom-cgroup", "kernel-thermal",
+            "kernel-xid", "kernel-oom",
         })
-        self.assertEqual({item["id"] for item in findings}, evaluated - {"kernel-thermal"})
+        self.assertEqual(
+            {item["id"] for item in findings},
+            evaluated - {"kernel-thermal", "kernel-xid", "kernel-oom"},
+        )
         self.assertEqual((status["xid_count"], status["oom_count"]), (2, 2))
         self.assertEqual((status["host_oom_count"], status["cgroup_oom_count"]), (1, 1))
         self.assertEqual(
@@ -1665,10 +1669,110 @@ class CollectorTests(unittest.TestCase):
         )
 
         with patch("backend.main.shutil.which", return_value=None):
-            findings, _, status = main_module.kernel_health_findings()
+            findings, evaluated, status = main_module.kernel_health_findings()
         self.assertEqual(findings, [])
         self.assertIsNone(status["xid_count"])
         self.assertFalse(status["available"])
+        self.assertNotIn("kernel-xid-hardware", evaluated)
+
+    def test_kernel_health_counts_dmesg_and_journal_copies_once(self) -> None:
+        dmesg = "[ 1234.567890] thermal thermal_zone0: critical temperature reached, shutting down"
+        journal = "thermal thermal_zone0: critical temperature reached, shutting down"
+        with (
+            patch("backend.main.os.uname", return_value=SimpleNamespace(sysname="Linux")),
+            patch("backend.main.shutil.which", return_value="/usr/bin/tool"),
+            patch("backend.main.run_command", side_effect=[
+                SimpleNamespace(returncode=0, stdout=dmesg, stderr=""),
+                SimpleNamespace(returncode=0, stdout=journal, stderr=""),
+            ]),
+        ):
+            findings, _, status = main_module.kernel_health_findings()
+        self.assertEqual(status["thermal_count"], 1)
+        self.assertEqual([item["id"] for item in findings], ["kernel-thermal"])
+
+    def test_health_memory_thresholds_tolerate_large_resident_models(self) -> None:
+        gib = 1024 ** 3
+        base = {"memory_total": 128 * gib, "memory_psi_some_avg10": 0.0, "memory_psi_full_avg10": 0.0, "swap_used": 0}
+        healthy, _ = main_module.metric_health_findings({**base, "memory_available": 16 * gib})
+        self.assertEqual(healthy, [])
+        tight, _ = main_module.metric_health_findings({**base, "memory_available": 10 * gib})
+        self.assertEqual([(item["id"], item["severity"]) for item in tight], [("memory-available", "warning")])
+        self.assertTrue(tight[0]["evidence"].startswith("MemAvailable 10.0 GiB"))
+        exhausted, _ = main_module.metric_health_findings({**base, "memory_available": 3 * gib})
+        self.assertEqual(exhausted[0]["severity"], "critical")
+
+    def test_health_resolves_stale_services_and_old_model_failures(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "health-stale.db"
+                db.initialize()
+                stale = [
+                    main_module.health_finding("service:systemd:removed", "warning", "Servicios", "x", "x", "x", "x"),
+                    main_module.health_finding("service:docker:old", "warning", "Servicios", "x", "x", "x", "x"),
+                ]
+                main_module.sync_health_findings(stale, {item["id"] for item in stale})
+                findings, evaluated = main_module.service_health_findings(
+                    [{"name": "mydgx", "type": "systemd", "status": "failed"}],
+                )
+                self.assertTrue({"service:systemd:removed", "service:docker:old"} <= evaluated)
+                self.assertEqual(findings[0]["severity"], "critical")
+                main_module.sync_health_findings(findings, evaluated)
+                active = {row["id"] for row in db.rows("SELECT id FROM health_findings WHERE active=1")}
+                self.assertEqual(active, {"service:systemd:mydgx"})
+
+                now = datetime.now(timezone.utc).isoformat()
+                db.execute(
+                    """
+                    INSERT INTO profiles(
+                        id,name,engine,model_ref,port,context_size,gpu_layers,threads,
+                        batch_size,temperature,top_p,repeat_penalty,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    ("p1", "Perfil", "llama.cpp", "m", 18080, 8192, -1, 8, 512, 0.7, 0.95, 1.1, now, now),
+                )
+                old = datetime.fromtimestamp(time.time() - 2 * 86400, timezone.utc).isoformat()
+                db.execute(
+                    "INSERT INTO profile_model_runs(profile_id,model_id,model_name,status,updated_at) VALUES(?,?,?,?,?)",
+                    ("p1", "m1", "old-model", "failed", old),
+                )
+                self.assertEqual(main_module.model_run_health_findings()[0], [])
+                db.execute("UPDATE profile_model_runs SET updated_at=?", (now,))
+                recent, _ = main_module.model_run_health_findings()
+                self.assertEqual(recent[0]["evidence"], "Perfil / old-model")
+        finally:
+            db.path = original_path
+
+    def test_health_checks_report_observed_values_when_healthy(self) -> None:
+        gib = 1024 ** 3
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "health-checks.db"
+                db.initialize()
+                checks = main_module.health_checks(
+                    {
+                        "gpu_temperature": 52.0, "gpu_power_watts": 30.0, "gpu_clock_mhz": 2400.0,
+                        "gpu_utilization": 40.0, "memory_available": 64 * gib, "memory_total": 128 * gib,
+                        "memory_psi_some_avg10": 0.0, "memory_psi_full_avg10": 0.0, "swap_used": 0,
+                        "disk_total": 1000 * gib, "disk_used": 400 * gib,
+                    },
+                    [],
+                    {"available": False},
+                    {"python": "not_applicable", "docker": "not_applicable", "kv_cache_oom_count": None},
+                    [{"name": "mydgx", "type": "systemd", "status": "active"}],
+                    True,
+                )
+        finally:
+            db.path = original_path
+        by_id = {item["id"]: item for item in checks}
+        self.assertEqual(by_id["gpu-temperature"]["value"], "52 °C")
+        self.assertEqual(by_id["memory-available"]["status"], "ok")
+        self.assertEqual(by_id["disk-space"]["value"], "600 / 1000 GiB")
+        self.assertEqual(by_id["kernel-xid"]["status"], "unknown")
+        self.assertEqual(by_id["runtime-docker"]["status"], "not_applicable")
+        self.assertEqual(by_id["services"]["value"], "1/1")
+        self.assertTrue(all(item["kind"] for item in checks))
 
     def test_low_power_health_requires_consecutive_low_clock_samples(self) -> None:
         original_path = db.path
@@ -1723,14 +1827,18 @@ class CollectorTests(unittest.TestCase):
                     stderr="",
                 )
                 with (
-                    patch("backend.main.run_command", return_value=python_result),
+                    patch("backend.main.run_command", return_value=python_result) as command,
                     patch("backend.main.shutil.which", return_value=None),
                 ):
-                    findings, evaluated, status = main_module.runtime_health_findings()
+                    findings, evaluated, status = main_module.runtime_health_findings(refresh=True)
+                    main_module.runtime_health_findings()
+                self.assertEqual(command.call_count, 1)
                 self.assertIn("runtime-torch-cpu", evaluated)
+                self.assertNotIn("runtime-kv-cache-oom", evaluated)
                 self.assertEqual({item["id"] for item in findings}, {"runtime-torch-cpu"})
                 self.assertEqual(status["python"], "ok")
                 self.assertEqual(status["docker"], "not_applicable")
+                self.assertEqual(status["torch_version"], "2.10.0+cpu")
         finally:
             db.path = original_path
 

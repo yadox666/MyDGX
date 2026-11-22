@@ -2116,13 +2116,96 @@ def health_finding(
     }
 
 
+HealthLevel = Literal["ok", "warning", "critical", "unknown", "not_applicable"]
+GIB = 1024 ** 3
+
+
+def _number(value: Any) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def temperature_level(sample: dict[str, Any]) -> HealthLevel:
+    temperature = _number(sample.get("gpu_temperature"))
+    if temperature is None:
+        return "unknown"
+    return "critical" if temperature >= 90 else "warning" if temperature >= 85 else "ok"
+
+
+def memory_available_level(sample: dict[str, Any]) -> HealthLevel:
+    """GB10 shares 128 GB between CPU and GPU, so large models legitimately keep little headroom."""
+    available = _number(sample.get("memory_available"))
+    total = _number(sample.get("memory_total"))
+    if available is None:
+        return "unknown"
+    if available < 4 * GIB:
+        return "critical"
+    if total and total > 0:
+        return "warning" if available / total < 0.10 else "ok"
+    return "warning" if available < 8 * GIB else "ok"
+
+
+def memory_pressure_level(sample: dict[str, Any]) -> HealthLevel:
+    full = _number(sample.get("memory_psi_full_avg10"))
+    some = _number(sample.get("memory_psi_some_avg10"))
+    if full is None and some is None:
+        return "unknown"
+    if full is not None and full >= 5:
+        return "critical"
+    if full is not None and full >= 1 or some is not None and some >= 10:
+        return "warning"
+    return "ok"
+
+
+def swap_level(sample: dict[str, Any]) -> HealthLevel:
+    used = _number(sample.get("swap_used"))
+    if used is None:
+        return "unknown"
+    return "warning" if used > 8 * GIB else "ok"
+
+
+def disk_level(sample: dict[str, Any]) -> HealthLevel:
+    total = _number(sample.get("disk_total"))
+    used = _number(sample.get("disk_used"))
+    if not total or used is None:
+        return "unknown"
+    free = max(0.0, total - used)
+    return "critical" if free < 5 * GIB else "warning" if free < 20 * GIB else "ok"
+
+
+def worst_level(*levels: HealthLevel) -> HealthLevel:
+    for level in ("critical", "warning", "ok", "unknown"):
+        if level in levels:
+            return level  # type: ignore[return-value]
+    return "not_applicable"
+
+
+def memory_evidence(sample: dict[str, Any]) -> str:
+    parts = []
+    available = _number(sample.get("memory_available"))
+    total = _number(sample.get("memory_total"))
+    if available is not None:
+        share = f" ({available / total:.0%})" if total else ""
+        parts.append(f"MemAvailable {available / GIB:.1f} GiB{share}")
+    some = _number(sample.get("memory_psi_some_avg10"))
+    full = _number(sample.get("memory_psi_full_avg10"))
+    if some is not None:
+        parts.append(f"PSI some {some:.1f}%")
+    if full is not None:
+        parts.append(f"PSI full {full:.1f}%")
+    swap = _number(sample.get("swap_used"))
+    if swap is not None:
+        parts.append(f"swap {swap / GIB:.1f} GiB")
+    return " · ".join(parts)
+
+
 def metric_health_findings(sample: dict[str, Any]) -> tuple[list[dict[str, str]], set[str]]:
     """Explain operational risks from observed metrics; absent readings remain unknown."""
     findings: list[dict[str, str]] = []
     evaluated = {"gpu-temperature", "memory-available", "disk-space"}
     temperature = sample.get("gpu_temperature")
-    if isinstance(temperature, (int, float)) and temperature >= 85:
-        severity: Literal["warning", "critical"] = "critical" if temperature >= 90 else "warning"
+    temperature_state = temperature_level(sample)
+    if temperature_state in {"warning", "critical"} and isinstance(temperature, (int, float)):
+        severity: Literal["warning", "critical"] = "critical" if temperature_state == "critical" else "warning"
         findings.append(health_finding(
             "gpu-temperature", severity, "GPU", "Temperatura GPU elevada",
             "La GPU está por encima del umbral operativo recomendado.",
@@ -2131,88 +2214,85 @@ def metric_health_findings(sample: dict[str, Any]) -> tuple[list[dict[str, str]]
             confidence="high",
             source_note="Lectura directa de nvidia-smi; umbrales térmicos conservadores para GB10.",
         ))
-    available = sample.get("memory_available")
-    total = sample.get("memory_total")
-    psi_full = sample.get("memory_psi_full_avg10")
-    psi_some = sample.get("memory_psi_some_avg10")
-    swap_used = sample.get("swap_used")
-    memory_warning = (
-        isinstance(available, (int, float)) and (
-            available < 16 * 1024 ** 3
-            or isinstance(total, (int, float)) and total > 0 and available / total < 0.15
-        )
-    ) or isinstance(psi_full, (int, float)) and psi_full >= 1 or isinstance(psi_some, (int, float)) and psi_some >= 10 or isinstance(swap_used, (int, float)) and swap_used > 8 * 1024 ** 3
-    memory_critical = (
-        isinstance(available, (int, float)) and available < 8 * 1024 ** 3
-    ) or isinstance(psi_full, (int, float)) and psi_full >= 5
-    if memory_warning or memory_critical:
-        evidence = []
-        if isinstance(available, (int, float)):
-            evidence.append(f"{available / 1024 ** 3:.1f} GiB disponibles")
-        if isinstance(psi_full, (int, float)):
-            evidence.append(f"PSI full avg10 {psi_full:.1f}%")
-        if isinstance(psi_some, (int, float)):
-            evidence.append(f"PSI some avg10 {psi_some:.1f}%")
-        if isinstance(swap_used, (int, float)) and swap_used > 0:
-            evidence.append(f"swap usado {swap_used / 1024 ** 3:.1f} GiB")
+    memory_state = worst_level(memory_available_level(sample), memory_pressure_level(sample), swap_level(sample))
+    if memory_state in {"warning", "critical"}:
+        psi_full = _number(sample.get("memory_psi_full_avg10"))
         findings.append(health_finding(
-            "memory-available", "critical" if memory_critical else "warning", "Memoria", "Presión de memoria unificada",
+            "memory-available", "critical" if memory_state == "critical" else "warning", "Memoria", "Presión de memoria unificada",
             "La memoria disponible, los stalls del kernel o el uso de swap indican presión sobre el pool compartido.",
-            " · ".join(evidence),
+            memory_evidence(sample),
             "Detén perfiles que no uses o reduce contexto, paralelo y tamaño del KV cache.",
-            confidence="high" if isinstance(psi_full, (int, float)) and psi_full >= 5 else "medium",
-            source_note="MemAvailable, swap y Linux PSI; CPU y GPU comparten la memoria unificada en GB10.",
+            confidence="high" if psi_full is not None and psi_full >= 1 else "medium",
+            source_note="Aviso: MemAvailable <10 %, PSI some ≥10 %, PSI full ≥1 % o swap >8 GiB. Crítico: MemAvailable <4 GiB o PSI full ≥5 %.",
         ))
     disk_total = sample.get("disk_total")
     disk_used = sample.get("disk_used")
-    if isinstance(disk_total, (int, float)) and isinstance(disk_used, (int, float)) and disk_total > 0:
-        free = max(0, disk_total - disk_used)
-        if free < 20 * 1024 ** 3:
-            gib = free / 1024 ** 3
-            severity = "critical" if free < 5 * 1024 ** 3 else "warning"
-            findings.append(health_finding(
-                "disk-space", severity, "Almacenamiento", "Espacio libre bajo",
-                "Las descargas, conversiones y actualizaciones pueden quedarse sin espacio.",
-                f"{gib:.1f} GiB libres; aviso <20 GiB, crítico <5 GiB.",
-                "Borra modelos o trabajos innecesarios desde Modelos y revisa el uso del almacenamiento.",
-                confidence="high",
-                source_note="Uso del sistema de archivos raíz observado por psutil.",
-            ))
+    disk_state = disk_level(sample)
+    if disk_state in {"warning", "critical"} and isinstance(disk_total, (int, float)) and isinstance(disk_used, (int, float)):
+        gib = max(0, disk_total - disk_used) / GIB
+        findings.append(health_finding(
+            "disk-space", "critical" if disk_state == "critical" else "warning", "Almacenamiento", "Espacio libre bajo",
+            "Las descargas, conversiones y actualizaciones pueden quedarse sin espacio.",
+            f"{gib:.1f} GiB libres; aviso <20 GiB, crítico <5 GiB.",
+            "Borra modelos o trabajos innecesarios desde Modelos y revisa el uso del almacenamiento.",
+            confidence="high",
+            source_note="Uso del sistema de archivos raíz observado por psutil.",
+        ))
     return findings, evaluated
+
+
+MODEL_FAILURE_WINDOW = timedelta(hours=24)
+
+
+def failed_model_runs() -> list[dict[str, Any]]:
+    """Failed rows persist until the next launch, so only recent failures describe current health."""
+    return db.rows(
+        """
+        SELECT runs.profile_id,profiles.name AS profile_name,runs.model_name,runs.updated_at
+        FROM profile_model_runs AS runs JOIN profiles ON profiles.id=runs.profile_id
+        WHERE runs.status IN ('failed','error') AND runs.updated_at >= ?
+        ORDER BY runs.updated_at DESC LIMIT 20
+        """,
+        ((datetime.now(timezone.utc) - MODEL_FAILURE_WINDOW).isoformat(),),
+    )
 
 
 def model_run_health_findings() -> tuple[list[dict[str, str]], set[str]]:
     findings: list[dict[str, str]] = []
     evaluated = {"model-runs-failed"}
-    rows = db.rows(
-        """
-        SELECT profile_id,model_name,status,detail,updated_at
-        FROM profile_model_runs
-        WHERE status IN ('failed','error')
-        ORDER BY updated_at DESC LIMIT 20
-        """
-    )
+    rows = failed_model_runs()
     if rows:
-        names = ", ".join(str(row["model_name"]) for row in rows[:4])
+        names = ", ".join(f"{row['profile_name']} / {row['model_name']}" for row in rows[:4])
         findings.append(health_finding(
             "model-runs-failed", "warning", "Inferencia", "Modelos con fallo reciente",
-            f"{len(rows)} modelo(s) conservan un estado de fallo.",
+            f"{len(rows)} modelo(s) fallaron en las últimas 24 horas.",
             names + ("…" if len(rows) > 4 else ""),
             "Abre el perfil afectado, revisa Actividad reciente y repite su verificación.",
+            confidence="high",
+            source_note="Estado de arranque de los modelos de perfil; se ignoran fallos de más de 24 horas.",
         ))
     return findings, evaluated
 
 
-def low_power_health_findings() -> tuple[list[dict[str, str]], set[str]]:
-    """Require a sustained run before diagnosing the reported GB10 low-power state."""
-    finding_id = "gpu-low-power"
-    rows = list(reversed(db.rows(
+LOW_POWER_WINDOW = timedelta(minutes=5)
+
+
+def recent_power_samples() -> list[dict[str, Any]]:
+    return list(reversed(db.rows(
         """
         SELECT created_at,gpu_utilization,gpu_power_watts,gpu_clock_mhz
         FROM metric_samples
+        WHERE created_at >= ?
         ORDER BY id DESC LIMIT 20
-        """
+        """,
+        ((datetime.now(timezone.utc) - LOW_POWER_WINDOW).isoformat(),),
     )))
+
+
+def low_power_health_findings() -> tuple[list[dict[str, str]], set[str]]:
+    """Require a sustained, recent run before diagnosing the reported GB10 low-power state."""
+    finding_id = "gpu-low-power"
+    rows = recent_power_samples()
     longest: list[dict[str, Any]] = []
     current: list[dict[str, Any]] = []
     maximum_gap = max(5.0, settings.metrics_interval_seconds * 2.5)
@@ -2244,7 +2324,7 @@ def low_power_health_findings() -> tuple[list[dict[str, str]], set[str]]:
     evidence = "; ".join(
         f"{row['gpu_utilization']:.0f}% GPU · {row['gpu_power_watts']:.1f} W · "
         f"{row['gpu_clock_mhz']:.0f} MHz" if isinstance(row.get("gpu_clock_mhz"), (int, float))
-        else f"{row['gpu_utilization']:.0f}% GPU · {row['gpu_power_watts']:.1f} W · reloj desconocido"
+        else f"{row['gpu_utilization']:.0f}% GPU · {row['gpu_power_watts']:.1f} W · ? MHz"
         for row in longest[:5]
     )
     finding = health_finding(
@@ -2296,6 +2376,10 @@ def kernel_log_snapshot() -> tuple[list[str], dict[str, Any]]:
     return lines, status
 
 
+LEGACY_KERNEL_FINDING_IDS = {"kernel-xid", "kernel-oom"}
+DMESG_TIMESTAMP_PATTERN = re.compile(r"^\[\s*[\d.]+\]\s*")
+
+
 def kernel_health_findings() -> tuple[list[dict[str, str]], set[str], dict[str, Any]]:
     evaluated = {
         "kernel-xid-hardware", "kernel-xid-application",
@@ -2303,13 +2387,15 @@ def kernel_health_findings() -> tuple[list[dict[str, str]], set[str], dict[str, 
     }
     lines, status = kernel_log_snapshot()
     if not status["available"]:
-        return [], evaluated, status
+        # An unreadable journal is unknown, not healthy: keep current kernel findings untouched.
+        return [], set(LEGACY_KERNEL_FINDING_IDS), status
+    evaluated |= LEGACY_KERNEL_FINDING_IDS
 
     xid_events: dict[tuple[int, str], str] = {}
     oom_events: dict[tuple[str, str, str], str] = {}
     thermal_events: set[str] = set()
     for raw in lines:
-        line = raw.strip()
+        line = DMESG_TIMESTAMP_PATTERN.sub("", raw.strip())
         xid = XID_CODE_PATTERN.search(line)
         if xid:
             code = int(xid.group(1))
@@ -2318,7 +2404,7 @@ def kernel_health_findings() -> tuple[list[dict[str, str]], set[str], dict[str, 
         oom = OOM_KILL_PATTERN.search(line)
         if oom:
             scope = "cgroup" if re.search(r"\bcgroup\b|\bmemcg\b|constraint=CONSTRAINT_MEMCG", line, re.IGNORECASE) else "host"
-            detail = f"{scope}: proceso {oom.group(2)} (pid {oom.group(1)})"
+            detail = f"{scope} · {oom.group(2)} · pid {oom.group(1)}"
             oom_events[(scope, oom.group(1), oom.group(2))] = detail
         if re.search(r"\bthermal shutdown\b|\boverheat(?:ed|ing)?\b|\bcritical temperature\b", line, re.IGNORECASE):
             thermal_events.add(redact_log_text(line, 300))
@@ -2330,6 +2416,7 @@ def kernel_health_findings() -> tuple[list[dict[str, str]], set[str], dict[str, 
     status.update({
         "xid_count": len(xid_events),
         "xid_codes": sorted({code for code, _ in xid_events}),
+        "hardware_xid_codes": hardware_codes,
         "oom_count": len(oom_events),
         "host_oom_count": len(host_oom),
         "cgroup_oom_count": len(cgroup_oom),
@@ -2386,17 +2473,15 @@ def kernel_health_findings() -> tuple[list[dict[str, str]], set[str], dict[str, 
     return findings, evaluated, status
 
 
-def runtime_health_findings() -> tuple[list[dict[str, str]], set[str], dict[str, Any]]:
-    evaluated = {
-        "runtime-torch-cpu", "runtime-torch-arch",
-        "runtime-docker-nvidia", "runtime-kv-cache-oom",
-    }
-    status: dict[str, Any] = {
-        "python": "unknown",
-        "docker": "not_applicable",
-        "journal": "not_available",
-    }
-    findings: list[dict[str, str]] = []
+TORCH_PROBE_TTL_SECONDS = 600
+_torch_probe_cache: tuple[float, dict[str, Any]] | None = None
+
+
+def torch_runtime_probe(refresh: bool = False) -> dict[str, Any]:
+    """Importing torch takes seconds and only changes on reinstall, so periodic refreshes reuse it."""
+    global _torch_probe_cache
+    if not refresh and _torch_probe_cache and time.monotonic() - _torch_probe_cache[0] < TORCH_PROBE_TTL_SECONDS:
+        return dict(_torch_probe_cache[1])
     probe = """
 import json
 try:
@@ -2418,6 +2503,23 @@ except Exception as exc:
         python_info = json.loads(result.stdout.strip()) if result.returncode == 0 else {"error": "probe_failed"}
     except json.JSONDecodeError:
         python_info = {"error": "invalid_output"}
+    if not python_info.get("error"):
+        _torch_probe_cache = (time.monotonic(), python_info)
+    return dict(python_info)
+
+
+def runtime_health_findings(refresh: bool = False) -> tuple[list[dict[str, str]], set[str], dict[str, Any]]:
+    evaluated = {
+        "runtime-torch-cpu", "runtime-torch-arch",
+        "runtime-docker-nvidia", "runtime-kv-cache-oom",
+    }
+    status: dict[str, Any] = {
+        "python": "unknown",
+        "docker": "not_applicable",
+        "journal": "not_available",
+    }
+    findings: list[dict[str, str]] = []
+    python_info = torch_runtime_probe(refresh)
     if python_info.get("error"):
         status["python"] = "error"
         status["python_detail"] = str(python_info["error"])
@@ -2427,13 +2529,19 @@ except Exception as exc:
     else:
         status["python"] = "ok"
         arches = [str(item).casefold() for item in python_info.get("arches") or []]
-        version = str(python_info.get("version") or "desconocida")
+        version = str(python_info.get("version") or "?")
         cuda = str(python_info.get("cuda") or "")
+        status.update({
+            "torch_version": version,
+            "torch_cuda": cuda or None,
+            "torch_cuda_available": bool(python_info.get("cuda_available")),
+            "torch_gb10_arch": any(arch in {"sm_120", "sm_121", "sm_121a"} for arch in arches) if arches else None,
+        })
         if "+cpu" in version.casefold() or not cuda:
             findings.append(health_finding(
                 "runtime-torch-cpu", "warning", "Runtime", "PyTorch no incluye soporte CUDA",
                 "El intérprete de MyDGX tiene una compilación CPU-only; esto no evalúa otros entornos o contenedores.",
-                f"torch {version} · CUDA {cuda or 'ausente'}",
+                f"torch {version} · CUDA {cuda or '—'}",
                 "Usa una wheel ARM64 con CUDA compatible si este entorno ejecutará PyTorch en la GPU.",
                 confidence="high",
                 source_note="Sondeo aislado del intérprete Python de MyDGX.",
@@ -2478,6 +2586,7 @@ except Exception as exc:
                     source_note="docker info y nvidia-ctk cdi list; no se contactan hosts Docker remotos.",
                 ))
 
+    hits: set[str] = set()
     if shutil.which("journalctl"):
         journal = run_command(["journalctl", "-b", "--no-pager", "-o", "cat", "-n", "3000"], 5)
         if journal.returncode == 0:
@@ -2496,24 +2605,51 @@ except Exception as exc:
                     confidence="high",
                     source_note="Líneas coincidentes y redactadas del journal del arranque actual.",
                 ))
+    if status["journal"] != "ok":
+        evaluated.discard("runtime-kv-cache-oom")
+    status["kv_cache_oom_count"] = len(hits) if status["journal"] == "ok" else None
     return findings, evaluated, status
 
 
-def service_health_findings(values: list[dict[str, Any]]) -> tuple[list[dict[str, str]], set[str]]:
+async def systemd_service_states() -> list[dict[str, Any]]:
+    if not shutil.which("systemctl"):
+        return []
+    results = await asyncio.gather(*(
+        asyncio.to_thread(run_command, ["systemctl", "is-active", name], 5)
+        for name in settings.service_names
+    ))
+    return [
+        {"name": name, "type": "systemd", "status": result.stdout.strip() or "unknown"}
+        for name, result in zip(settings.service_names, results)
+    ]
+
+
+def service_health_findings(
+    values: list[dict[str, Any]], systemd_available: bool = True,
+) -> tuple[list[dict[str, str]], set[str]]:
     managed = [item for item in values if item.get("type") == "systemd"]
-    evaluated = {f"service:{item.get('type')}:{item.get('name')}" for item in managed}
+    evaluated = {f"service:systemd:{item.get('name')}" for item in managed}
+    # Services removed from settings, and Docker findings from older releases, must resolve too.
+    stale_pattern = "service:%" if systemd_available else "service:docker:%"
+    evaluated |= {
+        str(row["id"]) for row in db.rows(
+            "SELECT id FROM health_findings WHERE active=1 AND id LIKE ?", (stale_pattern,),
+        )
+    }
     findings = []
     for item in managed:
         status = str(item.get("status") or "unknown").casefold()
         if status in {"active", "running"}:
             continue
-        name = str(item.get("name") or "servicio")
+        name = str(item.get("name") or "?")
         findings.append(health_finding(
-            f"service:{item.get('type')}:{name}", "warning", "Servicios",
+            f"service:systemd:{name}", "critical" if status == "failed" else "warning", "Servicios",
             f"Servicio no activo: {name}",
             "Un servicio administrado no está en ejecución.",
-            f"{item.get('type') or 'servicio'} · estado {status}",
+            f"systemctl is-active {name}: {status}",
             "Comprueba si debe estar activo y, si corresponde, inícialo desde Sistema.",
+            confidence="high",
+            source_note="systemctl is-active para cada servicio configurado en MyDGX.",
         ))
     return findings, evaluated
 
@@ -2587,10 +2723,147 @@ def sync_health_findings(findings: list[dict[str, str]], evaluated_ids: set[str]
         )
 
 
+def health_check(
+    check_id: str, group: str, label: str, status: HealthLevel, value: str, threshold: str = "",
+) -> dict[str, str]:
+    # "kind" is protected from response translation, so the group stays a stable identifier.
+    return {"id": check_id, "kind": group, "label": label, "status": status, "value": value, "threshold": threshold}
+
+
+def health_checks(
+    sample: dict[str, Any],
+    findings: list[dict[str, str]],
+    kernel_status: dict[str, Any],
+    runtime_status: dict[str, Any],
+    service_values: list[dict[str, Any]],
+    systemd_available: bool,
+) -> list[dict[str, str]]:
+    """Observed values behind every rule, so a healthy system still shows what was measured."""
+    severity = {item["id"]: item["severity"] for item in findings}
+
+    def finding_level(*ids: str) -> HealthLevel | None:
+        levels = [severity[item] for item in ids if item in severity]
+        if "critical" in levels:
+            return "critical"
+        return "warning" if levels else None
+
+    checks: list[dict[str, str]] = []
+    temperature = _number(sample.get("gpu_temperature"))
+    checks.append(health_check(
+        "gpu-temperature", "gpu", "Temperatura GPU", temperature_level(sample),
+        f"{temperature:.0f} °C" if temperature is not None else "—", "aviso ≥85 °C · crítico ≥90 °C",
+    ))
+    power = _number(sample.get("gpu_power_watts"))
+    utilization = _number(sample.get("gpu_utilization"))
+    clock = _number(sample.get("gpu_clock_mhz"))
+    power_parts = [
+        f"{power:.1f} W" if power is not None else None,
+        f"{clock:.0f} MHz" if clock is not None else None,
+        f"{utilization:.0f}%" if utilization is not None else None,
+    ]
+    checks.append(health_check(
+        "gpu-power", "gpu", "Potencia y reloj GPU",
+        finding_level("gpu-low-power") or ("ok" if power is not None else "unknown"),
+        " · ".join(part for part in power_parts if part) or "—",
+        "baja potencia: ≥80 % de uso con ≤25 W sostenido",
+    ))
+
+    available = _number(sample.get("memory_available"))
+    total = _number(sample.get("memory_total"))
+    checks.append(health_check(
+        "memory-available", "memory", "Memoria disponible", memory_available_level(sample),
+        (f"{available / GIB:.1f} / {total / GIB:.0f} GiB" if total else f"{available / GIB:.1f} GiB")
+        if available is not None else "—",
+        "aviso <10 % · crítico <4 GiB",
+    ))
+    some = _number(sample.get("memory_psi_some_avg10"))
+    full = _number(sample.get("memory_psi_full_avg10"))
+    checks.append(health_check(
+        "memory-psi", "memory", "Presión de memoria (PSI)", memory_pressure_level(sample),
+        f"some {some:.1f}% · full {full:.1f}%" if some is not None and full is not None else "—",
+        "aviso some ≥10 % o full ≥1 % · crítico full ≥5 %",
+    ))
+    swap = _number(sample.get("swap_used"))
+    checks.append(health_check(
+        "swap", "memory", "Swap en uso", swap_level(sample),
+        f"{swap / GIB:.1f} GiB" if swap is not None else "—", "aviso >8 GiB",
+    ))
+
+    disk_total = _number(sample.get("disk_total"))
+    disk_used = _number(sample.get("disk_used"))
+    checks.append(health_check(
+        "disk-space", "storage", "Espacio libre en /", disk_level(sample),
+        f"{max(0.0, disk_total - disk_used) / GIB:.0f} / {disk_total / GIB:.0f} GiB"
+        if disk_total and disk_used is not None else "—",
+        "aviso <20 GiB · crítico <5 GiB",
+    ))
+
+    kernel_known = bool(kernel_status.get("available"))
+    codes = kernel_status.get("xid_codes") or []
+    checks.append(health_check(
+        "kernel-xid", "kernel", "Errores NVIDIA Xid",
+        (finding_level("kernel-xid-hardware", "kernel-xid-application") or "ok") if kernel_known else "unknown",
+        (", ".join(f"Xid {code}" for code in codes) or "0") if kernel_known else "—",
+        "arranque actual",
+    ))
+    checks.append(health_check(
+        "kernel-oom", "kernel", "OOM killer",
+        (finding_level("kernel-oom-host", "kernel-oom-cgroup") or "ok") if kernel_known else "unknown",
+        f"host {kernel_status.get('host_oom_count') or 0} · cgroup {kernel_status.get('cgroup_oom_count') or 0}"
+        if kernel_known else "—",
+        "arranque actual",
+    ))
+    checks.append(health_check(
+        "kernel-thermal", "kernel", "Eventos térmicos",
+        (finding_level("kernel-thermal") or "ok") if kernel_known else "unknown",
+        str(kernel_status.get("thermal_count") or 0) if kernel_known else "—",
+        "arranque actual",
+    ))
+
+    python_state = runtime_status.get("python")
+    if python_state == "ok":
+        torch_value = f"torch {runtime_status.get('torch_version')} · CUDA {runtime_status.get('torch_cuda') or '—'}"
+        torch_level: HealthLevel = finding_level("runtime-torch-cpu", "runtime-torch-arch") or "ok"
+    elif python_state == "not_applicable":
+        torch_value, torch_level = "PyTorch no instalado", "not_applicable"
+    else:
+        torch_value, torch_level = "—", "unknown"
+    checks.append(health_check("runtime-torch", "runtime", "PyTorch de MyDGX", torch_level, torch_value, "sm_120 / sm_121"))
+    docker_state = runtime_status.get("docker")
+    checks.append(health_check(
+        "runtime-docker", "runtime", "Docker con GPU NVIDIA",
+        "not_applicable" if docker_state == "not_applicable" else finding_level("runtime-docker-nvidia") or "ok",
+        "Sin perfiles Compose" if docker_state == "not_applicable" else "runtime nvidia / CDI",
+    ))
+    kv_count = runtime_status.get("kv_cache_oom_count")
+    checks.append(health_check(
+        "runtime-kv-cache", "runtime", "Reserva de KV cache (vLLM)",
+        (finding_level("runtime-kv-cache-oom") or "ok") if kv_count is not None else "unknown",
+        str(kv_count) if kv_count is not None else "—", "arranque actual",
+    ))
+
+    managed = [item for item in service_values if item.get("type") == "systemd"]
+    active = sum(str(item.get("status") or "").casefold() in {"active", "running"} for item in managed)
+    service_ids = [f"service:systemd:{item.get('name')}" for item in managed]
+    checks.append(health_check(
+        "services", "services", "Servicios systemd",
+        "not_applicable" if not systemd_available or not managed else finding_level(*service_ids) or "ok",
+        f"{active}/{len(managed)}" if systemd_available and managed else "—",
+        ", ".join(str(item.get("name")) for item in managed),
+    ))
+    failed_runs = len(failed_model_runs())
+    checks.append(health_check(
+        "model-runs", "inference", "Arranques de modelos fallidos",
+        "warning" if failed_runs else "ok", str(failed_runs), "últimas 24 horas",
+    ))
+    return checks
+
+
 def health_center_payload(
     kernel_status: dict[str, Any] | None = None,
     runtime_status: dict[str, Any] | None = None,
     collectors: list[dict[str, str]] | None = None,
+    checks: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     rows = db.rows(
         """
@@ -2619,6 +2892,7 @@ def health_center_payload(
         },
         "summary": summary,
         "findings": rows,
+        "checks": checks or [],
         "kernel": kernel_status or {"available": None, "scope": "current_boot", "xid_count": None, "oom_count": None},
         "runtime": runtime_status or {},
         "evaluated_at": utc_now(),
@@ -22934,11 +23208,7 @@ async def system_versions() -> dict[str, Any]:
 
 @app.get("/api/services", dependencies=secure)
 async def services() -> list[dict[str, Any]]:
-    output = []
-    if shutil.which("systemctl"):
-        for name in settings.service_names:
-            result = await asyncio.to_thread(run_command, ["systemctl", "is-active", name], 5)
-            output.append({"name": name, "type": "systemd", "status": result.stdout.strip() or "unknown"})
+    output = await systemd_service_states()
     if shutil.which("docker"):
         result = await asyncio.to_thread(
             run_command,
@@ -22960,34 +23230,38 @@ async def services() -> list[dict[str, Any]]:
 
 
 @app.get("/api/system/health-center", dependencies=secure)
-async def system_health_center() -> dict[str, Any]:
+async def system_health_center(refresh: bool = False) -> dict[str, Any]:
     sample, service_values, kernel_result, runtime_result = await asyncio.gather(
         asyncio.to_thread(collect_metrics),
-        services(),
+        systemd_service_states(),
         asyncio.to_thread(kernel_health_findings),
-        asyncio.to_thread(runtime_health_findings),
+        asyncio.to_thread(runtime_health_findings, refresh),
     )
+    systemd_available = bool(shutil.which("systemctl"))
     metric_findings, metric_ids = metric_health_findings(sample)
     model_findings, model_ids = model_run_health_findings()
     power_findings, power_ids = low_power_health_findings()
     kernel_findings, kernel_ids, kernel_status = kernel_result
     runtime_findings, runtime_ids, runtime_status = runtime_result
-    managed_findings, managed_ids = service_health_findings(service_values)
+    managed_findings, managed_ids = service_health_findings(service_values, systemd_available)
+    current_findings = [
+        *metric_findings, *model_findings, *power_findings,
+        *kernel_findings, *runtime_findings, *managed_findings,
+    ]
     sync_health_findings(
-        [
-            *metric_findings, *model_findings, *power_findings,
-            *kernel_findings, *runtime_findings, *managed_findings,
-        ],
+        current_findings,
         metric_ids | model_ids | power_ids | kernel_ids | runtime_ids | managed_ids,
     )
     identity = device_identity()
     gpu_observed = any(sample.get(key) is not None for key in (
         "gpu_utilization", "gpu_temperature", "gpu_power_watts", "gpu_clock_mhz",
     ))
+    python_state = runtime_status.get("python")
     collectors = [
         {"id": "metrics", "status": "ok", "detail": "Métricas del host observadas"},
         {
-            "id": "gpu", "status": "ok" if gpu_observed or not identity["is_dgx_spark"] else "error",
+            "id": "gpu",
+            "status": "ok" if gpu_observed else "error" if identity["is_dgx_spark"] else "not_applicable",
             "detail": "Telemetría GPU observada" if gpu_observed else "Telemetría GPU no disponible",
         },
         {
@@ -22995,20 +23269,23 @@ async def system_health_center() -> dict[str, Any]:
             "detail": "Journal del arranque actual accesible" if kernel_status["available"] else str(kernel_status.get("error") or "Journal no disponible"),
         },
         {
-            "id": "services", "status": "ok" if shutil.which("systemctl") else "not_applicable",
-            "detail": "Servicios systemd evaluados" if shutil.which("systemctl") else "systemd no disponible",
+            "id": "services", "status": "ok" if systemd_available else "not_applicable",
+            "detail": "Servicios systemd evaluados" if systemd_available else "systemd no disponible",
         },
         {
-            "id": "runtime", "status": "error" if runtime_status.get("python") == "error" else "ok",
-            "detail": "Entorno Python evaluado" if runtime_status.get("python") != "error" else "No se pudo evaluar Python",
+            "id": "runtime",
+            "status": "error" if python_state == "error" else "not_applicable" if python_state == "not_applicable" else "ok",
+            "detail": "No se pudo evaluar Python" if python_state == "error"
+            else "PyTorch no instalado" if python_state == "not_applicable" else "Entorno Python evaluado",
         },
     ]
-    return health_center_payload(kernel_status, runtime_status, collectors)
+    checks = health_checks(sample, current_findings, kernel_status, runtime_status, service_values, systemd_available)
+    return health_center_payload(kernel_status, runtime_status, collectors, checks)
 
 
 @app.get("/api/system/health-center/report", dependencies=secure)
 async def system_health_center_report() -> dict[str, Any]:
-    health_report = await system_health_center()
+    health_report = await system_health_center(refresh=True)
     identity = device_identity()
     os_info = os_information()
     report = {

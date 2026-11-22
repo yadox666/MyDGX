@@ -58,6 +58,7 @@ import {
   X,
   Zap,
   ChefHat,
+  MemoryStick,
 } from "lucide-react";
 import { CSSProperties, FocusEvent, FormEvent, ReactNode, createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -320,6 +321,17 @@ type HealthFinding = {
   occurrences: number;
 };
 
+type HealthCheckStatus = "ok" | "warning" | "critical" | "unknown" | "not_applicable";
+
+type HealthCheck = {
+  id: string;
+  kind: "gpu" | "memory" | "storage" | "kernel" | "runtime" | "services" | "inference";
+  label: string;
+  status: HealthCheckStatus;
+  value: string;
+  threshold: string;
+};
+
 type HealthCenter = {
   status: "healthy" | "warning" | "critical";
   diagnosis: {
@@ -328,6 +340,7 @@ type HealthCenter = {
   };
   summary: { critical: number; warning: number; info: number; resolved: number };
   findings: HealthFinding[];
+  checks: HealthCheck[];
   kernel: {
     available: boolean | null;
     scope: "current_boot";
@@ -8419,6 +8432,49 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
   );
 }
 
+function healthCheckStatusLabel(status: HealthCheckStatus) {
+  return status === "ok" ? t("Correcto")
+    : status === "warning" ? t("Advertencia")
+      : status === "critical" ? t("Crítico")
+        : status === "unknown" ? t("Sin datos")
+          : t("No aplica");
+}
+
+function worstHealthStatus(statuses: HealthCheckStatus[]): HealthCheckStatus {
+  return (["critical", "warning", "unknown", "ok"] as const).find((status) => statuses.includes(status)) ?? "not_applicable";
+}
+
+function HealthFindingCard({ finding }: { finding: HealthFinding }) {
+  const state = finding.active ? finding.severity : "resolved";
+  return <Card className={`health-finding ${state}`}>
+    <div className="health-finding-icon">
+      {!finding.active ? <CheckCircle2 /> : finding.severity === "critical" ? <TriangleAlert /> : finding.severity === "warning" ? <Info /> : <Activity />}
+    </div>
+    <div className="health-finding-copy">
+      <div className="health-finding-title">
+        <strong>{finding.title}</strong>
+        <span className="health-finding-badges">
+          <span className={`badge ${state}`}>{!finding.active ? t("Resuelto") : finding.severity === "critical" ? t("Crítico") : finding.severity === "warning" ? t("Advertencia") : t("Información")}</span>
+          <span className="badge">{finding.category}</span>
+          <span className={`badge confidence-${finding.confidence}`}>{t("Confianza {value}", { value: finding.confidence === "high" ? t("alta") : finding.confidence === "medium" ? t("media") : t("baja") })}</span>
+        </span>
+      </div>
+      <p>{finding.detail}</p>
+      <div className="health-finding-facts">
+        {finding.evidence && <div className="health-evidence"><Eye size={14} /><span><small>{t("Evidencia")}</small><code>{finding.evidence}</code></span></div>}
+        {finding.active && finding.remediation && <div className="health-remediation"><ShieldCheck size={14} /><span><small>{t("Acción recomendada")}</small><em>{finding.remediation}</em></span></div>}
+      </div>
+      <small className="health-meta">
+        {finding.active
+          ? t("Detectado {first} · visto por última vez {last}", { first: new Date(finding.first_seen).toLocaleString(locale), last: new Date(finding.last_seen).toLocaleString(locale) })
+          : t("Resuelto {time}", { time: new Date(finding.resolved_at || finding.last_seen).toLocaleString(locale) })}
+        {finding.occurrences > 1 && <> · {t("{count} apariciones", { count: finding.occurrences })}</>}
+        {finding.source_note && <><br />{t("Fuente")}: {finding.source_note}</>}
+      </small>
+    </div>
+  </Card>;
+}
+
 function HealthCenterPanel({ health, loading, onRefresh, notify }: {
   health: HealthCenter | null;
   loading: boolean;
@@ -8429,11 +8485,32 @@ function HealthCenterPanel({ health, loading, onRefresh, notify }: {
   if (!health) {
     return <Card className="health-loading"><RefreshCw className="spin" /><span>{t("Evaluando la salud del sistema…")}</span></Card>;
   }
-  const visible = health.findings.filter((finding) => (
-    filter === "active" ? finding.active
-      : filter === "resolved" ? !finding.active
-        : finding.active && finding.severity === filter
-  ));
+  const active = health.findings.filter((finding) => finding.active);
+  const visible = filter === "resolved"
+    ? health.findings.filter((finding) => !finding.active)
+    : filter === "active" ? active : active.filter((finding) => finding.severity === filter);
+  const checks = health.checks ?? [];
+  const measured = checks.filter((check) => check.status !== "not_applicable");
+  const passing = measured.filter((check) => check.status === "ok").length;
+  const unknown = measured.filter((check) => check.status === "unknown").length;
+  const collectors = health.diagnosis.collectors;
+  const working = collectors.filter((collector) => collector.status !== "error").length;
+  const groups: Array<{ kind: HealthCheck["kind"]; label: string; icon: ReactNode }> = [
+    { kind: "gpu", label: "GPU", icon: <Cpu size={15} /> },
+    { kind: "memory", label: t("Memoria unificada"), icon: <MemoryStick size={15} /> },
+    { kind: "storage", label: t("Almacenamiento"), icon: <HardDrive size={15} /> },
+    { kind: "kernel", label: t("Kernel · arranque actual"), icon: <Terminal size={15} /> },
+    { kind: "runtime", label: t("Runtimes"), icon: <Boxes size={15} /> },
+    { kind: "services", label: t("Servicios"), icon: <Server size={15} /> },
+    { kind: "inference", label: t("Inferencia"), icon: <Gauge size={15} /> },
+  ];
+  const collectorLabels: Record<string, string> = {
+    metrics: t("Métricas del host"),
+    gpu: t("Telemetría GPU"),
+    kernel: t("Journal del kernel"),
+    services: "systemd",
+    runtime: "Python / PyTorch",
+  };
   const statusTitle = health.status === "healthy"
     ? t("Sistema saludable")
     : health.status === "critical"
@@ -8453,6 +8530,7 @@ function HealthCenterPanel({ health, loading, onRefresh, notify }: {
       notify((error as Error).message, true);
     }
   }
+  const toggle = (value: typeof filter) => setFilter(filter === value ? "active" : value);
   return <div className="health-center">
     <Card className={`health-hero ${health.status}`}>
       <div className="health-hero-status">
@@ -8460,86 +8538,84 @@ function HealthCenterPanel({ health, loading, onRefresh, notify }: {
         <span>
           <small>{t("HEALTH CENTER")}</small>
           <strong>{statusTitle}</strong>
-          <em>{health.diagnosis.complete ? t("Diagnóstico completo") : t("Diagnóstico parcial")} · {t("Evaluado {time}", { time: new Date(health.evaluated_at).toLocaleString(locale) })}</em>
+          <em>
+            {measured.length > 0 && <>{t("{passing}/{total} comprobaciones correctas", { passing, total: measured.length })} · </>}
+            {health.diagnosis.complete ? t("Diagnóstico completo") : t("Diagnóstico parcial")}
+            {" · "}{t("Evaluado {time}", { time: new Date(health.evaluated_at).toLocaleTimeString(locale) })}
+          </em>
         </span>
       </div>
       <div className="health-summary">
-        <button className={filter === "critical" ? "selected critical" : "critical"} onClick={() => setFilter(filter === "critical" ? "active" : "critical")}>
+        <button className={`critical${filter === "critical" ? " selected" : ""}`} aria-pressed={filter === "critical"} onClick={() => toggle("critical")}>
           <strong>{health.summary.critical}</strong><small>{t("Críticos")}</small>
         </button>
-        <button className={filter === "warning" ? "selected warning" : "warning"} onClick={() => setFilter(filter === "warning" ? "active" : "warning")}>
-          <strong>{health.summary.warning}</strong><small>{t("Avisos")}</small>
+        <button className={`warning${filter === "warning" ? " selected" : ""}`} aria-pressed={filter === "warning"} onClick={() => toggle("warning")}>
+          <strong>{health.summary.warning}</strong><small>{t("Advertencias")}</small>
         </button>
-        <button className={filter === "resolved" ? "selected resolved" : "resolved"} onClick={() => setFilter(filter === "resolved" ? "active" : "resolved")}>
+        <button className={`resolved${filter === "resolved" ? " selected" : ""}`} aria-pressed={filter === "resolved"} onClick={() => toggle("resolved")}>
           <strong>{health.summary.resolved}</strong><small>{t("Resueltos · 7 días")}</small>
         </button>
       </div>
       <div className="health-hero-actions">
-        <button className="button secondary" onClick={() => void downloadReport()}><Download size={15} />{" "}{t("Informe redactado")}</button>
+        <button className="button secondary" onClick={() => void downloadReport()} title={t("JSON sin hostname, IP ni logs completos")}><Download size={15} />{" "}{t("Informe redactado")}</button>
         <button className="button secondary" disabled={loading} onClick={onRefresh}><RefreshCw className={loading ? "spin" : ""} size={15} />{" "}{t("Volver a evaluar")}</button>
       </div>
     </Card>
 
-    <div className="health-observers">
-      <Card>
-        <div className="card-kicker"><Terminal size={15} /> {t("Kernel · arranque actual")}</div>
-        <div className="health-observer-values">
-          <span><strong>{health.kernel.xid_count ?? "—"}</strong><small>NVIDIA Xid</small></span>
-          <span><strong>{health.kernel.oom_count ?? "—"}</strong><small>OOM killer</small></span>
-          <span><strong>{health.kernel.thermal_count ?? "—"}</strong><small>{t("Térmicos")}</small></span>
+    {filter === "active" && !active.length
+      ? <div className="health-clear">
+        <CheckCircle2 size={16} />
+        <span>
+          <strong>{t("No hay hallazgos activos.")}</strong>{" "}
+          {unknown
+            ? t("Las comprobaciones medidas están dentro de sus umbrales; {count} no tienen datos en este equipo.", { count: unknown })
+            : t("Todas las comprobaciones medidas están dentro de sus umbrales.")}
+        </span>
+        {health.summary.resolved > 0 && <button className="button secondary compact" onClick={() => setFilter("resolved")}>{t("Ver resueltos")}</button>}
+      </div>
+      : <section className="health-section">
+        <div className="health-section-heading">
+          <h3>{filter === "resolved" ? t("Hallazgos resueltos · 7 días") : filter === "critical" ? t("Hallazgos críticos") : filter === "warning" ? t("Advertencias activas") : t("Hallazgos activos")}</h3>
+          {filter !== "active" && <button className="button secondary compact" onClick={() => setFilter("active")}>{t("Ver todos los activos")}</button>}
         </div>
-        <small>{health.kernel.available ? t("Journal del kernel accesible") : health.kernel.error || t("Journal del kernel no disponible")}</small>
-      </Card>
-      <Card>
-        <div className="card-kicker"><Activity size={15} /> {t("Colectores")}</div>
-        <div className="health-collectors">
-          {health.diagnosis.collectors.map((collector) => <span key={collector.id}>
-            {collector.status === "ok" ? <CheckCircle2 /> : collector.status === "error" ? <TriangleAlert /> : <Info />}
-            <strong>{collector.id}</strong><small>{collector.detail}</small>
-          </span>)}
-        </div>
-      </Card>
-    </div>
+        {visible.length
+          ? <div className="health-findings">{visible.map((finding) => <HealthFindingCard finding={finding} key={finding.id} />)}</div>
+          : <p className="health-section-empty">{filter === "resolved" ? t("No se resolvió ninguna incidencia en los últimos siete días.") : t("No hay hallazgos con esta gravedad.")}</p>}
+      </section>}
 
-    <div className="health-findings-heading">
-      <div>
-        <h3>{filter === "resolved" ? t("Hallazgos resueltos") : t("Hallazgos activos")}</h3>
-        <p>{t("Cada hallazgo incluye la observación y una acción recomendada.")}</p>
+    {checks.length > 0 && <section className="health-section">
+      <div className="health-section-heading">
+        <h3>{t("Comprobaciones")}</h3>
+        <p>{t("Valores observados en esta evaluación frente a sus umbrales.")}</p>
       </div>
-      {filter !== "active" && <button className="button secondary compact" onClick={() => setFilter("active")}>{t("Ver todos los activos")}</button>}
-    </div>
-    {visible.length
-      ? <div className="health-findings">
-        {visible.map((finding) => <Card className={`health-finding ${finding.active ? finding.severity : "resolved"}`} key={finding.id}>
-          <div className="health-finding-icon">
-            {finding.active
-              ? finding.severity === "critical" ? <TriangleAlert /> : finding.severity === "warning" ? <Info /> : <Activity />
-              : <CheckCircle2 />}
-          </div>
-          <div className="health-finding-copy">
-            <div className="health-finding-title">
-              <strong>{finding.title}</strong>
-              <span className={`badge ${finding.active ? finding.severity : "completed"}`}>{finding.active ? finding.severity === "critical" ? t("Crítico") : finding.severity === "warning" ? t("Aviso") : t("Información") : t("Resuelto")}</span>
-              <span className={`badge confidence-${finding.confidence}`}>{t("Confianza {value}", { value: finding.confidence === "high" ? t("alta") : finding.confidence === "medium" ? t("media") : t("baja") })}</span>
-              <span className="badge">{finding.category}</span>
+      <div className="health-check-grid">
+        {groups.map((group) => {
+          const items = checks.filter((check) => check.kind === group.kind);
+          if (!items.length) return null;
+          const groupStatus = worstHealthStatus(items.map((item) => item.status));
+          return <Card className={`health-check-group ${groupStatus}`} key={group.kind}>
+            <div className="health-check-group-title">
+              {group.icon}<strong>{group.label}</strong>
+              <span className={`health-pill ${groupStatus}`}>{healthCheckStatusLabel(groupStatus)}</span>
             </div>
-            <p>{finding.detail}</p>
-            {finding.evidence && <div className="health-evidence"><Eye size={14} /><span><small>{t("Evidencia")}</small><code>{finding.evidence}</code></span></div>}
-            {finding.active && finding.remediation && <div className="health-remediation"><ShieldCheck size={14} /><span><small>{t("Acción recomendada")}</small><em>{finding.remediation}</em></span></div>}
-            {finding.source_note && <small className="health-source">{t("Fuente")}: {finding.source_note}</small>}
-            <small className="health-dates">
-              {finding.active
-                ? t("Detectado {first} · visto por última vez {last}", { first: new Date(finding.first_seen).toLocaleString(locale), last: new Date(finding.last_seen).toLocaleString(locale) })
-                : t("Resuelto {time}", { time: new Date(finding.resolved_at || finding.last_seen).toLocaleString(locale) })}
-            </small>
-          </div>
-        </Card>)}
+            {items.map((check) => <div className={`health-check ${check.status}`} key={check.id} title={healthCheckStatusLabel(check.status)}>
+              <i aria-hidden="true" />
+              <span><strong>{check.label}</strong>{check.threshold && <small>{check.threshold}</small>}</span>
+              <code>{check.value}</code>
+            </div>)}
+          </Card>;
+        })}
       </div>
-      : <Empty
-        icon={<CheckCircle2 />}
-        title={filter === "resolved" ? t("No hay resoluciones recientes") : t("No hay hallazgos activos")}
-        text={filter === "resolved" ? t("Las incidencias resueltas se conservan aquí durante siete días.") : t("Las comprobaciones observadas están dentro de sus umbrales.")}
-      />}
+    </section>}
+
+    <div className="health-coverage">
+      <span className="health-coverage-title"><Activity size={14} />{t("Cobertura {working}/{total}", { working, total: collectors.length })}</span>
+      {collectors.map((collector) => <span className={`health-chip ${collector.status}`} key={collector.id} title={collector.detail}>
+        {collector.status === "ok" ? <CheckCircle2 size={13} /> : collector.status === "error" ? <TriangleAlert size={13} /> : <CircleHelp size={13} />}
+        {collectorLabels[collector.id] ?? collector.id}
+        {collector.status !== "ok" && <small>{collector.detail}</small>}
+      </span>)}
+    </div>
   </div>;
 }
 
@@ -8585,14 +8661,23 @@ function SystemView({ config, jobs, overview, notify, onOpenLab }: { config: Con
       .catch((error) => notify(error.message, true));
     loadFirmware();
   }, [notify, loadFirmware]);
+  const fetchHealth = useCallback((refresh: boolean, silent: boolean) => (
+    api<HealthCenter>(`/api/system/health-center${refresh ? "?refresh=true" : ""}`)
+      .then(setHealthCenter)
+      .catch((error) => { if (!silent) notify(error.message, true); })
+      .finally(() => setHealthLoading(false))
+  ), [notify]);
   const loadHealth = useCallback(() => {
     setHealthLoading(true);
-    api<HealthCenter>("/api/system/health-center")
-      .then(setHealthCenter)
-      .catch((error) => notify(error.message, true))
-      .finally(() => setHealthLoading(false));
-  }, [notify]);
+    void fetchHealth(true, false);
+  }, [fetchHealth]);
   useEffect(load, [load]);
+  useEffect(() => { void fetchHealth(false, true); }, [fetchHealth]);
+  useEffect(() => {
+    if (systemTab !== "health") return;
+    const timer = window.setInterval(() => { void fetchHealth(false, true); }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [systemTab, fetchHealth]);
   const maintenanceStatus = jobs
     .filter((job) => ["system.update", "system.repair", "system.firmware"].includes(job.kind))
     .map((job) => `${job.id}:${job.status}`)
@@ -8672,9 +8757,9 @@ function SystemView({ config, jobs, overview, notify, onOpenLab }: { config: Con
       />
       <div className="tabs system-tabs">
         <button className={systemTab === "overview" ? "active" : ""} onClick={() => setSystemTab("overview")}><Server size={14} />{" "}{t("Plataforma")}</button>
-        <button className={systemTab === "health" ? "active" : ""} onClick={() => { setSystemTab("health"); if (!healthCenter) loadHealth(); }}>
+        <button className={systemTab === "health" ? "active" : ""} onClick={() => setSystemTab("health")}>
           <Activity size={14} />{" "}{t("Health Center")}
-          {healthCenter && (healthCenter.summary.critical + healthCenter.summary.warning) > 0 && <b className="tab-count warning">{healthCenter.summary.critical + healthCenter.summary.warning}</b>}
+          {healthCenter && (healthCenter.summary.critical + healthCenter.summary.warning) > 0 && <b className={`tab-count ${healthCenter.summary.critical ? "critical" : "warning"}`}>{healthCenter.summary.critical + healthCenter.summary.warning}</b>}
         </button>
       </div>
       {systemTab === "health"

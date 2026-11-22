@@ -415,15 +415,27 @@ abrirla añade servicios, compatibilidad de PyTorch con CUDA/SM121, NVIDIA
 Docker/CDI, errores de reserva del KV cache de vLLM y eventos NVIDIA Xid, OOM y
 térmicos del journal del kernel del arranque actual.
 
-La detección de baja potencia exige al menos tres muestras consecutivas con
-utilización alta, potencia baja y reloj ≤800 MHz. Los Xid de hardware,
-driver o firmware son críticos; los normalmente causados por una aplicación
-son avisos. Los OOM del host se distinguen de límites de memoria de un
-contenedor.
+Bajo los hallazgos, **Comprobaciones** agrupa por GPU, memoria,
+almacenamiento, kernel, runtimes, servicios e inferencia el valor observado de
+cada regla junto a su umbral, así que un sistema sano también muestra lo que se
+ha medido. La memoria avisa con MemAvailable por debajo del 10 %, PSI some ≥10 %,
+PSI full ≥1 % o más de 8 GiB de swap. Pasa a crítico con menos de 4 GiB
+disponibles o PSI full ≥5 %. Así, un modelo grande cargado en los 128 GB
+compartidos no se marca como problema.
+
+La detección de baja potencia exige al menos tres muestras consecutivas de los
+últimos cinco minutos con utilización alta, potencia baja y reloj ≤800 MHz. Los
+Xid de hardware, driver o firmware son críticos; los normalmente causados por
+una aplicación son advertencias. Los OOM del host se distinguen de límites de
+memoria de un contenedor. Los fallos de arranque de modelos cuentan durante 24
+horas.
 
 Cada hallazgo muestra severidad, confianza, evidencia, fuente y una acción
 recomendada. Si un colector obligatorio falla, el encabezado indica
-*Diagnóstico parcial* sin convertir el dato ausente en un estado saludable.
+*Diagnóstico parcial* y la fila de cobertura señala cuál; los hallazgos que
+dependen de él se conservan en lugar de darse por resueltos. El panel se
+reevalúa cada minuto mientras está abierto; el sondeo de PyTorch se reutiliza
+durante diez minutos salvo al pulsar *Volver a evaluar*.
 Las apariciones, cambios de severidad y resoluciones se registran en *Logs*; las
 resoluciones permanecen visibles siete días. Una lectura que el equipo no puede
 obtener se muestra como desconocida, nunca como cero. Leer el journal depende de

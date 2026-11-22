@@ -415,14 +415,24 @@ checks services, PyTorch CUDA/SM121 compatibility, NVIDIA Docker/CDI, vLLM KV
 cache allocation errors, and NVIDIA Xid, OOM, and thermal events from the
 current-boot kernel journal.
 
-Low-power detection requires at least three consecutive samples with high
-utilization, low power, and a clock at or below 800 MHz. Hardware, driver, or
-firmware Xids are critical; those normally caused by an application are
-warnings. Host OOM is distinguished from a container memory limit.
+Below the findings, **Checks** groups the observed value of every rule next to
+its threshold by GPU, memory, storage, kernel, runtimes, services, and
+inference, so a healthy system still shows what was measured. Memory warns when
+MemAvailable is below 10 %, PSI some ≥10 %, PSI full ≥1 %, or swap exceeds
+8 GiB. It becomes critical below 4 GiB available or at PSI full ≥5 %. A large
+model loaded into the shared 128 GB is therefore not flagged as a problem.
+
+Low-power detection requires at least three consecutive samples from the last
+five minutes with high utilization, low power, and a clock at or below 800 MHz.
+Hardware, driver, or firmware Xids are critical; those normally caused by an
+application are warnings. Host OOM is distinguished from a container memory
+limit. Model launch failures count for 24 hours.
 
 Each finding shows severity, confidence, evidence, source, and a recommended
-action. If a required collector fails, the header says *Partial diagnosis*
-without turning an absent reading into a healthy state.
+action. If a required collector fails, the header says *Partial diagnosis* and
+the coverage row shows which one; findings that depend on it are kept instead of
+being marked resolved. The panel re-evaluates every minute while open; the
+PyTorch probe is reused for ten minutes unless you press *Evaluate again*.
 Appearances, severity changes, and resolutions are recorded in *Logs*;
 resolutions remain visible for seven days. A reading the machine cannot obtain
 is shown as unknown, never as zero. Reading the journal depends on the

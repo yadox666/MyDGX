@@ -3276,13 +3276,25 @@ RECIPE_ONLY_KEYS = ("id", "description", "memory_gib", "version", "changelog", "
 RECIPE_CATEGORIES = ("text", "code", "vision", "embeddings", "image", "video", "audio", "privacy")
 
 
-def local_recipes() -> list[dict[str, Any]]:
+def local_recipe_catalog() -> dict[str, Any]:
     try:
         catalog = json.loads(RECIPES_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return []
-    recipes = catalog.get("recipes") if isinstance(catalog, dict) and catalog.get("version") == 1 else None
-    return [item for item in recipes or [] if isinstance(item, dict) and item.get("id")]
+        return {}
+    return catalog if isinstance(catalog, dict) and catalog.get("version") == 1 else {}
+
+
+def local_recipes() -> list[dict[str, Any]]:
+    recipes = local_recipe_catalog().get("recipes")
+    return [item for item in recipes or [] if isinstance(item, dict) and item.get("id")] if isinstance(recipes, list) else []
+
+
+def retired_recipe_ids() -> set[str]:
+    """Recipes the catalog withdrew; a recipe still published is never treated as retired."""
+    retired = local_recipe_catalog().get("retired")
+    if not isinstance(retired, list):
+        return set()
+    return {str(item) for item in retired if isinstance(item, str) and item} - {str(item["id"]) for item in local_recipes()}
 
 
 def default_catalog_profile_ids() -> set[str]:
@@ -12673,6 +12685,7 @@ def seed_default_profiles() -> None:
             connection.execute(statement, profile_values(profile_id, payload, now))
         connection.commit()
     sync_installed_recipes(local_recipes(), install_missing=True)
+    retire_recipe_profiles(retired_recipe_ids())
 
 
 def insert_recipe_profile(profile_id: str, recipe: dict[str, Any], payload: ProfilePayload | None = None) -> ProfilePayload:
@@ -12723,6 +12736,25 @@ def sync_installed_recipes(recipes: list[dict[str, Any]], install_missing: bool 
             detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
             db.log("warning", "profile", "profile.recipe.skipped", f"{recipe_id}: {detail}", entity_type="profile", entity_id=recipe_id)
     return updated
+
+
+def retire_recipe_profiles(recipe_ids: set[str]) -> list[str]:
+    """Remove idle, unedited profiles of withdrawn recipes; an edited one stays as a plain profile. Model files are kept."""
+    removed: list[str] = []
+    if not recipe_ids:
+        return removed
+    for row in db.rows("SELECT id,name,recipe_id,recipe_modified FROM profiles WHERE recipe_id!=''"):
+        if row["recipe_id"] not in recipe_ids or row["id"] in _runtime_profile_ids:
+            continue
+        if row["recipe_modified"]:
+            db.execute("UPDATE profiles SET recipe_id='',recipe_version=0,recipe_modified=0 WHERE id=?", (row["id"],))
+            db.audit("profile.recipe.unlink", row["name"], True)
+            continue
+        remove_desired_profile_id(row["id"])
+        db.execute("DELETE FROM profiles WHERE id=?", (row["id"],))
+        db.audit("profile.recipe.retire", row["name"], True)
+        removed.append(row["id"])
+    return removed
 
 
 @app.get("/api/profiles", dependencies=secure)

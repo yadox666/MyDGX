@@ -7117,14 +7117,18 @@ class ProfileApiTests(unittest.TestCase):
             rows = db.rows(
                 "SELECT id,name FROM profiles WHERE id NOT LIKE 'artifex-%' ORDER BY id"
             )
-            self.assertEqual(len(rows), 12)
+            self.assertEqual(len(rows), 11)
             self.assertIn("TTS Lab · Voces MLX", {row["name"] for row in rows})
             image = db.rows(
-                "SELECT engine,task,comfyui_json FROM profiles WHERE name=?",
-                ("RECIPE · Image · Qwen-Image 2.1 Turbo",),
+                "SELECT engine,task,comfyui_json,additional_models_json FROM profiles WHERE name=?",
+                ("RECIPE · Image · High Quality",),
             )[0]
             self.assertEqual((image["engine"], image["task"]), ("comfyui", "image-generation"))
-            self.assertEqual(json.loads(image["comfyui_json"])["workflow"], "qwen-image-2.1-turbo-api.json")
+            self.assertEqual(json.loads(image["comfyui_json"])["workflow"], "flux3-klein-api.json")
+            self.assertEqual(
+                [model["comfyui"]["workflow"] for model in json.loads(image["additional_models_json"])],
+                ["qwen-image-2.1-turbo-api.json"],
+            )
             recipe = db.rows(
                 "SELECT model_file,model_repo,spec_type,draft_filename,additional_models_json FROM profiles WHERE name=?",
                 ("RECIPE · Cybersecurity",),
@@ -7478,7 +7482,8 @@ class ProfileApiTests(unittest.TestCase):
 
 
 class ComfyUIRecipeTests(unittest.TestCase):
-    RECIPE_ID = "7b3f0e52-2c41-4d8e-9a6f-5e1c9a2b7d40"
+    RECIPE_ID = "c4e9a1d7-5b62-4f3a-8e0d-2a7b6f9c1e83"
+    RETIRED_QWEN_RECIPE_ID = "7b3f0e52-2c41-4d8e-9a6f-5e1c9a2b7d40"
 
     def image_recipe(self) -> dict[str, Any]:
         return next(item for item in main_module.local_recipes() if item["id"] == self.RECIPE_ID)
@@ -7502,7 +7507,7 @@ class ComfyUIRecipeTests(unittest.TestCase):
         self.assertEqual(unchanged["6"]["inputs"]["width"], 1024)
 
     def test_klein_recipe_keeps_its_fixed_sampler_steps(self) -> None:
-        recipe = next(item for item in main_module.local_recipes() if item["name"] == "RECIPE · Image · FLUX 3 Klein")
+        recipe = self.image_recipe()
         main_module.validate_model(main_module.recipe_profile_payload(recipe))
         workflow = main_module.comfyui_workflow(
             "image-generation", "a fox", seed=9, width=768, height=1024, steps=4,
@@ -7566,17 +7571,77 @@ class ComfyUIRecipeTests(unittest.TestCase):
                 db.initialize()
                 main_module.insert_recipe_profile(self.RECIPE_ID, self.image_recipe())
                 row = db.rows("SELECT * FROM profiles WHERE id=?", (self.RECIPE_ID,))[0]
-                primary = main_module.profile_models(row)[0]
-                self.assertEqual(primary["comfyui"]["workflow"], "qwen-image-2.1-turbo-api.json")
+                primary, qwen = main_module.profile_models(row)
+                self.assertEqual(primary["comfyui"]["workflow"], "flux3-klein-api.json")
                 self.assertEqual(len(primary["comfyui"]["files"]), 3)
-                copy = main_module.profile_payload_from_row(row, "Qwen copia")
-                self.assertEqual(copy.comfyui, main_module.recipe_profile_payload(self.image_recipe()).comfyui)
+                self.assertEqual(qwen["comfyui"]["workflow"], "qwen-image-2.1-turbo-api.json")
+                copy = main_module.profile_payload_from_row(row, "Imagen copia")
+                published = main_module.recipe_profile_payload(self.image_recipe())
+                self.assertEqual(copy.comfyui, published.comfyui)
+                self.assertEqual(copy.additional_models[0].comfyui, published.additional_models[0].comfyui)
                 with patch.object(main_module, "ollama_payload", AsyncMock(return_value={"models": []})):
                     listed = asyncio.run(main_module.profiles())["profiles"]
                 profile = next(item for item in listed if item["id"] == self.RECIPE_ID)
                 self.assertNotIn("comfyui_json", profile)
-                self.assertEqual(profile["comfyui"]["workflow"], "qwen-image-2.1-turbo-api.json")
+                self.assertEqual(profile["comfyui"]["workflow"], "flux3-klein-api.json")
                 self.assertFalse(profile["downloaded"])
+        finally:
+            db.path = original_path
+
+    def test_high_quality_profile_serves_every_image_model_with_its_own_workflow(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "hq.db"
+                db.initialize()
+                main_module.insert_recipe_profile(self.RECIPE_ID, self.image_recipe())
+                row = db.rows("SELECT * FROM profiles WHERE id=?", (self.RECIPE_ID,))[0]
+                models = main_module.profile_models(row)
+                self.assertEqual([model["model_alias"] for model in models], ["flux3-klein", "qwen-image-turbo"])
+                self.assertTrue(all(supports_endpoint(model, "/v1/images/generations") for model in models))
+                with patch.object(main_module, "managed_comfyui_source", return_value=Path(directory) / "ComfyUI"):
+                    self.assertEqual(
+                        [len(main_module.recipe_missing_files(model)) for model in models], [3, 3],
+                    )
+                generate = AsyncMock(return_value={"data_base64": "aW1n"})
+                with (
+                    patch("backend.main.running_profiles", return_value=[]),
+                    patch("backend.main.active_profile", return_value=row),
+                    patch("backend.main.managed_comfyui_enabled", return_value=False),
+                    patch.object(main_module, "execute_managed_comfyui", generate),
+                ):
+                    for alias in ("flux3-klein", "qwen-image-turbo"):
+                        asyncio.run(main_module.execute_multimodal_request(
+                            main_module.MultimodalRunRequest(model=alias, task="image-generation", prompt="a fox"),
+                        ))
+                self.assertEqual(
+                    [call.kwargs["spec"]["workflow"] for call in generate.call_args_list],
+                    ["flux3-klein-api.json", "qwen-image-2.1-turbo-api.json"],
+                )
+        finally:
+            db.path = original_path
+
+    def test_retired_recipe_profiles_are_removed_unless_edited_or_running(self) -> None:
+        self.assertEqual(main_module.retired_recipe_ids(), {self.RETIRED_QWEN_RECIPE_ID})
+        self.assertNotIn(self.RETIRED_QWEN_RECIPE_ID, {item["id"] for item in main_module.local_recipes()})
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "retire.db"
+                db.initialize()
+                recipe = self.image_recipe()
+                for profile_id in ("idle", "edited", "running"):
+                    main_module.insert_recipe_profile(
+                        profile_id, {**recipe, "id": self.RETIRED_QWEN_RECIPE_ID, "name": f"RECIPE · Image · {profile_id}"},
+                    )
+                db.execute("UPDATE profiles SET recipe_modified=1 WHERE id='edited'")
+                with patch.object(main_module, "_runtime_profile_ids", {"running"}):
+                    removed = main_module.retire_recipe_profiles(main_module.retired_recipe_ids())
+                self.assertEqual(removed, ["idle"])
+                rows = {row["id"]: row for row in db.rows("SELECT id,recipe_id,recipe_modified FROM profiles")}
+                self.assertNotIn("idle", rows)
+                self.assertEqual((rows["edited"]["recipe_id"], rows["edited"]["recipe_modified"]), ("", 0))
+                self.assertEqual(rows["running"]["recipe_id"], self.RETIRED_QWEN_RECIPE_ID)
         finally:
             db.path = original_path
 

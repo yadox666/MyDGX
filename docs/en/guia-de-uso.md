@@ -284,15 +284,25 @@ when the local copy carries a newer version. On an edited recipe, *Update to
 vN* asks for confirmation: it replaces your model and parameter changes, and
 keeps the start app unless the recipe sets another.
 
+When the catalog withdraws a recipe (the `retired` list), MyDGX deletes its
+profile at startup if it is neither loaded nor edited; downloaded models are
+kept. A withdrawn recipe you edited stays as a plain profile.
+
 New installations get the recipes from the local copy at startup. Change the
 catalog URL with `MYDGX_RECIPES_URL`; only `raw.githubusercontent.com` is
 accepted.
 
 #### Image and video recipes
 
-A recipe can also bring a ComfyUI model, such as *RECIPE · Image · Qwen-Image
-2.1 Turbo*. Its model uses the `comfyui` engine and protocol and carries a
-`comfyui` block:
+*RECIPE · Image · High Quality* brings every image model into one profile. Once
+loaded, the gateway and the Lab offer `flux3-klein` (FLUX 3 Image Klein, the
+most versatile) and `qwen-image-turbo` (Qwen-Image 2.1 Turbo, better at text
+inside the image). Pick the model with the `model` field of
+`POST /v1/images/generations`. ComfyUI runs one workflow at a time, so requests
+to both models are served in turn.
+
+Each ComfyUI model in a recipe uses the `comfyui` engine and protocol and
+carries a `comfyui` block:
 
 - `workflow`: a workflow in ComfyUI API format, in `config/comfyui`. MyDGX
   writes the prompt, seed, size and steps into the nodes titled `MyDGX Prompt`,

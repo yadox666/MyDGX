@@ -285,15 +285,25 @@ versión más nueva. En una receta editada, *Actualizar a vN* pide confirmación
 sustituye tus cambios de modelos y parámetros, y conserva la app de arranque si
 la receta no define otra.
 
+Cuando el catálogo retira una receta (lista `retired`), MyDGX borra al arrancar
+su perfil si no está cargado ni editado; los modelos descargados se conservan.
+Una receta retirada que hayas editado se queda como perfil normal.
+
 Las instalaciones nuevas reciben las recetas de la copia local al arrancar.
 La URL del catálogo se cambia con `MYDGX_RECIPES_URL` y solo se acepta
 `raw.githubusercontent.com`.
 
 #### Recetas de imagen y vídeo
 
-Una receta también puede traer un modelo de ComfyUI, como *RECIPE · Image ·
-Qwen-Image 2.1 Turbo*. Su modelo usa el motor y el protocolo `comfyui` y lleva
-un bloque `comfyui`:
+*RECIPE · Image · High Quality* reúne todos los modelos de imagen en un solo
+perfil. Al cargarlo, el gateway y el Laboratorio ofrecen `flux3-klein` (FLUX 3
+Image Klein, el más versátil) y `qwen-image-turbo` (Qwen-Image 2.1 Turbo, mejor
+con texto dentro de la imagen). Se elige el modelo con el campo `model` de
+`POST /v1/images/generations`. ComfyUI ejecuta un workflow cada vez, así que
+las peticiones a los dos modelos se atienden por turnos.
+
+Cada modelo de ComfyUI de una receta usa el motor y el protocolo `comfyui` y
+lleva un bloque `comfyui`:
 
 - `workflow`: un workflow en formato API de ComfyUI, en `config/comfyui`.
   MyDGX escribe el prompt, la semilla, el tamaño y los pasos en los nodos

@@ -1160,7 +1160,6 @@
   "El origen de las recetas debe ser raw.githubusercontent.com",
   "El catálogo de recetas supera 1 MB",
   "{0}: GitHub no disponible",
-  "Las recetas son de solo lectura; duplícala para editarla",
   "Los nombres que empiezan por RECIPE están reservados para las recetas",
   "La receta ya está instalada",
   "La receta no está instalada",

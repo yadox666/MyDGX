@@ -266,10 +266,13 @@ Una receta es un perfil medido en un DGX Spark y publicado en GitHub, en
 - *Duplicar como perfil* crea un perfil normal con el nombre que elijas, que
   puedes editar a tu gusto.
 
-Una receta instalada es de solo lectura: puedes encenderla, apagarla, marcarla
-como favorita o predeterminada y borrarla, pero no editarla ni añadirle
-modelos. Para cambiarla, usa *Duplicar* y edita la copia. Los nombres que
-empiezan por `RECIPE` quedan reservados para las recetas.
+Una receta instalada se edita como cualquier perfil: puedes cambiar sus
+parámetros, añadirle modelos o elegir la app que arranca con ella (por ejemplo,
+ARTIFEX). Al guardar, la tarjeta muestra *Receta · vN · editada* y la receta
+deja de actualizarse sola, para no perder tus cambios. Puede conservar su
+nombre `RECIPE · …`, pero los demás nombres que empiezan por `RECIPE` quedan
+reservados para las recetas. Si prefieres un perfil sin vínculo con la receta,
+usa *Duplicar*.
 
 Cada receta tiene un número de versión (`v1`, `v2`…) y una nota de cambios.
 Si publicamos una versión nueva, la tarjeta del perfil y *Buscar recetas*
@@ -277,8 +280,10 @@ ofrecen *Actualizar a vN*. La actualización conserva el favorito y el
 predeterminado, no vuelve a descargar los modelos que ya tienes y exige apagar
 antes el perfil. Si se publica una versión anterior para retirar una con
 errores, *Buscar recetas* permite volver a ella. Al arrancar, MyDGX actualiza
-las recetas que no estén cargadas cuando la copia local trae una versión más
-nueva.
+las recetas que no estén cargadas ni editadas cuando la copia local trae una
+versión más nueva. En una receta editada, *Actualizar a vN* pide confirmación:
+sustituye tus cambios de modelos y parámetros, y conserva la app de arranque si
+la receta no define otra.
 
 Las instalaciones nuevas reciben las recetas de la copia local al arrancar.
 La URL del catálogo se cambia con `MYDGX_RECIPES_URL` y solo se acepta

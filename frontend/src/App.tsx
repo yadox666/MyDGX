@@ -1268,7 +1268,7 @@ function RecipesBrowser({ notify, onInstalled, onClose, activeDownloads = 0 }: {
     }
   }
 
-  const intro = t("Perfiles medidos en un DGX Spark y publicados en GitHub. Una receta instalada es de solo lectura y se actualiza cuando publicamos una versión nueva; para cambiarla, duplícala como perfil normal. Los modelos se descargan ahora o más tarde desde la tarjeta del perfil.");
+  const intro = t("Perfiles medidos en un DGX Spark y publicados en GitHub. Una receta instalada se actualiza sola cuando publicamos una versión nueva, salvo que la hayas editado: entonces conserva tus cambios y la actualización queda a tu elección. Los modelos se descargan ahora o más tarde desde la tarjeta del perfil.");
   const source = catalog && (catalog.source === "github"
     ? <p className="recipes-source">{t("Catálogo de GitHub · leído a las {time}", { time: new Date(catalog.fetched_at).toLocaleTimeString(locale) })}</p>
     : <div className="profile-warning"><TriangleAlert size={15} />{t("No se pudo leer GitHub ({error}); se muestra la copia incluida en esta versión de MyDGX.", { error: catalog.error })}</div>);
@@ -1414,7 +1414,7 @@ function AddToProfileDialog({ request, notify, onClose }: {
   useEffect(() => {
     api<{ profiles: Profile[] }>("/api/profiles")
       .then((data) => {
-        const editable = data.profiles.filter((profile) => !profile.read_only && !profile.recipe_id);
+        const editable = data.profiles.filter((profile) => !profile.read_only);
         setProfiles(editable);
         setSelected((editable.find((profile) => !contains(profile)) ?? editable[0])?.id ?? "");
       })
@@ -2315,6 +2315,7 @@ type Profile = ModelConfig & {
   recipe_id?: string;
   recipe_version?: number;
   recipe_update?: number;
+  recipe_modified?: boolean;
   memory_plan: {
     required_mb: number;
     reserve_mb: number;
@@ -5920,7 +5921,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
           <div className="profile-badges">
             {profile.source.startsWith("ARTIFEX") ? <span className="badge">ARTIFEX</span> : null}
             {profile.read_only ? <span className="badge" title={profile.id === QUICK_PROFILE_ID ? t("Modelos encendidos desde Modelos; no se restaura al reiniciar") : t("Modelos marcados como Default en Modelos; arranca siempre con MyDGX")}>{t("Solo lectura")}</span> : null}
-            {profile.recipe_id ? <span className="badge" title={t("Receta de solo lectura; duplícala para editarla")}>{t("Solo lectura")} · v{profile.recipe_version}</span> : null}
+            {profile.recipe_id ? <span className="badge" title={profile.recipe_modified ? t("Receta editada: las versiones nuevas no se aplican solas para no perder tus cambios") : t("Receta: se actualiza sola mientras no la edites")}>{t("Receta")} · v{profile.recipe_version}{profile.recipe_modified ? ` · ${t("editada")}` : ""}</span> : null}
             {profile.active ? <span className="badge live">{t("Predeterminado")}</span> : null}
             {running ? <span className="badge running">{t("Cargado")}</span> : null}
           </div>
@@ -6039,14 +6040,15 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             className="primary"
             disabled={running}
             title={running ? t("Detén el perfil antes de actualizar la receta") : undefined}
-            onClick={() => void action(`/api/profiles/recipes/${encodeURIComponent(profile.recipe_id || "")}/update`, t("{name} actualizada a v{version}", { name: profile.name.replace(RECIPE_PREFIX, ""), version: profile.recipe_update }))}
+            onClick={() => {
+              if (profile.recipe_modified && !window.confirm(t("Actualizar {name} a v{version} sustituye tus cambios locales de modelos y parámetros; la app de arranque se conserva si la receta no define otra. ¿Continuar?", { name: profile.name.replace(RECIPE_PREFIX, ""), version: profile.recipe_update ?? 0 }))) return;
+              void action(`/api/profiles/recipes/${encodeURIComponent(profile.recipe_id || "")}/update`, t("{name} actualizada a v{version}", { name: profile.name.replace(RECIPE_PREFIX, ""), version: profile.recipe_update }));
+            }}
           ><RefreshCw size={14} />{" "}{t("Actualizar a v{version}", { version: profile.recipe_update })}</button> : null}
           {profile.read_only
             ? <small className="profile-readonly-hint">{t("Se gestiona desde Modelos")}</small>
             : <>
-              {profile.recipe_id
-                ? <small className="profile-readonly-hint">{t("Receta: duplícala para editarla")}</small>
-                : <button onClick={() => editProfile(profile)}><Pencil size={14} />{" "}{t("Editar")}</button>}
+              <button onClick={() => editProfile(profile)}><Pencil size={14} />{" "}{t("Editar")}</button>
               <button className="danger" onClick={() => remove(profile)}><Trash2 size={14} /></button>
             </>}
         </div>

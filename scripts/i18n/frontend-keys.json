@@ -1850,14 +1850,14 @@
   "{name} instalado",
   "Instalada v{version}",
   "{name} actualizada a v{version}",
-  "Perfiles medidos en un DGX Spark y publicados en GitHub. Una receta instalada es de solo lectura y se actualiza cuando publicamos una versión nueva; para cambiarla, duplícala como perfil normal. Los modelos se descargan ahora o más tarde desde la tarjeta del perfil.",
+  "Perfiles medidos en un DGX Spark y publicados en GitHub. Una receta instalada se actualiza sola cuando publicamos una versión nueva, salvo que la hayas editado: entonces conserva tus cambios y la actualización queda a tu elección. Los modelos se descargan ahora o más tarde desde la tarjeta del perfil.",
   "Duplicar como perfil",
   "Actualizar a v{version}",
   "Volver a v{version}",
   "Ya hay un perfil con este nombre",
-  "Receta de solo lectura; duplícala para editarla",
+  "Receta editada: las versiones nuevas no se aplican solas para no perder tus cambios",
   "Detén el perfil antes de actualizar la receta",
-  "Receta: duplícala para editarla",
+  "Receta: se actualiza sola mientras no la edites",
   "{count} descarga(s) en cola para {name}",
   "Los modelos de {name} ya están descargados",
   "Perfiles listos para tu DGX Spark",
@@ -1940,5 +1940,8 @@
   "{count} apariciones",
   "{passing}/{total} comprobaciones correctas",
   "Abrir Health Center",
-  "Sano"
+  "Sano",
+  "Receta",
+  "editada",
+  "Actualizar {name} a v{version} sustituye tus cambios locales de modelos y parámetros; la app de arranque se conserva si la receta no define otra. ¿Continuar?"
 ]

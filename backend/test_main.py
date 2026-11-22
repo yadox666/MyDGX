@@ -6987,7 +6987,7 @@ class ProfileApiTests(unittest.TestCase):
         finally:
             db.path = original_path
 
-    def test_recipes_install_read_only_copy_as_editable_profiles_and_upgrade_by_version(self) -> None:
+    def test_recipes_install_edit_copy_and_upgrade_by_version(self) -> None:
         from fastapi import BackgroundTasks
 
         local = main_module.local_recipes()
@@ -7019,14 +7019,11 @@ class ProfileApiTests(unittest.TestCase):
                     asyncio.run(main_module.install_profile_recipe(recipe["id"], payload, BackgroundTasks()))
                 self.assertEqual(again.exception.status_code, 409)
 
-                with self.assertRaises(HTTPException) as edit:
-                    asyncio.run(main_module.update_profile(recipe["id"], main_module.recipe_profile_payload(recipe)))
-                self.assertEqual(edit.exception.status_code, 403)
-                with self.assertRaises(HTTPException) as add:
-                    asyncio.run(main_module.add_model_to_profile(
-                        recipe["id"], main_module.ProfileAddModelPayload(source="ollama", model_id="x"),
+                with self.assertRaises(HTTPException) as renamed:
+                    asyncio.run(main_module.update_profile(
+                        recipe["id"], main_module.recipe_profile_payload(recipe, "RECIPE · Otra"),
                     ))
-                self.assertEqual(add.exception.status_code, 403)
+                self.assertEqual(renamed.exception.status_code, 400)
                 with self.assertRaises(HTTPException) as reserved:
                     asyncio.run(main_module.create_profile(main_module.recipe_profile_payload(recipe, "RECIPE · Falsa")))
                 self.assertEqual(reserved.exception.status_code, 400)
@@ -7089,6 +7086,21 @@ class ProfileApiTests(unittest.TestCase):
                     db.rows("SELECT context_size FROM profiles WHERE id=?", (recipe["id"],))[0]["context_size"],
                     recipe["context_size"],
                 )
+
+                edited = main_module.recipe_profile_payload(recipe).model_copy(update={"app": "artifex", "context_size": 32768})
+                with patch.object(main_module, "profile_app_dir", return_value=Path(directory)):
+                    self.assertEqual(asyncio.run(main_module.update_profile(recipe["id"], edited)), {"updated": True})
+                listed = next(p for p in asyncio.run(main_module.profiles())["profiles"] if p["id"] == recipe["id"])
+                self.assertTrue(listed["recipe_modified"])
+                self.assertEqual((listed["app"], listed["name"]), ("artifex", recipe["name"]))
+                self.assertEqual(main_module.sync_installed_recipes([fixed]), [])
+                self.assertEqual(
+                    db.rows("SELECT context_size FROM profiles WHERE id=?", (recipe["id"],))[0]["context_size"], 32768,
+                )
+                upgraded = asyncio.run(main_module.update_profile_recipe(recipe["id"]))
+                self.assertEqual(upgraded["version"], recipe["version"])
+                row = db.rows("SELECT app,recipe_modified FROM profiles WHERE id=?", (recipe["id"],))[0]
+                self.assertEqual((row["app"], row["recipe_modified"]), ("artifex" if not recipe.get("app") else recipe["app"], 0))
         finally:
             db.path = original_path
             main_module._recipes_cache.clear()

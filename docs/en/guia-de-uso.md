@@ -267,18 +267,22 @@ A recipe is a profile measured on a DGX Spark and published on GitHub, in
 - *Duplicate as profile* creates a regular profile with the name you choose,
   which you can edit freely.
 
-An installed recipe is read-only: you can start, stop, favorite, set as default
-and delete it, but not edit it or add models to it. To change it, use
-*Duplicate* and edit the copy. Names starting with `RECIPE` are reserved for
-recipes.
+An installed recipe is edited like any profile: you can change its
+parameters, add models or choose the app that starts with it (for example,
+ARTIFEX). Once saved, the card shows *Recipe · vN · edited* and the recipe stops
+updating itself, so your changes are kept. It can keep its `RECIPE · …` name,
+but other names starting with `RECIPE` are reserved for recipes. If you prefer
+a profile with no link to the recipe, use *Duplicate*.
 
 Each recipe has a version number (`v1`, `v2`…) and a changelog. When a new
 version is published, the profile card and *Find recipes* offer *Update to vN*.
 Updating keeps the favorite and default flags, does not download the models you
 already have again, and requires stopping the profile first. If an earlier
 version is published to withdraw a faulty one, *Find recipes* lets you go back
-to it. At startup, MyDGX updates any recipe that is not loaded when the local
-copy carries a newer version.
+to it. At startup, MyDGX updates any recipe that is neither loaded nor edited
+when the local copy carries a newer version. On an edited recipe, *Update to
+vN* asks for confirmation: it replaces your model and parameter changes, and
+keeps the start app unless the recipe sets another.
 
 New installations get the recipes from the local copy at startup. Change the
 catalog URL with `MYDGX_RECIPES_URL`; only `raw.githubusercontent.com` is

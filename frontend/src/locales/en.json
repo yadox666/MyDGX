@@ -1865,14 +1865,14 @@
   "{name} instalado": "{name} installed",
   "Instalada v{version}": "Installed v{version}",
   "{name} actualizada a v{version}": "{name} updated to v{version}",
-  "Perfiles medidos en un DGX Spark y publicados en GitHub. Una receta instalada es de solo lectura y se actualiza cuando publicamos una versión nueva; para cambiarla, duplícala como perfil normal. Los modelos se descargan ahora o más tarde desde la tarjeta del perfil.": "Profiles measured on a DGX Spark and published on GitHub. An installed recipe is read-only and updates when we publish a new version; to change it, duplicate it as a regular profile. Models download now or later from the profile card.",
+  "Perfiles medidos en un DGX Spark y publicados en GitHub. Una receta instalada se actualiza sola cuando publicamos una versión nueva, salvo que la hayas editado: entonces conserva tus cambios y la actualización queda a tu elección. Los modelos se descargan ahora o más tarde desde la tarjeta del perfil.": "Profiles measured on a DGX Spark and published on GitHub. An installed recipe updates itself when we publish a new version, unless you have edited it: then it keeps your changes and updating is up to you. Models download now or later from the profile card.",
   "Duplicar como perfil": "Duplicate as profile",
   "Actualizar a v{version}": "Update to v{version}",
   "Volver a v{version}": "Go back to v{version}",
   "Ya hay un perfil con este nombre": "A profile with this name already exists",
-  "Receta de solo lectura; duplícala para editarla": "Read-only recipe; duplicate it to edit",
+  "Receta editada: las versiones nuevas no se aplican solas para no perder tus cambios": "Edited recipe: new versions are not applied automatically so your changes are kept",
   "Detén el perfil antes de actualizar la receta": "Stop the profile before updating the recipe",
-  "Receta: duplícala para editarla": "Recipe: duplicate it to edit",
+  "Receta: se actualiza sola mientras no la edites": "Recipe: updates itself as long as you don't edit it",
   "{count} descarga(s) en cola para {name}": "{count} download(s) queued for {name}",
   "Los modelos de {name} ya están descargados": "The models of {name} are already downloaded",
   "Perfiles listos para tu DGX Spark": "Ready-made profiles for your DGX Spark",
@@ -1955,5 +1955,8 @@
   "{count} apariciones": "{count} occurrences",
   "{passing}/{total} comprobaciones correctas": "{passing}/{total} checks passing",
   "Abrir Health Center": "Open Health Center",
-  "Sano": "Healthy"
+  "Sano": "Healthy",
+  "Receta": "Recipe",
+  "editada": "edited",
+  "Actualizar {name} a v{version} sustituye tus cambios locales de modelos y parámetros; la app de arranque se conserva si la receta no define otra. ¿Continuar?": "Updating {name} to v{version} replaces your local model and parameter changes; the start app is kept unless the recipe sets another. Continue?"
 }

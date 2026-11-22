@@ -646,6 +646,132 @@
         "en": "Coding with a security review: Qwen3-Coder-Next Q4_K_M implements changes and BugHunter v8 reviews their web and API security before merging."
       },
       "memory_gib": 68.9
+    },
+    {
+      "id": "7b3f0e52-2c41-4d8e-9a6f-5e1c9a2b7d40",
+      "version": 1,
+      "changelog": {
+        "es": "Versión inicial: Qwen-Image 2.1 Turbo int8 en ComfyUI, 8 pasos, sin mejora de prompt.",
+        "en": "Initial version: Qwen-Image 2.1 Turbo int8 in ComfyUI, 8 steps, no prompt enhancer."
+      },
+      "categories": [
+        "image"
+      ],
+      "description": {
+        "es": "Generación de imágenes con Qwen-Image 2.1 Turbo (int8) en ComfyUI: 8 pasos a 1024×1024, buena con texto dentro de la imagen (carteles, etiquetas, maquetas). Unos 17 GB de modelos; cabe junto a un perfil de texto. Licencia Qwen Research: revísala antes de un uso comercial.",
+        "en": "Image generation with Qwen-Image 2.1 Turbo (int8) in ComfyUI: 8 steps at 1024×1024, good at text inside the image (posters, labels, mockups). About 17 GB of models; fits next to a text profile. Qwen Research license: check it before commercial use."
+      },
+      "name": "RECIPE · Image · Qwen-Image 2.1 Turbo",
+      "engine": "comfyui",
+      "model_ref": "qwen-image-2.1-turbo",
+      "model_alias": "qwen-image-turbo",
+      "port": 0,
+      "port_auto": true,
+      "source": "Comfy-Org/Qwen-Image-2.1 @ aacf31a · workflow oficial Turbo T2I sin mejora de prompt",
+      "runtime_requirement": "ComfyUI con TextEncodeQwenImage21 y QwenImage21Cache (commit 46659e6 o posterior) · CUDA 13 · sm_121",
+      "task": "image-generation",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "runtime_backend": "external",
+      "endpoint_url": "http://127.0.0.1:8188",
+      "api_protocol": "comfyui",
+      "estimated_memory_mb": 22528,
+      "max_input_mb": 32,
+      "timeout_seconds": 600,
+      "memory_reserve_mb": 4096,
+      "comfyui": {
+        "workflow": "qwen-image-2.1-turbo-api.json",
+        "files": [
+          {
+            "repo": "Comfy-Org/Qwen-Image-2.1",
+            "revision": "aacf31a6d48e707f352ecba714cee0680da3479b",
+            "filename": "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors",
+            "folder": "diffusion_models",
+            "sha256": "8144a0182964aa8403ad6dbc011db837304167d235161b9aabaa8532e967314c"
+          },
+          {
+            "repo": "Comfy-Org/Qwen-Image-2.1",
+            "revision": "aacf31a6d48e707f352ecba714cee0680da3479b",
+            "filename": "text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+            "folder": "text_encoders",
+            "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
+          },
+          {
+            "repo": "Comfy-Org/Qwen-Image-2.1",
+            "revision": "aacf31a6d48e707f352ecba714cee0680da3479b",
+            "filename": "vae/qwen_image_2.1_vae_bf16.safetensors",
+            "folder": "vae",
+            "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
+          }
+        ]
+      }
+    },
+    {
+      "id": "c4e9a1d7-5b62-4f3a-8e0d-2a7b6f9c1e83",
+      "version": 1,
+      "changelog": {
+        "es": "Versión inicial: FLUX 3 Image Klein int8 destilado en ComfyUI, 16 pasos, sin mejora de prompt.",
+        "en": "Initial version: distilled FLUX 3 Image Klein int8 in ComfyUI, 16 steps, no prompt upsampler."
+      },
+      "categories": [
+        "image"
+      ],
+      "description": {
+        "es": "Generación de imágenes recomendada para la Spark: FLUX 3 Image Klein destilado (int8) en ComfyUI, 16 pasos a 1024×1024, unos 7–8 s por imagen. Unos 11 GB de modelos; cabe junto a un perfil de texto. Repositorio con acceso restringido: acepta la licencia en Hugging Face y configura HF_TOKEN antes de descargar. Licencia FLUX Kommunity (no comercial, con excepciones): revísala antes de un uso comercial.",
+        "en": "Recommended image generation for the Spark: distilled FLUX 3 Image Klein (int8) in ComfyUI, 16 steps at 1024×1024, about 7–8 s per image. About 11 GB of models; fits next to a text profile. Gated repository: accept the license on Hugging Face and set HF_TOKEN before downloading. FLUX Kommunity license (non-commercial, with exceptions): check it before commercial use."
+      },
+      "name": "RECIPE · Image · FLUX 3 Klein",
+      "engine": "comfyui",
+      "model_ref": "flux-3-image-klein",
+      "model_alias": "flux3-klein",
+      "port": 0,
+      "port_auto": true,
+      "source": "black-forest-labs/flux-3-image-klein-comfy @ 09192d1 · plantilla oficial Klein destilado T2I sin mejora de prompt",
+      "runtime_requirement": "ComfyUI con CLIPLoader tipo flux3 y EmptyFlux2LatentImage (commit 46659e6 o posterior) · CUDA 13 · sm_121",
+      "task": "image-generation",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "runtime_backend": "external",
+      "endpoint_url": "http://127.0.0.1:8188",
+      "api_protocol": "comfyui",
+      "estimated_memory_mb": 24576,
+      "max_input_mb": 32,
+      "timeout_seconds": 600,
+      "memory_reserve_mb": 4096,
+      "comfyui": {
+        "workflow": "flux3-klein-api.json",
+        "files": [
+          {
+            "repo": "black-forest-labs/flux-3-image-klein-comfy",
+            "revision": "09192d1abae1e57e1a2fcbc5b701cd1d9e2abd51",
+            "filename": "diffusion_models/flux3-image-klein-int8-convrot.safetensors",
+            "folder": "diffusion_models",
+            "sha256": "847d8933548afd93df4af2cac2498e70891bf28d9dae06d695f536992e168fe2"
+          },
+          {
+            "repo": "black-forest-labs/flux-3-image-klein-comfy",
+            "revision": "09192d1abae1e57e1a2fcbc5b701cd1d9e2abd51",
+            "filename": "text_encoders/qwen3vl_4b_int8_convrot.safetensors",
+            "folder": "text_encoders",
+            "sha256": "32de113cbf8282b02cbff0794b637b9d6676da09314a1db5a30bcea9bf4ee01c"
+          },
+          {
+            "repo": "black-forest-labs/flux-3-image-klein-comfy",
+            "revision": "09192d1abae1e57e1a2fcbc5b701cd1d9e2abd51",
+            "filename": "vae/flux2-vae.safetensors",
+            "folder": "vae",
+            "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
+          }
+        ]
+      }
     }
   ]
 }

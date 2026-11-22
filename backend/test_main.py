@@ -7103,7 +7103,7 @@ class ProfileApiTests(unittest.TestCase):
             rows = db.rows(
                 "SELECT id,name FROM profiles WHERE id NOT LIKE 'artifex-%' ORDER BY id"
             )
-            self.assertEqual(len(rows), 10)
+            self.assertEqual(len(rows), 11)
             self.assertIn("TTS Lab · Voces MLX", {row["name"] for row in rows})
             image = db.rows(
                 "SELECT engine,task,comfyui_json FROM profiles WHERE name=?",
@@ -7486,6 +7486,18 @@ class ComfyUIRecipeTests(unittest.TestCase):
         unchanged = main_module.comfyui_workflow("image-generation", "otro", seed=1, spec=spec)
         self.assertEqual(unchanged["13"]["class_type"], "SaveImage")
         self.assertEqual(unchanged["6"]["inputs"]["width"], 1024)
+
+    def test_klein_recipe_keeps_its_fixed_sampler_steps(self) -> None:
+        recipe = next(item for item in main_module.local_recipes() if item["name"] == "RECIPE · Image · FLUX 3 Klein")
+        main_module.validate_model(main_module.recipe_profile_payload(recipe))
+        workflow = main_module.comfyui_workflow(
+            "image-generation", "a fox", seed=9, width=768, height=1024, steps=4,
+            persist_output=False, spec=recipe["comfyui"],
+        )
+        self.assertEqual(workflow["4"]["inputs"]["text"], "a fox")
+        self.assertEqual((workflow["7"]["inputs"]["seed"], workflow["7"]["inputs"]["steps"]), (9, 16))
+        self.assertEqual((workflow["6"]["inputs"]["width"], workflow["6"]["inputs"]["height"]), (768, 1024))
+        self.assertEqual(workflow["9"]["class_type"], "PreviewImage")
 
     def test_comfyui_block_is_validated(self) -> None:
         payload = main_module.recipe_profile_payload(self.image_recipe())

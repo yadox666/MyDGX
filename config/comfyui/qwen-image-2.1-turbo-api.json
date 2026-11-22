@@ -1,0 +1,102 @@
+{
+  "1": {
+    "inputs": {
+      "unet_name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader"
+  },
+  "2": {
+    "inputs": {
+      "model": ["1", 0],
+      "device": "auto",
+      "dtype": "default"
+    },
+    "class_type": "QwenImage21Cache"
+  },
+  "3": {
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader"
+  },
+  "4": {
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader"
+  },
+  "5": {
+    "inputs": {
+      "clip": ["3", 0],
+      "prompt": "A detailed image",
+      "negative_prompt": "",
+      "resolution": 1024
+    },
+    "class_type": "TextEncodeQwenImage21",
+    "_meta": {"title": "MyDGX Prompt"}
+  },
+  "6": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {"title": "MyDGX Size"}
+  },
+  "7": {
+    "inputs": {
+      "noise_seed": 0
+    },
+    "class_type": "RandomNoise",
+    "_meta": {"title": "MyDGX Seed"}
+  },
+  "8": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect"
+  },
+  "9": {
+    "inputs": {
+      "sigmas": "1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0"
+    },
+    "class_type": "ManualSigmas"
+  },
+  "10": {
+    "inputs": {
+      "model": ["2", 0],
+      "positive": ["5", 0],
+      "negative": ["5", 1],
+      "cfg": 1
+    },
+    "class_type": "CFGGuider"
+  },
+  "11": {
+    "inputs": {
+      "noise": ["7", 0],
+      "guider": ["10", 0],
+      "sampler": ["8", 0],
+      "sigmas": ["9", 0],
+      "latent_image": ["6", 0]
+    },
+    "class_type": "SamplerCustomAdvanced"
+  },
+  "12": {
+    "inputs": {
+      "samples": ["11", 0],
+      "vae": ["4", 0]
+    },
+    "class_type": "VAEDecode"
+  },
+  "13": {
+    "inputs": {
+      "filename_prefix": "MyDGX-QwenImage",
+      "images": ["12", 0]
+    },
+    "class_type": "SaveImage"
+  }
+}

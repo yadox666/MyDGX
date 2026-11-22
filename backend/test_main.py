@@ -7002,6 +7002,7 @@ class ProfileApiTests(unittest.TestCase):
         ))
         tagged = main_module.valid_recipes({"version": 1, "recipes": [{**local[0], "categories": ["video", "hack", "text"]}]})
         self.assertEqual(tagged[0]["categories"], ["text", "video"])
+        self.assertTrue(all(isinstance(recipe["additional_models"], list) for recipe in main_module.valid_recipes({"version": 1, "recipes": local})))
         original_path = db.path
         main_module._recipes_cache.clear()
         try:

@@ -12828,8 +12828,10 @@ def valid_recipes(values: Any) -> list[dict[str, Any]]:
             for key in ("description", "changelog")
         }
         categories = recipe.get("categories") if isinstance(recipe.get("categories"), list) else []
+        additional = recipe.get("additional_models")
         recipes.append({
             **recipe, **texts,
+            "additional_models": additional if isinstance(additional, list) else [],
             "version": recipe_version(recipe),
             "categories": [key for key in RECIPE_CATEGORIES if key in categories],
         })

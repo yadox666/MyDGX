@@ -1145,7 +1145,7 @@ type Recipe = ProfileModel & {
   memory_gib?: number;
   version: number;
   changelog: Partial<Record<"es" | "en", string>>;
-  additional_models: ProfileModel[];
+  additional_models?: ProfileModel[];
   installed_ids: string[];
   installed_version: number;
   missing_models: string[];
@@ -1155,7 +1155,7 @@ type Recipe = ProfileModel & {
 
 function recipeCategories(recipe: Recipe): ModelCategoryKey[] {
   const declared = (recipe.categories ?? []).filter((key) => key in MODEL_CATEGORIES);
-  return declared.length ? declared : profileCategories([recipe, ...recipe.additional_models]);
+  return declared.length ? declared : profileCategories([recipe, ...(recipe.additional_models ?? [])]);
 }
 
 type RecipesResponse = { source: "github" | "local"; url: string; error: string; fetched_at: string; recipes: Recipe[] };
@@ -1322,7 +1322,7 @@ function RecipesBrowser({ notify, onInstalled, onClose, activeDownloads = 0 }: {
             ? <div className="profile-warning"><TriangleAlert size={15} />{t("Ninguna receta en esta categoría.")}</div>
             : <div className={`recipes-list ${inTab ? "recipes-grid" : ""}`}>
             {visibleRecipes.map((recipe) => {
-              const models = [{ ...recipe, name: recipe.name }, ...recipe.additional_models.filter((model) => model.enabled !== false)];
+              const models = [{ ...recipe, name: recipe.name }, ...(recipe.additional_models ?? []).filter((model) => model.enabled !== false)];
               const installed = recipe.installed_version > 0;
               const nameTaken = !installed && recipe.installed_ids.length > 0;
               const changed = installed && recipe.installed_version !== recipe.version;

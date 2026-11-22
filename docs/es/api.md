@@ -221,6 +221,7 @@ Detalle en [Asistente MyDGX](asistente-mydgx.md).
 | Método | Ruta | Para qué |
 |---|---|---|
 | GET | `/api/storage` | Particiones, unidades NVMe y SMART, y el uso del disco del sistema por grupo (Sistema, Modelos, Apps, MyDGX, Usuario y otros), con `disk_total` y `disk_free`. `home_directories` desglosa «Usuario y otros» por directorio de primer nivel del home (sin lo ya contado en los demás grupos; los menores de 50 MB se agrupan en «Otros»). Las imágenes de solo lectura (`squashfs` de snap, `erofs`, `iso9660`) no aparecen como particiones. El uso se mide en segundo plano y se guarda 10 minutos: mientras se calcula, `usage_pending` es `true` y se devuelve la última medida (o listas vacías la primera vez); `usage_updated_at` indica cuándo se midió. `?refresh=true` fuerza una medida nueva. |
+| GET | `/api/system/health-center` | Evalúa temperatura GPU, memoria disponible, disco, fallos de modelos, servicios y eventos Xid/OOM del kernel. Devuelve estado, resumen, hallazgos activos y resueltos de siete días, evidencia, recomendación y disponibilidad del journal. Las transiciones se guardan en Logs. |
 | GET | `/api/system/readiness` | Comprobación de que MyDGX y el sistema están listos, con avisos y recomendaciones. |
 | GET | `/api/system/versions` | Versiones de sistema, kernel, CUDA, driver y runtimes. |
 | GET | `/api/system/integrity` | Integridad de kernel, DKMS, paquetes NVIDIA, llama.cpp y servicios. |

@@ -303,6 +303,35 @@ type SystemIntegrity = {
   cuda_version: string | null;
 };
 
+type HealthFinding = {
+  id: string;
+  severity: "info" | "warning" | "critical";
+  category: string;
+  title: string;
+  detail: string;
+  evidence: string;
+  remediation: string;
+  active: boolean;
+  first_seen: string;
+  last_seen: string;
+  resolved_at: string | null;
+  occurrences: number;
+};
+
+type HealthCenter = {
+  status: "healthy" | "warning" | "critical";
+  summary: { critical: number; warning: number; info: number; resolved: number };
+  findings: HealthFinding[];
+  kernel: {
+    available: boolean | null;
+    window_hours: number;
+    xid_count: number | null;
+    oom_count: number | null;
+    error?: string;
+  };
+  evaluated_at: string;
+};
+
 type SystemUpdatePackage = {
   name: string;
   current_version: string;
@@ -8378,7 +8407,109 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
   );
 }
 
+function HealthCenterPanel({ health, loading, onRefresh }: {
+  health: HealthCenter | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const [filter, setFilter] = useState<"active" | "critical" | "warning" | "resolved">("active");
+  if (!health) {
+    return <Card className="health-loading"><RefreshCw className="spin" /><span>{t("Evaluando la salud del sistema…")}</span></Card>;
+  }
+  const visible = health.findings.filter((finding) => (
+    filter === "active" ? finding.active
+      : filter === "resolved" ? !finding.active
+        : finding.active && finding.severity === filter
+  ));
+  const statusTitle = health.status === "healthy"
+    ? t("Sistema saludable")
+    : health.status === "critical"
+      ? t("Hay problemas críticos")
+      : t("El sistema requiere atención");
+  return <div className="health-center">
+    <Card className={`health-hero ${health.status}`}>
+      <div className="health-hero-status">
+        {health.status === "healthy" ? <CheckCircle2 /> : <TriangleAlert />}
+        <span>
+          <small>{t("HEALTH CENTER")}</small>
+          <strong>{statusTitle}</strong>
+          <em>{t("Evaluado {time}", { time: new Date(health.evaluated_at).toLocaleString(locale) })}</em>
+        </span>
+      </div>
+      <div className="health-summary">
+        <button className={filter === "critical" ? "selected critical" : "critical"} onClick={() => setFilter(filter === "critical" ? "active" : "critical")}>
+          <strong>{health.summary.critical}</strong><small>{t("Críticos")}</small>
+        </button>
+        <button className={filter === "warning" ? "selected warning" : "warning"} onClick={() => setFilter(filter === "warning" ? "active" : "warning")}>
+          <strong>{health.summary.warning}</strong><small>{t("Avisos")}</small>
+        </button>
+        <button className={filter === "resolved" ? "selected resolved" : "resolved"} onClick={() => setFilter(filter === "resolved" ? "active" : "resolved")}>
+          <strong>{health.summary.resolved}</strong><small>{t("Resueltos · 7 días")}</small>
+        </button>
+      </div>
+      <button className="button secondary" disabled={loading} onClick={onRefresh}><RefreshCw className={loading ? "spin" : ""} size={15} />{" "}{t("Volver a evaluar")}</button>
+    </Card>
+
+    <div className="health-observers">
+      <Card>
+        <div className="card-kicker"><Terminal size={15} /> {t("Kernel · últimas 24 h")}</div>
+        <div className="health-observer-values">
+          <span><strong>{health.kernel.xid_count ?? "—"}</strong><small>NVIDIA Xid</small></span>
+          <span><strong>{health.kernel.oom_count ?? "—"}</strong><small>OOM killer</small></span>
+        </div>
+        <small>{health.kernel.available ? t("Journal del kernel accesible") : health.kernel.error || t("Journal del kernel no disponible")}</small>
+      </Card>
+      <Card>
+        <div className="card-kicker"><Activity size={15} /> {t("Cobertura activa")}</div>
+        <p>{t("GPU, memoria, almacenamiento, kernel, servicios administrados y estado de modelos.")}</p>
+        <small>{t("Las métricas ausentes se muestran como desconocidas; nunca se inventan como cero.")}</small>
+      </Card>
+    </div>
+
+    <div className="health-findings-heading">
+      <div>
+        <h3>{filter === "resolved" ? t("Hallazgos resueltos") : t("Hallazgos activos")}</h3>
+        <p>{t("Cada hallazgo incluye la observación y una acción recomendada.")}</p>
+      </div>
+      {filter !== "active" && <button className="button secondary compact" onClick={() => setFilter("active")}>{t("Ver todos los activos")}</button>}
+    </div>
+    {visible.length
+      ? <div className="health-findings">
+        {visible.map((finding) => <Card className={`health-finding ${finding.active ? finding.severity : "resolved"}`} key={finding.id}>
+          <div className="health-finding-icon">
+            {finding.active
+              ? finding.severity === "critical" ? <TriangleAlert /> : finding.severity === "warning" ? <Info /> : <Activity />
+              : <CheckCircle2 />}
+          </div>
+          <div className="health-finding-copy">
+            <div className="health-finding-title">
+              <strong>{finding.title}</strong>
+              <span className={`badge ${finding.active ? finding.severity : "completed"}`}>{finding.active ? finding.severity === "critical" ? t("Crítico") : finding.severity === "warning" ? t("Aviso") : t("Información") : t("Resuelto")}</span>
+              <span className="badge">{finding.category}</span>
+            </div>
+            <p>{finding.detail}</p>
+            {finding.evidence && <div className="health-evidence"><Eye size={14} /><span><small>{t("Evidencia")}</small><code>{finding.evidence}</code></span></div>}
+            {finding.active && finding.remediation && <div className="health-remediation"><ShieldCheck size={14} /><span><small>{t("Acción recomendada")}</small><em>{finding.remediation}</em></span></div>}
+            <small className="health-dates">
+              {finding.active
+                ? t("Detectado {first} · visto por última vez {last}", { first: new Date(finding.first_seen).toLocaleString(locale), last: new Date(finding.last_seen).toLocaleString(locale) })
+                : t("Resuelto {time}", { time: new Date(finding.resolved_at || finding.last_seen).toLocaleString(locale) })}
+            </small>
+          </div>
+        </Card>)}
+      </div>
+      : <Empty
+        icon={<CheckCircle2 />}
+        title={filter === "resolved" ? t("No hay resoluciones recientes") : t("No hay hallazgos activos")}
+        text={filter === "resolved" ? t("Las incidencias resueltas se conservan aquí durante siete días.") : t("Las comprobaciones observadas están dentro de sus umbrales.")}
+      />}
+  </div>;
+}
+
 function SystemView({ config, jobs, overview, notify, onOpenLab }: { config: Config | null; jobs: Job[]; overview: Overview | null; notify: (message: string, error?: boolean) => void; onOpenLab: () => void }) {
+  const [systemTab, setSystemTab] = useState<"overview" | "health">("overview");
+  const [healthCenter, setHealthCenter] = useState<HealthCenter | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
   const [services, setServices] = useState<Array<Record<string, unknown>>>([]);
   const [updates, setUpdates] = useState<SystemUpdates | null>(null);
   const [versions, setVersions] = useState<{ components: Array<{ name: string; version?: string; available: boolean; detail: string; category?: string }>; packages: Array<{ name: string; version: string }> } | null>(null);
@@ -8417,6 +8548,13 @@ function SystemView({ config, jobs, overview, notify, onOpenLab }: { config: Con
       .catch((error) => notify(error.message, true));
     loadFirmware();
   }, [notify, loadFirmware]);
+  const loadHealth = useCallback(() => {
+    setHealthLoading(true);
+    api<HealthCenter>("/api/system/health-center")
+      .then(setHealthCenter)
+      .catch((error) => notify(error.message, true))
+      .finally(() => setHealthLoading(false));
+  }, [notify]);
   useEffect(load, [load]);
   const maintenanceStatus = jobs
     .filter((job) => ["system.update", "system.repair", "system.firmware"].includes(job.kind))
@@ -8492,9 +8630,19 @@ function SystemView({ config, jobs, overview, notify, onOpenLab }: { config: Con
         title={t("Sistema y servicios")}
         action={<div className="system-heading-actions">
           <button className="button secondary" onClick={onOpenLab} title={t("Imagen, audio, vídeo y embeddings")}><Sparkles size={15} />{" "}{t("Laboratorio IA")}</button>
-          <button className="icon-button" onClick={load}><RefreshCw size={17} /></button>
+          <button className="icon-button" onClick={systemTab === "health" ? loadHealth : load}><RefreshCw className={systemTab === "health" && healthLoading ? "spin" : ""} size={17} /></button>
         </div>}
       />
+      <div className="tabs system-tabs">
+        <button className={systemTab === "overview" ? "active" : ""} onClick={() => setSystemTab("overview")}><Server size={14} />{" "}{t("Plataforma")}</button>
+        <button className={systemTab === "health" ? "active" : ""} onClick={() => { setSystemTab("health"); if (!healthCenter) loadHealth(); }}>
+          <Activity size={14} />{" "}{t("Health Center")}
+          {healthCenter && (healthCenter.summary.critical + healthCenter.summary.warning) > 0 && <b className="tab-count warning">{healthCenter.summary.critical + healthCenter.summary.warning}</b>}
+        </button>
+      </div>
+      {systemTab === "health"
+        ? <HealthCenterPanel health={healthCenter} loading={healthLoading} onRefresh={loadHealth} />
+        : <>
       {overview && systemBranding && (
         <Card className={`system-device-banner device-${overview.host.device_variant}`}>
           <div className="system-device-copy">
@@ -8712,6 +8860,7 @@ function SystemView({ config, jobs, overview, notify, onOpenLab }: { config: Con
         ))}
       </Card>
       {jobs.some((job) => ["system.update", "system.repair", "system.firmware"].includes(job.kind)) && <Card className="notice"><Terminal /><span>{t("La tarea de mantenimiento se puede seguir en Modelos → Actividad reciente.")}</span></Card>}
+      </>}
     </div>
   );
 }

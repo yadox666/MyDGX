@@ -1565,6 +1565,83 @@ class CollectorTests(unittest.TestCase):
         api_check = next(check for check in result["checks"] if check["id"] == "api-auth")
         self.assertEqual(api_check["status"], "warning")
 
+    def test_health_center_rules_keep_unknown_metrics_out_and_persist_transitions(self) -> None:
+        gib = 1024 ** 3
+        sample = {
+            "gpu_temperature": 91.0,
+            "memory_available": gib,
+            "disk_total": 100 * gib,
+            "disk_used": 97 * gib,
+        }
+        findings, evaluated = main_module.metric_health_findings(sample)
+        self.assertEqual({item["id"] for item in findings}, {
+            "gpu-temperature", "memory-available", "disk-space",
+        })
+        self.assertTrue(all(item["severity"] == "critical" for item in findings))
+        unknown, unknown_ids = main_module.metric_health_findings({
+            "gpu_temperature": None,
+            "memory_available": None,
+            "disk_total": None,
+            "disk_used": None,
+        })
+        self.assertEqual(unknown, [])
+        self.assertEqual(unknown_ids, evaluated)
+
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "health.db"
+                db.initialize()
+                main_module.sync_health_findings(findings, evaluated)
+                active = main_module.health_center_payload()
+                self.assertEqual(active["status"], "critical")
+                self.assertEqual(active["summary"]["critical"], 3)
+                self.assertEqual(len(db.rows(
+                    "SELECT * FROM system_logs WHERE action='health.appeared'"
+                )), 3)
+
+                main_module.sync_health_findings(findings, evaluated)
+                self.assertEqual(len(db.rows(
+                    "SELECT * FROM system_logs WHERE action='health.appeared'"
+                )), 3)
+                self.assertTrue(all(
+                    row["occurrences"] == 1
+                    for row in db.rows("SELECT occurrences FROM health_findings")
+                ))
+
+                main_module.sync_health_findings([], evaluated)
+                resolved = main_module.health_center_payload()
+                self.assertEqual(resolved["status"], "healthy")
+                self.assertEqual(resolved["summary"]["resolved"], 3)
+                self.assertEqual(len(db.rows(
+                    "SELECT * FROM system_logs WHERE action='health.resolved'"
+                )), 3)
+        finally:
+            db.path = original_path
+
+    def test_kernel_health_reports_xid_and_oom_without_fabricating_unavailable_counts(self) -> None:
+        output = "\n".join([
+            "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus.",
+            "Out of memory: Killed process 1234 (llama-server)",
+        ])
+        with (
+            patch("backend.main.os.uname", return_value=SimpleNamespace(sysname="Linux")),
+            patch("backend.main.shutil.which", return_value="/usr/bin/journalctl"),
+            patch("backend.main.run_command", return_value=SimpleNamespace(
+                returncode=0, stdout=output, stderr="",
+            )),
+        ):
+            findings, evaluated, status = main_module.kernel_health_findings()
+        self.assertEqual(evaluated, {"kernel-xid", "kernel-oom"})
+        self.assertEqual({item["id"] for item in findings}, evaluated)
+        self.assertEqual((status["xid_count"], status["oom_count"]), (1, 1))
+
+        with patch("backend.main.shutil.which", return_value=None):
+            findings, _, status = main_module.kernel_health_findings()
+        self.assertEqual(findings, [])
+        self.assertIsNone(status["xid_count"])
+        self.assertFalse(status["available"])
+
     def test_system_integrity_exposes_kernel_and_runtime_state(self) -> None:
         result = system_integrity()
         self.assertIn("current_kernel", result)

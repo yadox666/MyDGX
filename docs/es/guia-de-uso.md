@@ -409,6 +409,19 @@ herramientas. Ver [Laboratorio IA](laboratorio-ia.md).
 
 ## Sistema
 
+La pestaña **Health Center** evalúa de forma continua temperatura GPU, memoria
+disponible, espacio en disco y fallos de modelos. Al abrirla añade el estado de
+los servicios administrados y los eventos NVIDIA Xid y OOM del journal del
+kernel de las últimas 24 horas.
+
+Cada hallazgo muestra severidad, evidencia observada y una acción recomendada.
+Las apariciones, cambios de severidad y resoluciones se registran en *Logs*; las
+resoluciones permanecen visibles siete días. Una lectura que el equipo no puede
+obtener se muestra como desconocida, nunca como cero. Leer el journal depende de
+los permisos del usuario que ejecuta MyDGX.
+
+La pestaña **Plataforma** mantiene:
+
 - Identidad del equipo (NVIDIA, ASUS, HP, Lenovo, Dell o genérico).
 - *Readiness*: requisitos obligatorios, avisos con instrucciones de corrección y
   opcionales.

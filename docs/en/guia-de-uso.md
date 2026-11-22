@@ -409,6 +409,19 @@ server. See [AI Lab](laboratorio-ia.md).
 
 ## System
 
+The **Health Center** tab continuously evaluates GPU temperature, available
+memory, disk space, and model failures. When opened, it also checks managed
+services and NVIDIA Xid and OOM events from the kernel journal over the last 24
+hours.
+
+Each finding shows severity, observed evidence, and a recommended action.
+Appearances, severity changes, and resolutions are recorded in *Logs*;
+resolutions remain visible for seven days. A reading the machine cannot obtain
+is shown as unknown, never as zero. Reading the journal depends on the
+permissions of the user running MyDGX.
+
+The **Platform** tab retains:
+
 - Machine identity (NVIDIA, ASUS, HP, Lenovo, Dell, or generic).
 - *Readiness*: mandatory requirements, warnings with fix instructions, and
   optional items.

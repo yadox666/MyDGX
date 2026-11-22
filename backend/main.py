@@ -781,6 +781,22 @@ class Database:
                     read_at TEXT
                 );
                 CREATE INDEX IF NOT EXISTS notifications_unread ON notifications(read_at, id);
+                CREATE TABLE IF NOT EXISTS health_findings (
+                    id TEXT PRIMARY KEY,
+                    severity TEXT NOT NULL CHECK(severity IN ('info','warning','critical')),
+                    category TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    evidence TEXT NOT NULL DEFAULT '',
+                    remediation TEXT NOT NULL DEFAULT '',
+                    active INTEGER NOT NULL DEFAULT 1,
+                    first_seen TEXT NOT NULL,
+                    last_seen TEXT NOT NULL,
+                    resolved_at TEXT,
+                    occurrences INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS idx_health_findings_active_severity
+                ON health_findings(active, severity, last_seen DESC);
                 CREATE TABLE IF NOT EXISTS job_results (
                     job_id TEXT PRIMARY KEY,
                     result_json TEXT NOT NULL,
@@ -2022,11 +2038,249 @@ def persist_metrics(sample: dict[str, Any]) -> None:
     )
 
 
+HEALTH_SEVERITY_ORDER = {"info": 0, "warning": 1, "critical": 2}
+
+
+def health_finding(
+    finding_id: str,
+    severity: Literal["info", "warning", "critical"],
+    category: str,
+    title: str,
+    detail: str,
+    evidence: str,
+    remediation: str,
+) -> dict[str, str]:
+    return {
+        "id": finding_id,
+        "severity": severity,
+        "category": category,
+        "title": title,
+        "detail": detail,
+        "evidence": evidence,
+        "remediation": remediation,
+    }
+
+
+def metric_health_findings(sample: dict[str, Any]) -> tuple[list[dict[str, str]], set[str]]:
+    """Explain operational risks from observed metrics; absent readings remain unknown."""
+    findings: list[dict[str, str]] = []
+    evaluated = {"gpu-temperature", "memory-available", "disk-space"}
+    temperature = sample.get("gpu_temperature")
+    if isinstance(temperature, (int, float)) and temperature >= 85:
+        severity: Literal["warning", "critical"] = "critical" if temperature >= 90 else "warning"
+        findings.append(health_finding(
+            "gpu-temperature", severity, "GPU", "Temperatura GPU elevada",
+            "La GPU está por encima del umbral operativo recomendado.",
+            f"{temperature:.1f} °C observados; aviso ≥85 °C, crítico ≥90 °C.",
+            "Comprueba ventilación, carga sostenida y límites de potencia; reduce la carga si sigue subiendo.",
+        ))
+    available = sample.get("memory_available")
+    if isinstance(available, (int, float)) and available < 3 * 1024 ** 3:
+        gib = available / 1024 ** 3
+        severity = "critical" if available < 1.5 * 1024 ** 3 else "warning"
+        findings.append(health_finding(
+            "memory-available", severity, "Memoria", "Memoria disponible baja",
+            "El sistema tiene poco margen para nuevas peticiones o modelos.",
+            f"{gib:.2f} GiB disponibles; aviso <3 GiB, crítico <1.5 GiB.",
+            "Detén perfiles que no uses o reduce contexto, paralelo y tamaño del KV cache.",
+        ))
+    disk_total = sample.get("disk_total")
+    disk_used = sample.get("disk_used")
+    if isinstance(disk_total, (int, float)) and isinstance(disk_used, (int, float)) and disk_total > 0:
+        free = max(0, disk_total - disk_used)
+        if free < 20 * 1024 ** 3:
+            gib = free / 1024 ** 3
+            severity = "critical" if free < 5 * 1024 ** 3 else "warning"
+            findings.append(health_finding(
+                "disk-space", severity, "Almacenamiento", "Espacio libre bajo",
+                "Las descargas, conversiones y actualizaciones pueden quedarse sin espacio.",
+                f"{gib:.1f} GiB libres; aviso <20 GiB, crítico <5 GiB.",
+                "Borra modelos o trabajos innecesarios desde Modelos y revisa el uso del almacenamiento.",
+            ))
+    return findings, evaluated
+
+
+def model_run_health_findings() -> tuple[list[dict[str, str]], set[str]]:
+    findings: list[dict[str, str]] = []
+    evaluated = {"model-runs-failed"}
+    rows = db.rows(
+        """
+        SELECT profile_id,model_name,status,detail,updated_at
+        FROM profile_model_runs
+        WHERE status IN ('failed','error')
+        ORDER BY updated_at DESC LIMIT 20
+        """
+    )
+    if rows:
+        names = ", ".join(str(row["model_name"]) for row in rows[:4])
+        findings.append(health_finding(
+            "model-runs-failed", "warning", "Inferencia", "Modelos con fallo reciente",
+            f"{len(rows)} modelo(s) conservan un estado de fallo.",
+            names + ("…" if len(rows) > 4 else ""),
+            "Abre el perfil afectado, revisa Actividad reciente y repite su verificación.",
+        ))
+    return findings, evaluated
+
+
+def kernel_health_findings() -> tuple[list[dict[str, str]], set[str], dict[str, Any]]:
+    evaluated = {"kernel-xid", "kernel-oom"}
+    status: dict[str, Any] = {"available": False, "window_hours": 24, "xid_count": None, "oom_count": None}
+    if os.uname().sysname != "Linux" or not shutil.which("journalctl"):
+        return [], evaluated, status
+    result = run_command(
+        ["journalctl", "-k", "--since", "-24 hours", "--no-pager", "-o", "cat", "-n", "1000"],
+        4,
+    )
+    if result.returncode != 0:
+        status["error"] = "journalctl no disponible para el usuario de MyDGX"
+        return [], evaluated, status
+    status["available"] = True
+    lines = result.stdout.splitlines()
+    xid_lines = [line.strip() for line in lines if re.search(r"\bNVRM:.*\bXid\b|\bXid\s*\(\s*PCI", line, re.IGNORECASE)]
+    oom_lines = [line.strip() for line in lines if re.search(r"\bOut of memory\b|\boom-kill\b|\bKilled process\b", line, re.IGNORECASE)]
+    status.update({"xid_count": len(xid_lines), "oom_count": len(oom_lines)})
+    findings: list[dict[str, str]] = []
+    if xid_lines:
+        findings.append(health_finding(
+            "kernel-xid", "critical", "Kernel", "Errores NVIDIA Xid",
+            "El kernel registró errores de la GPU en las últimas 24 horas.",
+            f"{len(xid_lines)} evento(s); último: {redact_log_text(xid_lines[-1], 300)}",
+            "Guarda el código Xid, revisa temperatura y alimentación, y consulta el log antes de reiniciar.",
+        ))
+    if oom_lines:
+        findings.append(health_finding(
+            "kernel-oom", "critical", "Kernel", "Procesos terminados por falta de memoria",
+            "El kernel activó el OOM killer en las últimas 24 horas.",
+            f"{len(oom_lines)} evento(s); último: {redact_log_text(oom_lines[-1], 300)}",
+            "Reduce contexto o concurrencia, detén perfiles y revisa qué proceso agotó la memoria.",
+        ))
+    return findings, evaluated, status
+
+
+def service_health_findings(values: list[dict[str, Any]]) -> tuple[list[dict[str, str]], set[str]]:
+    managed = [item for item in values if item.get("type") == "systemd"]
+    evaluated = {f"service:{item.get('type')}:{item.get('name')}" for item in managed}
+    findings = []
+    for item in managed:
+        status = str(item.get("status") or "unknown").casefold()
+        if status in {"active", "running"}:
+            continue
+        name = str(item.get("name") or "servicio")
+        findings.append(health_finding(
+            f"service:{item.get('type')}:{name}", "warning", "Servicios",
+            f"Servicio no activo: {name}",
+            "Un servicio administrado no está en ejecución.",
+            f"{item.get('type') or 'servicio'} · estado {status}",
+            "Comprueba si debe estar activo y, si corresponde, inícialo desde Sistema.",
+        ))
+    return findings, evaluated
+
+
+def sync_health_findings(findings: list[dict[str, str]], evaluated_ids: set[str]) -> None:
+    """Persist current state and log only state transitions, never repeated samples."""
+    now = utc_now()
+    active_by_id = {item["id"]: item for item in findings}
+    previous = {
+        row["id"]: row
+        for row in db.rows(
+            f"SELECT * FROM health_findings WHERE id IN ({','.join('?' for _ in evaluated_ids)})",
+            tuple(sorted(evaluated_ids)),
+        )
+    } if evaluated_ids else {}
+    transitions: list[tuple[str, str, str, dict[str, str]]] = []
+    with db.connect() as connection:
+        for finding_id in evaluated_ids:
+            item = active_by_id.get(finding_id)
+            old = previous.get(finding_id)
+            if item:
+                if old:
+                    connection.execute(
+                        """
+                        UPDATE health_findings SET severity=?,category=?,title=?,detail=?,evidence=?,
+                            remediation=?,active=1,last_seen=?,resolved_at=NULL,
+                            occurrences=occurrences+?
+                        WHERE id=?
+                        """,
+                        (
+                            item["severity"], item["category"], item["title"], item["detail"],
+                            item["evidence"], item["remediation"], now, int(not old["active"]), finding_id,
+                        ),
+                    )
+                    if not old["active"]:
+                        transitions.append(("appeared", item["severity"], item["title"], item))
+                    elif old["severity"] != item["severity"]:
+                        transitions.append(("changed", item["severity"], item["title"], item))
+                else:
+                    connection.execute(
+                        """
+                        INSERT INTO health_findings(
+                            id,severity,category,title,detail,evidence,remediation,
+                            active,first_seen,last_seen,resolved_at,occurrences
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            finding_id, item["severity"], item["category"], item["title"],
+                            item["detail"], item["evidence"], item["remediation"], 1,
+                            now, now, None, 1,
+                        ),
+                    )
+                    transitions.append(("appeared", item["severity"], item["title"], item))
+            elif old and old["active"]:
+                connection.execute(
+                    "UPDATE health_findings SET active=0,resolved_at=?,last_seen=? WHERE id=?",
+                    (now, now, finding_id),
+                )
+                transitions.append(("resolved", "info", str(old["title"]), {
+                    "id": finding_id, "category": str(old["category"]), "evidence": str(old["evidence"]),
+                }))
+        connection.commit()
+    for transition, severity, title, item in transitions:
+        level = "critical" if severity == "critical" else "warning" if severity == "warning" else "info"
+        db.log(
+            level, "health", f"health.{transition}", title,
+            entity_type="health", entity_id=item["id"],
+            detail={"transition": transition, "category": item["category"], "evidence": item.get("evidence", "")},
+        )
+
+
+def health_center_payload(kernel_status: dict[str, Any] | None = None) -> dict[str, Any]:
+    rows = db.rows(
+        """
+        SELECT * FROM health_findings
+        WHERE active=1 OR (resolved_at IS NOT NULL AND resolved_at >= ?)
+        ORDER BY active DESC,
+            CASE severity WHEN 'critical' THEN 2 WHEN 'warning' THEN 1 ELSE 0 END DESC,
+            last_seen DESC
+        """,
+        ((datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),),
+    )
+    for row in rows:
+        row["active"] = bool(row["active"])
+    active = [row for row in rows if row["active"]]
+    summary = {
+        "critical": sum(row["severity"] == "critical" for row in active),
+        "warning": sum(row["severity"] == "warning" for row in active),
+        "info": sum(row["severity"] == "info" for row in active),
+        "resolved": sum(not row["active"] for row in rows),
+    }
+    return {
+        "status": "critical" if summary["critical"] else "warning" if summary["warning"] else "healthy",
+        "summary": summary,
+        "findings": rows,
+        "kernel": kernel_status or {"available": None, "window_hours": 24, "xid_count": None, "oom_count": None},
+        "evaluated_at": utc_now(),
+    }
+
+
 async def metrics_sampler() -> None:
     while True:
         await asyncio.sleep(max(2, settings.metrics_interval_seconds))
         try:
-            persist_metrics(await asyncio.to_thread(collect_metrics))
+            sample = await asyncio.to_thread(collect_metrics)
+            persist_metrics(sample)
+            metric_findings, metric_ids = metric_health_findings(sample)
+            model_findings, model_ids = model_run_health_findings()
+            sync_health_findings([*metric_findings, *model_findings], metric_ids | model_ids)
             model_samples = await collect_model_metrics()
             persist_model_metrics(model_samples)
             cutoff = time.time() - settings.metrics_retention_hours * 3600
@@ -22346,6 +22600,23 @@ async def services() -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
     return output
+
+
+@app.get("/api/system/health-center", dependencies=secure)
+async def system_health_center() -> dict[str, Any]:
+    sample, service_values = await asyncio.gather(
+        asyncio.to_thread(collect_metrics),
+        services(),
+    )
+    metric_findings, metric_ids = metric_health_findings(sample)
+    model_findings, model_ids = model_run_health_findings()
+    kernel_findings, kernel_ids, kernel_status = await asyncio.to_thread(kernel_health_findings)
+    managed_findings, managed_ids = service_health_findings(service_values)
+    sync_health_findings(
+        [*metric_findings, *model_findings, *kernel_findings, *managed_findings],
+        metric_ids | model_ids | kernel_ids | managed_ids,
+    )
+    return health_center_payload(kernel_status)
 
 
 class ServiceActionRequest(BaseModel):

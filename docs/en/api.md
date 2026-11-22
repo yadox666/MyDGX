@@ -221,6 +221,7 @@ Details in [MyDGX Assistant](asistente-mydgx.md).
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/storage` | Partitions, NVMe drives and SMART, and system disk usage by group (System, Models, Apps, MyDGX, User and other), with `disk_total` and `disk_free`. `home_directories` breaks down "User and other" by top-level home directory (excluding what is already counted in the other groups; those under 50 MB are grouped into "Other"). Read-only images (snap `squashfs`, `erofs`, `iso9660`) do not appear as partitions. Usage is measured in the background and cached for 10 minutes: while it is being calculated, `usage_pending` is `true` and the last measurement is returned (or empty lists the first time); `usage_updated_at` indicates when it was measured. `?refresh=true` forces a new measurement. |
+| GET | `/api/system/health-center` | Evaluates GPU temperature, available memory, disk, model failures, services, and kernel Xid/OOM events. Returns status, summary, active findings and seven-day resolutions, evidence, recommendation, and journal availability. Transitions are stored in Logs. |
 | GET | `/api/system/readiness` | Check that MyDGX and the system are ready, with warnings and recommendations. |
 | GET | `/api/system/versions` | System, kernel, CUDA, driver and runtime versions. |
 | GET | `/api/system/integrity` | Integrity of the kernel, DKMS, NVIDIA packages, llama.cpp and services. |

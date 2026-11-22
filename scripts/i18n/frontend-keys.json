@@ -1947,5 +1947,7 @@
   "Preparando {name}",
   "Encender perfil",
   "Este modelo no usa llama.cpp: arranca con su perfil {name}",
-  "Encender el perfil {name}"
+  "Encender el perfil {name}",
+  "Arrancando {name}; espera a que termine",
+  "Ya hay otro perfil preparándose o arrancando"
 ]

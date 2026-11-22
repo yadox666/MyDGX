@@ -4018,6 +4018,19 @@ function ModelsView({
     return stored === "all" || stored === "favorites" ? stored : "spark";
   });
   const [ollamaName, setOllamaName] = useState("");
+  const [requestedStarts, setRequestedStarts] = useState<Record<string, string>>({});
+  const activeJob = (job?: Job) => Boolean(job && ["queued", "running", "cancelling"].includes(job.status));
+  const profilePreparing = (profileId: string) => jobs.some((job) => job.kind === "profile.prepare-start" && job.target === profileId && activeJob(job))
+    || Boolean(requestedStarts[profileId] && (activeJob(jobs.find((job) => job.id === requestedStarts[profileId])) || !jobs.some((job) => job.id === requestedStarts[profileId])));
+  const anyProfilePreparing = jobs.some((job) => job.kind === "profile.prepare-start" && activeJob(job))
+    || Object.keys(requestedStarts).some(profilePreparing);
+  const profileJobSignature = jobs
+    .filter((job) => job.kind === "profile.prepare-start")
+    .map((job) => `${job.id}:${job.status}`)
+    .join("|");
+  useEffect(() => {
+    if (profileJobSignature) void refresh();
+  }, [profileJobSignature, refresh]);
   const [localFilter, setLocalFilter] = useState<LocalModelFilter>("all");
   const [localQuery, setLocalQuery] = useState("");
   const [query, setQuery] = useState("");
@@ -4378,7 +4391,8 @@ function ModelsView({
   async function startProfileFor(repoId: string, profile: { id: string; name: string }) {
     setQuickBusy(`profile:${repoId}`);
     try {
-      await api<{ job_id: string }>(`/api/profiles/${encodeURIComponent(profile.id)}/start`, { method: "POST" });
+      const result = await api<{ job_id: string }>(`/api/profiles/${encodeURIComponent(profile.id)}/start`, { method: "POST" });
+      setRequestedStarts((current) => ({ ...current, [profile.id]: result.job_id }));
       notify(t("Preparando {name}", { name: profile.name }));
       refresh();
     } catch (error) {
@@ -4848,7 +4862,7 @@ function ModelsView({
                       : model.loaded_by.includes("ComfyUI")
                         ? <button className="button secondary compact" disabled={quickBusy !== null} onClick={() => void releaseComfyUI(model.repo_id)} title={t("ComfyUI descarga de memoria todos los modelos que tenga cargados; se vuelven a cargar en la siguiente generación")} aria-label={t("Liberar {repo_id} de ComfyUI", { repo_id: model.repo_id })}><Square size={13} /> {quickBusy === `comfyui:${model.repo_id}` ? t("Liberando…") : t("Liberar")}</button>
                       : !model.loaded && !incomplete && unsupportedReason && model.profile_starts?.length
-                        ? <button className="button primary compact" disabled={quickBusy !== null} onClick={() => void startProfileFor(model.repo_id, model.profile_starts![0])} title={t("Este modelo no usa llama.cpp: arranca con su perfil {name}", { name: model.profile_starts[0].name })} aria-label={t("Encender el perfil {name}", { name: model.profile_starts[0].name })}><Play size={13} />{" "}{quickBusy === `profile:${model.repo_id}` ? t("Encendiendo…") : t("Encender perfil")}</button>
+                        ? <button className="button primary compact" disabled={quickBusy !== null || anyProfilePreparing} onClick={() => void startProfileFor(model.repo_id, model.profile_starts![0])} title={profilePreparing(model.profile_starts[0].id) ? t("Arrancando {name}; espera a que termine", { name: model.profile_starts[0].name }) : anyProfilePreparing ? t("Ya hay otro perfil preparándose o arrancando") : t("Este modelo no usa llama.cpp: arranca con su perfil {name}", { name: model.profile_starts[0].name })} aria-label={t("Encender el perfil {name}", { name: model.profile_starts[0].name })}>{quickBusy === `profile:${model.repo_id}` || profilePreparing(model.profile_starts[0].id) ? <RefreshCw className="spin" size={13} /> : <Play size={13} />}{" "}{quickBusy === `profile:${model.repo_id}` || profilePreparing(model.profile_starts[0].id) ? t("Encendiendo…") : t("Encender perfil")}</button>
                       : !model.loaded && !incomplete
                         && <QuickStartButton label={model.repo_id} availability={model.quick_start} defaultContext={model.memory_estimate?.context_size} unsupportedReason={unsupportedReason} busy={quickBusy !== null} pending={quickBusy === `huggingface:${model.repo_id}`} title={t("Cargar ahora con llama.cpp en el perfil Quick; no se restaura al reiniciar el equipo")} onStart={(contextSize) => void quickModel("huggingface", model.repo_id, true, contextSize)} onContextChange={(contextSize) => setChosenContexts((current) => ({ ...current, [model.repo_id]: contextSize }))} />}
                     <a className="icon-button" href={`https://huggingface.co/${model.repo_id}`} target="_blank" rel="noreferrer noopener" title={t("Abrir en Hugging Face")} aria-label={t("Abrir {repo_id} en Hugging Face", { repo_id: model.repo_id })}><ExternalLink size={15} /></a>

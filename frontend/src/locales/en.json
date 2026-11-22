@@ -1965,5 +1965,7 @@
   "Preparando {name}": "Preparing {name}",
   "Encender perfil": "Start profile",
   "Este modelo no usa llama.cpp: arranca con su perfil {name}": "This model does not use llama.cpp: it starts with its profile {name}",
-  "Encender el perfil {name}": "Start the profile {name}"
+  "Encender el perfil {name}": "Start the profile {name}",
+  "Arrancando {name}; espera a que termine": "Starting {name}; wait for it to finish",
+  "Ya hay otro perfil preparándose o arrancando": "Another profile is already preparing or starting"
 }

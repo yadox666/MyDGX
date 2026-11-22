@@ -409,16 +409,34 @@ herramientas. Ver [Laboratorio IA](laboratorio-ia.md).
 
 ## Sistema
 
-La pestaña **Health Center** evalúa de forma continua temperatura GPU, memoria
-disponible, espacio en disco y fallos de modelos. Al abrirla añade el estado de
-los servicios administrados y los eventos NVIDIA Xid y OOM del journal del
-kernel de las últimas 24 horas.
+La pestaña **Health Center** evalúa de forma continua temperatura, memoria
+disponible, Linux PSI, swap, disco, reloj/potencia GPU y fallos de modelos. Al
+abrirla añade servicios, compatibilidad de PyTorch con CUDA/SM121, NVIDIA
+Docker/CDI, errores de reserva del KV cache de vLLM y eventos NVIDIA Xid, OOM y
+térmicos del journal del kernel del arranque actual.
 
-Cada hallazgo muestra severidad, evidencia observada y una acción recomendada.
+La detección de baja potencia exige al menos tres muestras consecutivas con
+utilización alta, potencia baja y reloj ≤800 MHz. Los Xid de hardware,
+driver o firmware son críticos; los normalmente causados por una aplicación
+son avisos. Los OOM del host se distinguen de límites de memoria de un
+contenedor.
+
+Cada hallazgo muestra severidad, confianza, evidencia, fuente y una acción
+recomendada. Si un colector obligatorio falla, el encabezado indica
+*Diagnóstico parcial* sin convertir el dato ausente en un estado saludable.
 Las apariciones, cambios de severidad y resoluciones se registran en *Logs*; las
 resoluciones permanecen visibles siete días. Una lectura que el equipo no puede
 obtener se muestra como desconocida, nunca como cero. Leer el journal depende de
 los permisos del usuario que ejecuta MyDGX.
+
+**Informe redactado** descarga JSON sin logs crudos, hostname, identificadores
+de red ni credenciales. Contiene plataforma no identificativa, estado de los
+colectores y solo las líneas coincidentes ya redactadas. Revísalo igualmente
+antes de compartirlo.
+
+Las reglas DGX específicas están inspiradas en
+[spark-doctor](https://github.com/joeynyc/spark-doctor) (MIT), adaptadas al
+muestreo continuo y a los perfiles de MyDGX.
 
 La pestaña **Plataforma** mantiene:
 

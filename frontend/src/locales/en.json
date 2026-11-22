@@ -1918,5 +1918,16 @@
   "Sistema saludable": "System healthy",
   "Ver todos los activos": "View all active",
   "Volver a evaluar": "Evaluate again",
-  "Health Center": "Health Center"
+  "Health Center": "Health Center",
+  "Colectores": "Collectors",
+  "Confianza {value}": "{value} confidence",
+  "Diagnóstico completo": "Complete diagnosis",
+  "Diagnóstico parcial": "Partial diagnosis",
+  "Informe de salud descargado": "Health report downloaded",
+  "Informe redactado": "Redacted report",
+  "Kernel · arranque actual": "Kernel · current boot",
+  "Térmicos": "Thermal",
+  "alta": "high",
+  "media": "medium",
+  "baja": "low"
 }

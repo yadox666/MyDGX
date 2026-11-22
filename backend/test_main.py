@@ -1389,7 +1389,7 @@ class CollectorTests(unittest.TestCase):
     def test_nvidia_metrics_keeps_supported_gb10_values(self) -> None:
         result = type("Result", (), {
             "returncode": 0,
-            "stdout": "0, [N/A], [N/A], 41, 42.5, 120\n",
+            "stdout": "0, [N/A], [N/A], 41, 42.5, 120, 1500\n",
         })()
         with patch("backend.main.shutil.which", return_value="/usr/bin/nvidia-smi"), patch(
             "backend.main.run_command", return_value=result
@@ -1399,6 +1399,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(metrics["gpu_temperature"], 41.0)
         self.assertEqual(metrics["gpu_power_watts"], 42.5)
         self.assertEqual(metrics["gpu_power_limit_watts"], 120.0)
+        self.assertEqual(metrics["gpu_clock_mhz"], 1500.0)
         self.assertIsNone(metrics["gpu_memory_used"])
         self.assertIsNone(metrics["gpu_memory_total"])
 
@@ -1586,6 +1587,18 @@ class CollectorTests(unittest.TestCase):
         })
         self.assertEqual(unknown, [])
         self.assertEqual(unknown_ids, evaluated)
+        pressure, _ = main_module.metric_health_findings({
+            "gpu_temperature": 50,
+            "memory_available": 64 * gib,
+            "memory_total": 128 * gib,
+            "memory_psi_full_avg10": 2.0,
+            "memory_psi_some_avg10": 12.0,
+            "swap_used": 0,
+            "disk_total": 100 * gib,
+            "disk_used": 10 * gib,
+        })
+        self.assertEqual({item["id"] for item in pressure}, {"memory-available"})
+        self.assertIn("PSI full", pressure[0]["evidence"])
 
         original_path = db.path
         try:
@@ -1622,7 +1635,9 @@ class CollectorTests(unittest.TestCase):
     def test_kernel_health_reports_xid_and_oom_without_fabricating_unavailable_counts(self) -> None:
         output = "\n".join([
             "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus.",
+            "NVRM: Xid (PCI:0000:01:00): 31, MMU fault.",
             "Out of memory: Killed process 1234 (llama-server)",
+            "Memory cgroup out of memory: Killed process 5678 (worker)",
         ])
         with (
             patch("backend.main.os.uname", return_value=SimpleNamespace(sysname="Linux")),
@@ -1632,15 +1647,141 @@ class CollectorTests(unittest.TestCase):
             )),
         ):
             findings, evaluated, status = main_module.kernel_health_findings()
-        self.assertEqual(evaluated, {"kernel-xid", "kernel-oom"})
-        self.assertEqual({item["id"] for item in findings}, evaluated)
-        self.assertEqual((status["xid_count"], status["oom_count"]), (1, 1))
+        self.assertEqual(evaluated, {
+            "kernel-xid-hardware", "kernel-xid-application",
+            "kernel-oom-host", "kernel-oom-cgroup", "kernel-thermal",
+        })
+        self.assertEqual({item["id"] for item in findings}, evaluated - {"kernel-thermal"})
+        self.assertEqual((status["xid_count"], status["oom_count"]), (2, 2))
+        self.assertEqual((status["host_oom_count"], status["cgroup_oom_count"]), (1, 1))
+        self.assertEqual(
+            {item["id"]: item["severity"] for item in findings},
+            {
+                "kernel-xid-hardware": "critical",
+                "kernel-xid-application": "warning",
+                "kernel-oom-host": "critical",
+                "kernel-oom-cgroup": "warning",
+            },
+        )
 
         with patch("backend.main.shutil.which", return_value=None):
             findings, _, status = main_module.kernel_health_findings()
         self.assertEqual(findings, [])
         self.assertIsNone(status["xid_count"])
         self.assertFalse(status["available"])
+
+    def test_low_power_health_requires_consecutive_low_clock_samples(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "power-health.db"
+                db.initialize()
+                base = datetime.now(timezone.utc)
+                for index in range(3):
+                    db.execute(
+                        """
+                        INSERT INTO metric_samples(
+                            created_at,cpu_percent,memory_percent,memory_used,memory_total,
+                            gpu_utilization,gpu_memory_used,gpu_memory_total,gpu_temperature,
+                            gpu_power_watts,gpu_power_limit_watts,gpu_clock_mhz,
+                            disk_percent,disk_used,disk_total,disk_read_bytes,disk_write_bytes,
+                            network_sent,network_received
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            datetime.fromtimestamp(base.timestamp() + index * 2, timezone.utc).isoformat(),
+                            10, 20, 1, 10, 90, 1, 10, 55, 18, 120, 780,
+                            10, 1, 10, 0, 0, 0, 0,
+                        ),
+                    )
+                findings, evaluated = main_module.low_power_health_findings()
+                self.assertEqual(evaluated, {"gpu-low-power"})
+                self.assertEqual(findings[0]["severity"], "critical")
+                self.assertEqual(findings[0]["confidence"], "high")
+
+                db.execute("UPDATE metric_samples SET gpu_clock_mhz=1500")
+                findings, _ = main_module.low_power_health_findings()
+                self.assertEqual(findings, [])
+        finally:
+            db.path = original_path
+
+    def test_runtime_health_flags_cpu_only_torch_in_isolated_environment(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "runtime-health.db"
+                db.initialize()
+                python_result = SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps({
+                        "installed": True,
+                        "version": "2.10.0+cpu",
+                        "cuda": "",
+                        "cuda_available": False,
+                        "arches": [],
+                    }),
+                    stderr="",
+                )
+                with (
+                    patch("backend.main.run_command", return_value=python_result),
+                    patch("backend.main.shutil.which", return_value=None),
+                ):
+                    findings, evaluated, status = main_module.runtime_health_findings()
+                self.assertIn("runtime-torch-cpu", evaluated)
+                self.assertEqual({item["id"] for item in findings}, {"runtime-torch-cpu"})
+                self.assertEqual(status["python"], "ok")
+                self.assertEqual(status["docker"], "not_applicable")
+        finally:
+            db.path = original_path
+
+    def test_health_payload_marks_failed_collectors_as_incomplete(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "health-completeness.db"
+                db.initialize()
+                result = main_module.health_center_payload(
+                    collectors=[
+                        {"id": "metrics", "status": "ok", "detail": "ok"},
+                        {"id": "kernel", "status": "error", "detail": "denied"},
+                    ],
+                )
+                self.assertFalse(result["diagnosis"]["complete"])
+                self.assertEqual(result["status"], "healthy")
+        finally:
+            db.path = original_path
+
+    def test_health_support_report_omits_identity_and_redacts_evidence(self) -> None:
+        payload = {
+            "status": "warning",
+            "diagnosis": {"complete": True, "collectors": []},
+            "summary": {"critical": 0, "warning": 1, "info": 0, "resolved": 0},
+            "findings": [{"evidence": "Authorization: Bearer secret-health-token"}],
+            "kernel": {},
+            "runtime": {},
+            "evaluated_at": "2026-01-01T00:00:00+00:00",
+        }
+        with (
+            patch("backend.main.system_health_center", new=AsyncMock(return_value=payload)),
+            patch("backend.main.device_identity", return_value={
+                "device_model": "NVIDIA DGX Spark",
+                "gpu_name": "NVIDIA GB10",
+            }),
+            patch("backend.main.os_information", return_value={
+                "os_family": "Ubuntu",
+                "os_name": "Ubuntu 24.04",
+            }),
+            patch("backend.main.os.uname", return_value=SimpleNamespace(
+                machine="aarch64", release="test-kernel",
+            )),
+        ):
+            report = asyncio.run(main_module.system_health_center_report())
+        encoded = json.dumps(report)
+        self.assertTrue(report["anonymized"])
+        self.assertNotIn("hostname", report["platform"])
+        self.assertNotIn("secret-health-token", encoded)
+        self.assertIn("***REDACTED***", encoded)
+        self.assertFalse(report["privacy"]["raw_logs_included"])
 
     def test_system_integrity_exposes_kernel_and_runtime_state(self) -> None:
         result = system_integrity()

@@ -311,6 +311,8 @@ type HealthFinding = {
   detail: string;
   evidence: string;
   remediation: string;
+  confidence: "low" | "medium" | "high";
+  source_note: string;
   active: boolean;
   first_seen: string;
   last_seen: string;
@@ -320,15 +322,25 @@ type HealthFinding = {
 
 type HealthCenter = {
   status: "healthy" | "warning" | "critical";
+  diagnosis: {
+    complete: boolean;
+    collectors: Array<{ id: string; status: "ok" | "error" | "not_applicable"; detail: string }>;
+  };
   summary: { critical: number; warning: number; info: number; resolved: number };
   findings: HealthFinding[];
   kernel: {
     available: boolean | null;
-    window_hours: number;
+    scope: "current_boot";
+    sources?: { dmesg: boolean; journal: boolean };
     xid_count: number | null;
+    xid_codes?: number[];
     oom_count: number | null;
+    host_oom_count?: number | null;
+    cgroup_oom_count?: number | null;
+    thermal_count?: number | null;
     error?: string;
   };
+  runtime: { python?: string; docker?: string; journal?: string; python_detail?: string };
   evaluated_at: string;
 };
 
@@ -8407,10 +8419,11 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
   );
 }
 
-function HealthCenterPanel({ health, loading, onRefresh }: {
+function HealthCenterPanel({ health, loading, onRefresh, notify }: {
   health: HealthCenter | null;
   loading: boolean;
   onRefresh: () => void;
+  notify: (message: string, error?: boolean) => void;
 }) {
   const [filter, setFilter] = useState<"active" | "critical" | "warning" | "resolved">("active");
   if (!health) {
@@ -8426,6 +8439,20 @@ function HealthCenterPanel({ health, loading, onRefresh }: {
     : health.status === "critical"
       ? t("Hay problemas críticos")
       : t("El sistema requiere atención");
+  async function downloadReport() {
+    try {
+      const report = await api<Record<string, unknown>>("/api/system/health-center/report");
+      const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `mydgx-health-report-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      notify(t("Informe de salud descargado"));
+    } catch (error) {
+      notify((error as Error).message, true);
+    }
+  }
   return <div className="health-center">
     <Card className={`health-hero ${health.status}`}>
       <div className="health-hero-status">
@@ -8433,7 +8460,7 @@ function HealthCenterPanel({ health, loading, onRefresh }: {
         <span>
           <small>{t("HEALTH CENTER")}</small>
           <strong>{statusTitle}</strong>
-          <em>{t("Evaluado {time}", { time: new Date(health.evaluated_at).toLocaleString(locale) })}</em>
+          <em>{health.diagnosis.complete ? t("Diagnóstico completo") : t("Diagnóstico parcial")} · {t("Evaluado {time}", { time: new Date(health.evaluated_at).toLocaleString(locale) })}</em>
         </span>
       </div>
       <div className="health-summary">
@@ -8447,22 +8474,30 @@ function HealthCenterPanel({ health, loading, onRefresh }: {
           <strong>{health.summary.resolved}</strong><small>{t("Resueltos · 7 días")}</small>
         </button>
       </div>
-      <button className="button secondary" disabled={loading} onClick={onRefresh}><RefreshCw className={loading ? "spin" : ""} size={15} />{" "}{t("Volver a evaluar")}</button>
+      <div className="health-hero-actions">
+        <button className="button secondary" onClick={() => void downloadReport()}><Download size={15} />{" "}{t("Informe redactado")}</button>
+        <button className="button secondary" disabled={loading} onClick={onRefresh}><RefreshCw className={loading ? "spin" : ""} size={15} />{" "}{t("Volver a evaluar")}</button>
+      </div>
     </Card>
 
     <div className="health-observers">
       <Card>
-        <div className="card-kicker"><Terminal size={15} /> {t("Kernel · últimas 24 h")}</div>
+        <div className="card-kicker"><Terminal size={15} /> {t("Kernel · arranque actual")}</div>
         <div className="health-observer-values">
           <span><strong>{health.kernel.xid_count ?? "—"}</strong><small>NVIDIA Xid</small></span>
           <span><strong>{health.kernel.oom_count ?? "—"}</strong><small>OOM killer</small></span>
+          <span><strong>{health.kernel.thermal_count ?? "—"}</strong><small>{t("Térmicos")}</small></span>
         </div>
         <small>{health.kernel.available ? t("Journal del kernel accesible") : health.kernel.error || t("Journal del kernel no disponible")}</small>
       </Card>
       <Card>
-        <div className="card-kicker"><Activity size={15} /> {t("Cobertura activa")}</div>
-        <p>{t("GPU, memoria, almacenamiento, kernel, servicios administrados y estado de modelos.")}</p>
-        <small>{t("Las métricas ausentes se muestran como desconocidas; nunca se inventan como cero.")}</small>
+        <div className="card-kicker"><Activity size={15} /> {t("Colectores")}</div>
+        <div className="health-collectors">
+          {health.diagnosis.collectors.map((collector) => <span key={collector.id}>
+            {collector.status === "ok" ? <CheckCircle2 /> : collector.status === "error" ? <TriangleAlert /> : <Info />}
+            <strong>{collector.id}</strong><small>{collector.detail}</small>
+          </span>)}
+        </div>
       </Card>
     </div>
 
@@ -8485,11 +8520,13 @@ function HealthCenterPanel({ health, loading, onRefresh }: {
             <div className="health-finding-title">
               <strong>{finding.title}</strong>
               <span className={`badge ${finding.active ? finding.severity : "completed"}`}>{finding.active ? finding.severity === "critical" ? t("Crítico") : finding.severity === "warning" ? t("Aviso") : t("Información") : t("Resuelto")}</span>
+              <span className={`badge confidence-${finding.confidence}`}>{t("Confianza {value}", { value: finding.confidence === "high" ? t("alta") : finding.confidence === "medium" ? t("media") : t("baja") })}</span>
               <span className="badge">{finding.category}</span>
             </div>
             <p>{finding.detail}</p>
             {finding.evidence && <div className="health-evidence"><Eye size={14} /><span><small>{t("Evidencia")}</small><code>{finding.evidence}</code></span></div>}
             {finding.active && finding.remediation && <div className="health-remediation"><ShieldCheck size={14} /><span><small>{t("Acción recomendada")}</small><em>{finding.remediation}</em></span></div>}
+            {finding.source_note && <small className="health-source">{t("Fuente")}: {finding.source_note}</small>}
             <small className="health-dates">
               {finding.active
                 ? t("Detectado {first} · visto por última vez {last}", { first: new Date(finding.first_seen).toLocaleString(locale), last: new Date(finding.last_seen).toLocaleString(locale) })
@@ -8641,7 +8678,7 @@ function SystemView({ config, jobs, overview, notify, onOpenLab }: { config: Con
         </button>
       </div>
       {systemTab === "health"
-        ? <HealthCenterPanel health={healthCenter} loading={healthLoading} onRefresh={loadHealth} />
+        ? <HealthCenterPanel health={healthCenter} loading={healthLoading} onRefresh={loadHealth} notify={notify} />
         : <>
       {overview && systemBranding && (
         <Card className={`system-device-banner device-${overview.host.device_variant}`}>

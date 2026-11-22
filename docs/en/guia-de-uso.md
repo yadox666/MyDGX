@@ -409,16 +409,33 @@ server. See [AI Lab](laboratorio-ia.md).
 
 ## System
 
-The **Health Center** tab continuously evaluates GPU temperature, available
-memory, disk space, and model failures. When opened, it also checks managed
-services and NVIDIA Xid and OOM events from the kernel journal over the last 24
-hours.
+The **Health Center** tab continuously evaluates temperature, available memory,
+Linux PSI, swap, disk, GPU clock/power, and model failures. When opened, it also
+checks services, PyTorch CUDA/SM121 compatibility, NVIDIA Docker/CDI, vLLM KV
+cache allocation errors, and NVIDIA Xid, OOM, and thermal events from the
+current-boot kernel journal.
 
-Each finding shows severity, observed evidence, and a recommended action.
+Low-power detection requires at least three consecutive samples with high
+utilization, low power, and a clock at or below 800 MHz. Hardware, driver, or
+firmware Xids are critical; those normally caused by an application are
+warnings. Host OOM is distinguished from a container memory limit.
+
+Each finding shows severity, confidence, evidence, source, and a recommended
+action. If a required collector fails, the header says *Partial diagnosis*
+without turning an absent reading into a healthy state.
 Appearances, severity changes, and resolutions are recorded in *Logs*;
 resolutions remain visible for seven days. A reading the machine cannot obtain
 is shown as unknown, never as zero. Reading the journal depends on the
 permissions of the user running MyDGX.
+
+**Redacted report** downloads JSON without raw logs, hostname, network
+identifiers, or credentials. It includes non-identifying platform data,
+collector status, and only matching evidence after redaction. Review it before
+sharing anyway.
+
+DGX-specific rules are inspired by
+[spark-doctor](https://github.com/joeynyc/spark-doctor) (MIT), adapted to
+MyDGX continuous sampling and profiles.
 
 The **Platform** tab retains:
 

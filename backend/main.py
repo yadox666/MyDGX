@@ -690,6 +690,7 @@ class Database:
                     gpu_temperature REAL,
                     gpu_power_watts REAL,
                     gpu_power_limit_watts REAL,
+                    gpu_clock_mhz REAL,
                     disk_percent REAL NOT NULL,
                     disk_used INTEGER NOT NULL,
                     disk_total INTEGER NOT NULL,
@@ -789,6 +790,8 @@ class Database:
                     detail TEXT NOT NULL,
                     evidence TEXT NOT NULL DEFAULT '',
                     remediation TEXT NOT NULL DEFAULT '',
+                    confidence TEXT NOT NULL DEFAULT 'medium',
+                    source_note TEXT NOT NULL DEFAULT '',
                     active INTEGER NOT NULL DEFAULT 1,
                     first_seen TEXT NOT NULL,
                     last_seen TEXT NOT NULL,
@@ -1095,6 +1098,7 @@ class Database:
             metric_additions = {
                 "gpu_power_watts": "REAL",
                 "gpu_power_limit_watts": "REAL",
+                "gpu_clock_mhz": "REAL",
                 "disk_read_bytes": "INTEGER NOT NULL DEFAULT 0",
                 "disk_write_bytes": "INTEGER NOT NULL DEFAULT 0",
             }
@@ -1102,6 +1106,19 @@ class Database:
                 if column not in metric_columns:
                     connection.execute(
                         f"ALTER TABLE metric_samples ADD COLUMN {column} {definition}"
+                    )
+            health_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(health_findings)").fetchall()
+            }
+            health_additions = {
+                "confidence": "TEXT NOT NULL DEFAULT 'medium'",
+                "source_note": "TEXT NOT NULL DEFAULT ''",
+            }
+            for column, definition in health_additions.items():
+                if column not in health_columns:
+                    connection.execute(
+                        f"ALTER TABLE health_findings ADD COLUMN {column} {definition}"
                     )
             suite_item_columns = {
                 row["name"]
@@ -1804,6 +1821,7 @@ def nvidia_metrics() -> dict[str, float | int | None]:
         "gpu_temperature": None,
         "gpu_power_watts": None,
         "gpu_power_limit_watts": None,
+        "gpu_clock_mhz": None,
     }
     if not shutil.which("nvidia-smi"):
         return defaults
@@ -1811,7 +1829,7 @@ def nvidia_metrics() -> dict[str, float | int | None]:
         result = run_command(
             [
                 "nvidia-smi",
-                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit",
+                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit,clocks.current.graphics",
                 "--format=csv,noheader,nounits",
             ]
         )
@@ -1826,7 +1844,7 @@ def nvidia_metrics() -> dict[str, float | int | None]:
                     values.append(None)
                 else:
                     values.append(float(value))
-            if len(values) == 6:
+            if len(values) == 7:
                 rows.append(values)
         if not rows:
             return defaults
@@ -1840,6 +1858,7 @@ def nvidia_metrics() -> dict[str, float | int | None]:
         temperature = available(3)
         power_draw = available(4)
         power_limit = available(5)
+        clock = available(6)
         return {
             "gpu_utilization": round(sum(utilization) / len(utilization), 1) if utilization else None,
             "gpu_memory_used": int(sum(memory_used) * 1024 * 1024) if memory_used else None,
@@ -1847,13 +1866,41 @@ def nvidia_metrics() -> dict[str, float | int | None]:
             "gpu_temperature": round(max(temperature), 1) if temperature else None,
             "gpu_power_watts": round(sum(power_draw), 1) if power_draw else None,
             "gpu_power_limit_watts": round(sum(power_limit), 1) if power_limit else None,
+            "gpu_clock_mhz": round(sum(clock) / len(clock), 1) if clock else None,
         }
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return defaults
 
 
+def memory_pressure_metrics() -> dict[str, float | None]:
+    values: dict[str, float | None] = {"memory_psi_some_avg10": None, "memory_psi_full_avg10": None}
+    try:
+        for line in Path("/proc/pressure/memory").read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if not parts or parts[0] not in {"some", "full"}:
+                continue
+            fields = {
+                key: value
+                for item in parts[1:]
+                if "=" in item
+                for key, value in [item.split("=", 1)]
+            }
+            if "avg10" in fields:
+                values[f"memory_psi_{parts[0]}_avg10"] = float(fields["avg10"])
+    except (OSError, ValueError):
+        pass
+    return values
+
+
 def collect_metrics() -> dict[str, Any]:
     memory = psutil.virtual_memory()
+    try:
+        swap = psutil.swap_memory()
+        swap_total: int | None = swap.total
+        swap_used: int | None = swap.used
+    except (OSError, PermissionError):
+        swap_total = None
+        swap_used = None
     disk = psutil.disk_usage("/")
     try:
         network = psutil.net_io_counters()
@@ -1876,6 +1923,9 @@ def collect_metrics() -> dict[str, Any]:
         "memory_used": memory.used,
         "memory_total": memory.total,
         "memory_available": memory.available,
+        "swap_total": swap_total,
+        "swap_used": swap_used,
+        **memory_pressure_metrics(),
         **nvidia_metrics(),
         "disk_percent": round(disk.percent, 1),
         "disk_used": disk.used,
@@ -2023,15 +2073,15 @@ def persist_metrics(sample: dict[str, Any]) -> None:
         INSERT INTO metric_samples(
             created_at,cpu_percent,memory_percent,memory_used,memory_total,
             gpu_utilization,gpu_memory_used,gpu_memory_total,gpu_temperature,
-            gpu_power_watts,gpu_power_limit_watts,
+            gpu_power_watts,gpu_power_limit_watts,gpu_clock_mhz,
             disk_percent,disk_used,disk_total,disk_read_bytes,disk_write_bytes,
             network_sent,network_received
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         tuple(sample[key] for key in (
             "created_at", "cpu_percent", "memory_percent", "memory_used", "memory_total",
             "gpu_utilization", "gpu_memory_used", "gpu_memory_total", "gpu_temperature",
-            "gpu_power_watts", "gpu_power_limit_watts",
+            "gpu_power_watts", "gpu_power_limit_watts", "gpu_clock_mhz",
             "disk_percent", "disk_used", "disk_total", "disk_read_bytes", "disk_write_bytes",
             "network_sent", "network_received",
         )),
@@ -2049,6 +2099,9 @@ def health_finding(
     detail: str,
     evidence: str,
     remediation: str,
+    *,
+    confidence: Literal["low", "medium", "high"] = "medium",
+    source_note: str = "",
 ) -> dict[str, str]:
     return {
         "id": finding_id,
@@ -2058,6 +2111,8 @@ def health_finding(
         "detail": detail,
         "evidence": evidence,
         "remediation": remediation,
+        "confidence": confidence,
+        "source_note": source_note,
     }
 
 
@@ -2073,16 +2128,40 @@ def metric_health_findings(sample: dict[str, Any]) -> tuple[list[dict[str, str]]
             "La GPU está por encima del umbral operativo recomendado.",
             f"{temperature:.1f} °C observados; aviso ≥85 °C, crítico ≥90 °C.",
             "Comprueba ventilación, carga sostenida y límites de potencia; reduce la carga si sigue subiendo.",
+            confidence="high",
+            source_note="Lectura directa de nvidia-smi; umbrales térmicos conservadores para GB10.",
         ))
     available = sample.get("memory_available")
-    if isinstance(available, (int, float)) and available < 3 * 1024 ** 3:
-        gib = available / 1024 ** 3
-        severity = "critical" if available < 1.5 * 1024 ** 3 else "warning"
+    total = sample.get("memory_total")
+    psi_full = sample.get("memory_psi_full_avg10")
+    psi_some = sample.get("memory_psi_some_avg10")
+    swap_used = sample.get("swap_used")
+    memory_warning = (
+        isinstance(available, (int, float)) and (
+            available < 16 * 1024 ** 3
+            or isinstance(total, (int, float)) and total > 0 and available / total < 0.15
+        )
+    ) or isinstance(psi_full, (int, float)) and psi_full >= 1 or isinstance(psi_some, (int, float)) and psi_some >= 10 or isinstance(swap_used, (int, float)) and swap_used > 8 * 1024 ** 3
+    memory_critical = (
+        isinstance(available, (int, float)) and available < 8 * 1024 ** 3
+    ) or isinstance(psi_full, (int, float)) and psi_full >= 5
+    if memory_warning or memory_critical:
+        evidence = []
+        if isinstance(available, (int, float)):
+            evidence.append(f"{available / 1024 ** 3:.1f} GiB disponibles")
+        if isinstance(psi_full, (int, float)):
+            evidence.append(f"PSI full avg10 {psi_full:.1f}%")
+        if isinstance(psi_some, (int, float)):
+            evidence.append(f"PSI some avg10 {psi_some:.1f}%")
+        if isinstance(swap_used, (int, float)) and swap_used > 0:
+            evidence.append(f"swap usado {swap_used / 1024 ** 3:.1f} GiB")
         findings.append(health_finding(
-            "memory-available", severity, "Memoria", "Memoria disponible baja",
-            "El sistema tiene poco margen para nuevas peticiones o modelos.",
-            f"{gib:.2f} GiB disponibles; aviso <3 GiB, crítico <1.5 GiB.",
+            "memory-available", "critical" if memory_critical else "warning", "Memoria", "Presión de memoria unificada",
+            "La memoria disponible, los stalls del kernel o el uso de swap indican presión sobre el pool compartido.",
+            " · ".join(evidence),
             "Detén perfiles que no uses o reduce contexto, paralelo y tamaño del KV cache.",
+            confidence="high" if isinstance(psi_full, (int, float)) and psi_full >= 5 else "medium",
+            source_note="MemAvailable, swap y Linux PSI; CPU y GPU comparten la memoria unificada en GB10.",
         ))
     disk_total = sample.get("disk_total")
     disk_used = sample.get("disk_used")
@@ -2096,6 +2175,8 @@ def metric_health_findings(sample: dict[str, Any]) -> tuple[list[dict[str, str]]
                 "Las descargas, conversiones y actualizaciones pueden quedarse sin espacio.",
                 f"{gib:.1f} GiB libres; aviso <20 GiB, crítico <5 GiB.",
                 "Borra modelos o trabajos innecesarios desde Modelos y revisa el uso del almacenamiento.",
+                confidence="high",
+                source_note="Uso del sistema de archivos raíz observado por psutil.",
             ))
     return findings, evaluated
 
@@ -2122,38 +2203,299 @@ def model_run_health_findings() -> tuple[list[dict[str, str]], set[str]]:
     return findings, evaluated
 
 
-def kernel_health_findings() -> tuple[list[dict[str, str]], set[str], dict[str, Any]]:
-    evaluated = {"kernel-xid", "kernel-oom"}
-    status: dict[str, Any] = {"available": False, "window_hours": 24, "xid_count": None, "oom_count": None}
-    if os.uname().sysname != "Linux" or not shutil.which("journalctl"):
-        return [], evaluated, status
-    result = run_command(
-        ["journalctl", "-k", "--since", "-24 hours", "--no-pager", "-o", "cat", "-n", "1000"],
-        4,
+def low_power_health_findings() -> tuple[list[dict[str, str]], set[str]]:
+    """Require a sustained run before diagnosing the reported GB10 low-power state."""
+    finding_id = "gpu-low-power"
+    rows = list(reversed(db.rows(
+        """
+        SELECT created_at,gpu_utilization,gpu_power_watts,gpu_clock_mhz
+        FROM metric_samples
+        ORDER BY id DESC LIMIT 20
+        """
+    )))
+    longest: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+    maximum_gap = max(5.0, settings.metrics_interval_seconds * 2.5)
+    for row in rows:
+        qualifies = (
+            isinstance(row.get("gpu_utilization"), (int, float)) and row["gpu_utilization"] >= 80
+            and isinstance(row.get("gpu_power_watts"), (int, float)) and row["gpu_power_watts"] <= 25
+        )
+        if not qualifies:
+            current = []
+            continue
+        if current:
+            try:
+                previous = datetime.fromisoformat(str(current[-1]["created_at"]))
+                observed = datetime.fromisoformat(str(row["created_at"]))
+                if not 0 < (observed - previous).total_seconds() <= maximum_gap:
+                    current = []
+            except (TypeError, ValueError):
+                current = []
+        current.append(row)
+        if len(current) > len(longest):
+            longest = list(current)
+    if len(longest) < 3:
+        return [], {finding_id}
+    clocks = [row.get("gpu_clock_mhz") for row in longest]
+    if all(isinstance(clock, (int, float)) and clock > 1000 for clock in clocks):
+        return [], {finding_id}
+    confirmed = all(isinstance(clock, (int, float)) and clock <= 800 for clock in clocks)
+    evidence = "; ".join(
+        f"{row['gpu_utilization']:.0f}% GPU · {row['gpu_power_watts']:.1f} W · "
+        f"{row['gpu_clock_mhz']:.0f} MHz" if isinstance(row.get("gpu_clock_mhz"), (int, float))
+        else f"{row['gpu_utilization']:.0f}% GPU · {row['gpu_power_watts']:.1f} W · reloj desconocido"
+        for row in longest[:5]
     )
-    if result.returncode != 0:
-        status["error"] = "journalctl no disponible para el usuario de MyDGX"
+    finding = health_finding(
+        finding_id, "critical" if confirmed else "warning", "GPU",
+        "Posible estado de baja potencia de la GPU",
+        "La GPU mantiene utilización alta y consumo bajo con el reloj bloqueado."
+        if confirmed else "La GPU mantiene utilización alta y consumo bajo, pero el reloj no permite confirmar el estado.",
+        f"{len(longest)} muestras consecutivas: {evidence}",
+        "Guarda el trabajo, confirma la lectura bajo carga sostenida y apaga completamente el Spark durante 60 segundos antes de reintentar."
+        if confirmed else "Mantén una carga GPU estable y vuelve a evaluar; no reinicies basándote en muestras incompletas.",
+        confidence="high" if confirmed else "low" if any(clock is None for clock in clocks) else "medium",
+        source_note="Utilización, potencia y reloj de nvidia-smi; requiere al menos tres muestras consecutivas.",
+    )
+    return [finding], {finding_id}
+
+
+HARDWARE_XID_CODES = {48, 61, 62, 63, 64, 74, 79, 92, 94, 95, 119, 120}
+XID_CODE_PATTERN = re.compile(r"\bXid(?:\s*\([^)]*\))?\s*:\s*(\d+)", re.IGNORECASE)
+OOM_KILL_PATTERN = re.compile(r"\bKilled process\s+(\d+)\s+\(([^)]+)\)", re.IGNORECASE)
+
+
+def kernel_log_snapshot() -> tuple[list[str], dict[str, Any]]:
+    """Read only this boot's kernel stream; retain no unrelated raw log lines."""
+    status: dict[str, Any] = {
+        "available": False,
+        "scope": "current_boot",
+        "sources": {"dmesg": False, "journal": False},
+        "xid_count": None,
+        "oom_count": None,
+        "thermal_count": None,
+    }
+    if os.uname().sysname != "Linux":
+        status["error"] = "El journal del kernel solo está disponible en Linux"
+        return [], status
+    lines: list[str] = []
+    if shutil.which("dmesg"):
+        result = run_command(["dmesg", "--color=never"], 4)
+        if result.returncode == 0:
+            status["sources"]["dmesg"] = True
+            lines.extend(result.stdout.splitlines())
+    if shutil.which("journalctl"):
+        result = run_command(["journalctl", "-k", "-b", "--no-pager", "-o", "cat", "-n", "3000"], 5)
+        if result.returncode == 0:
+            status["sources"]["journal"] = True
+            lines.extend(result.stdout.splitlines())
+    status["available"] = any(status["sources"].values())
+    if not status["available"]:
+        status["error"] = "dmesg y journalctl no están disponibles para el usuario de MyDGX"
+    return lines, status
+
+
+def kernel_health_findings() -> tuple[list[dict[str, str]], set[str], dict[str, Any]]:
+    evaluated = {
+        "kernel-xid-hardware", "kernel-xid-application",
+        "kernel-oom-host", "kernel-oom-cgroup", "kernel-thermal",
+    }
+    lines, status = kernel_log_snapshot()
+    if not status["available"]:
         return [], evaluated, status
-    status["available"] = True
-    lines = result.stdout.splitlines()
-    xid_lines = [line.strip() for line in lines if re.search(r"\bNVRM:.*\bXid\b|\bXid\s*\(\s*PCI", line, re.IGNORECASE)]
-    oom_lines = [line.strip() for line in lines if re.search(r"\bOut of memory\b|\boom-kill\b|\bKilled process\b", line, re.IGNORECASE)]
-    status.update({"xid_count": len(xid_lines), "oom_count": len(oom_lines)})
+
+    xid_events: dict[tuple[int, str], str] = {}
+    oom_events: dict[tuple[str, str, str], str] = {}
+    thermal_events: set[str] = set()
+    for raw in lines:
+        line = raw.strip()
+        xid = XID_CODE_PATTERN.search(line)
+        if xid:
+            code = int(xid.group(1))
+            detail = redact_log_text(line[xid.start():], 300)
+            xid_events[(code, detail)] = detail
+        oom = OOM_KILL_PATTERN.search(line)
+        if oom:
+            scope = "cgroup" if re.search(r"\bcgroup\b|\bmemcg\b|constraint=CONSTRAINT_MEMCG", line, re.IGNORECASE) else "host"
+            detail = f"{scope}: proceso {oom.group(2)} (pid {oom.group(1)})"
+            oom_events[(scope, oom.group(1), oom.group(2))] = detail
+        if re.search(r"\bthermal shutdown\b|\boverheat(?:ed|ing)?\b|\bcritical temperature\b", line, re.IGNORECASE):
+            thermal_events.add(redact_log_text(line, 300))
+
+    hardware_codes = sorted({code for code, _ in xid_events if code in HARDWARE_XID_CODES})
+    application_codes = sorted({code for code, _ in xid_events if code not in HARDWARE_XID_CODES})
+    host_oom = [detail for (scope, _, _), detail in oom_events.items() if scope == "host"]
+    cgroup_oom = [detail for (scope, _, _), detail in oom_events.items() if scope == "cgroup"]
+    status.update({
+        "xid_count": len(xid_events),
+        "xid_codes": sorted({code for code, _ in xid_events}),
+        "oom_count": len(oom_events),
+        "host_oom_count": len(host_oom),
+        "cgroup_oom_count": len(cgroup_oom),
+        "thermal_count": len(thermal_events),
+    })
     findings: list[dict[str, str]] = []
-    if xid_lines:
+    if hardware_codes:
+        evidence = [detail for (code, _), detail in xid_events.items() if code in hardware_codes]
         findings.append(health_finding(
-            "kernel-xid", "critical", "Kernel", "Errores NVIDIA Xid",
-            "El kernel registró errores de la GPU en las últimas 24 horas.",
-            f"{len(xid_lines)} evento(s); último: {redact_log_text(xid_lines[-1], 300)}",
-            "Guarda el código Xid, revisa temperatura y alimentación, y consulta el log antes de reiniciar.",
+            "kernel-xid-hardware", "critical", "Kernel", "NVIDIA Xid de hardware, driver o firmware",
+            "El driver registró códigos Xid asociados a fallos de bajo nivel; el trabajo GPU puede fallar hasta reiniciar.",
+            f"Códigos {', '.join(map(str, hardware_codes))} · " + " | ".join(evidence[:3]),
+            "Guarda el trabajo, instala actualizaciones pendientes y reinicia. Si el mismo Xid vuelve, ejecuta NVIDIA Field Diagnostics.",
+            confidence="high",
+            source_note="Journal del kernel del arranque actual; clasificación basada en el catálogo NVIDIA Xid.",
         ))
-    if oom_lines:
+    if application_codes:
+        evidence = [detail for (code, _), detail in xid_events.items() if code in application_codes]
         findings.append(health_finding(
-            "kernel-oom", "critical", "Kernel", "Procesos terminados por falta de memoria",
-            "El kernel activó el OOM killer en las últimas 24 horas.",
-            f"{len(oom_lines)} evento(s); último: {redact_log_text(oom_lines[-1], 300)}",
-            "Reduce contexto o concurrencia, detén perfiles y revisa qué proceso agotó la memoria.",
+            "kernel-xid-application", "warning", "Kernel", "NVIDIA Xid probablemente causado por una aplicación",
+            "El driver registró errores normalmente asociados a kernels CUDA o procesos interrumpidos.",
+            f"Códigos {', '.join(map(str, application_codes))} · " + " | ".join(evidence[:3]),
+            "Revisa el log del runtime que usaba la GPU, actualiza su imagen o framework y repite la carga.",
+            confidence="medium",
+            source_note="Journal del kernel del arranque actual; los códigos no pertenecen a la clase de hardware conocida.",
         ))
+    if host_oom:
+        findings.append(health_finding(
+            "kernel-oom-host", "critical", "Kernel", "El kernel agotó la memoria del host",
+            "La memoria unificada se agotó y el kernel terminó procesos para recuperarse.",
+            " | ".join(host_oom[:5]),
+            "Detén otros perfiles y reduce modelo, contexto, batch, concurrencia o KV cache antes de reintentar.",
+            confidence="high",
+            source_note="OOM killer del host en el journal del kernel del arranque actual.",
+        ))
+    if cgroup_oom:
+        findings.append(health_finding(
+            "kernel-oom-cgroup", "warning", "Contenedores", "Un contenedor alcanzó su límite de memoria",
+            "Un proceso fue terminado por el límite de su cgroup; el host completo puede conservar memoria libre.",
+            " | ".join(cgroup_oom[:5]),
+            "Aumenta o elimina el límite del contenedor, o reduce la memoria de su carga.",
+            confidence="high",
+            source_note="OOM con evidencia de cgroup/memcg en el arranque actual.",
+        ))
+    if thermal_events:
+        findings.append(health_finding(
+            "kernel-thermal", "critical", "Kernel", "Evento térmico crítico registrado",
+            "El kernel registró una parada o temperatura crítica durante este arranque.",
+            " | ".join(sorted(thermal_events)[:3]),
+            "Detén la carga, comprueba ventilación y ambiente, y revisa el hardware antes de continuar.",
+            confidence="high",
+            source_note="Mensajes térmicos del kernel del arranque actual.",
+        ))
+    return findings, evaluated, status
+
+
+def runtime_health_findings() -> tuple[list[dict[str, str]], set[str], dict[str, Any]]:
+    evaluated = {
+        "runtime-torch-cpu", "runtime-torch-arch",
+        "runtime-docker-nvidia", "runtime-kv-cache-oom",
+    }
+    status: dict[str, Any] = {
+        "python": "unknown",
+        "docker": "not_applicable",
+        "journal": "not_available",
+    }
+    findings: list[dict[str, str]] = []
+    probe = """
+import json
+try:
+    import torch
+    print(json.dumps({
+        "installed": True,
+        "version": str(torch.__version__),
+        "cuda": str(torch.version.cuda or ""),
+        "cuda_available": bool(torch.cuda.is_available()),
+        "arches": list(torch.cuda.get_arch_list()) if hasattr(torch.cuda, "get_arch_list") else [],
+    }))
+except ModuleNotFoundError:
+    print(json.dumps({"installed": False}))
+except Exception as exc:
+    print(json.dumps({"installed": True, "error": type(exc).__name__}))
+"""
+    result = run_command([sys.executable, "-I", "-c", probe], 15)
+    try:
+        python_info = json.loads(result.stdout.strip()) if result.returncode == 0 else {"error": "probe_failed"}
+    except json.JSONDecodeError:
+        python_info = {"error": "invalid_output"}
+    if python_info.get("error"):
+        status["python"] = "error"
+        status["python_detail"] = str(python_info["error"])
+        evaluated -= {"runtime-torch-cpu", "runtime-torch-arch"}
+    elif not python_info.get("installed"):
+        status["python"] = "not_applicable"
+    else:
+        status["python"] = "ok"
+        arches = [str(item).casefold() for item in python_info.get("arches") or []]
+        version = str(python_info.get("version") or "desconocida")
+        cuda = str(python_info.get("cuda") or "")
+        if "+cpu" in version.casefold() or not cuda:
+            findings.append(health_finding(
+                "runtime-torch-cpu", "warning", "Runtime", "PyTorch no incluye soporte CUDA",
+                "El intérprete de MyDGX tiene una compilación CPU-only; esto no evalúa otros entornos o contenedores.",
+                f"torch {version} · CUDA {cuda or 'ausente'}",
+                "Usa una wheel ARM64 con CUDA compatible si este entorno ejecutará PyTorch en la GPU.",
+                confidence="high",
+                source_note="Sondeo aislado del intérprete Python de MyDGX.",
+            ))
+        elif arches and not any(arch in {"sm_120", "sm_121", "sm_121a"} for arch in arches):
+            findings.append(health_finding(
+                "runtime-torch-arch", "critical", "Runtime", "PyTorch no contiene kernels compatibles con GB10",
+                "La wheel CUDA inspeccionada no publica una arquitectura ejecutable en compute capability 12.1.",
+                f"torch {version} · CUDA {cuda} · arch list {', '.join(arches)}",
+                "Instala una wheel ARM64/CUDA que incluya sm_120, sm_121 o sm_121a.",
+                confidence="high",
+                source_note="torch.cuda.get_arch_list() ejecutado en un subprocess aislado.",
+            ))
+
+    compose_profiles = bool(db.rows(
+        "SELECT id FROM profiles WHERE runtime_backend='compose' LIMIT 1"
+    ))
+    if compose_profiles:
+        status["docker"] = "error"
+        if not shutil.which("docker"):
+            findings.append(health_finding(
+                "runtime-docker-nvidia", "critical", "Contenedores", "Docker no está disponible",
+                "Hay perfiles Compose, pero el comando Docker no está instalado.",
+                "runtime_backend=compose · docker ausente",
+                "Instala Docker y NVIDIA Container Toolkit antes de iniciar esos perfiles.",
+                confidence="high",
+            ))
+        else:
+            docker = run_command(["docker", "info", "--format", "{{json .Runtimes}}"], 8)
+            runtimes = docker.stdout.casefold() if docker.returncode == 0 else ""
+            cdi = run_command(["nvidia-ctk", "cdi", "list"], 8) if shutil.which("nvidia-ctk") else None
+            cdi_ok = bool(cdi and cdi.returncode == 0 and "nvidia.com/gpu" in cdi.stdout.casefold())
+            nvidia_ok = '"nvidia"' in runtimes or cdi_ok
+            status["docker"] = "ok" if docker.returncode == 0 and nvidia_ok else "error"
+            if docker.returncode != 0 or not nvidia_ok:
+                findings.append(health_finding(
+                    "runtime-docker-nvidia", "critical", "Contenedores", "Runtime NVIDIA de Docker no disponible",
+                    "Los perfiles Compose no podrán acceder correctamente a la GPU.",
+                    "daemon Docker no accesible" if docker.returncode != 0 else "sin runtime nvidia ni dispositivo CDI nvidia.com/gpu",
+                    "Inicia Docker y repara NVIDIA Container Toolkit o la configuración CDI.",
+                    confidence="high",
+                    source_note="docker info y nvidia-ctk cdi list; no se contactan hosts Docker remotos.",
+                ))
+
+    if shutil.which("journalctl"):
+        journal = run_command(["journalctl", "-b", "--no-pager", "-o", "cat", "-n", "3000"], 5)
+        if journal.returncode == 0:
+            status["journal"] = "ok"
+            hits = {
+                redact_log_text(line.strip(), 300)
+                for line in journal.stdout.splitlines()
+                if "vllm" in line.casefold() and "no available memory for the cache blocks" in line.casefold()
+            }
+            if hits:
+                findings.append(health_finding(
+                    "runtime-kv-cache-oom", "critical", "Inferencia", "vLLM no pudo reservar el KV cache",
+                    "La memoria restante no alcanza para los bloques de KV cache del runtime.",
+                    " | ".join(sorted(hits)[:3]),
+                    "Reduce gpu_memory_utilization o max_model_len; considera --enforce-eager si CUDA graphs consumen el margen.",
+                    confidence="high",
+                    source_note="Líneas coincidentes y redactadas del journal del arranque actual.",
+                ))
     return findings, evaluated, status
 
 
@@ -2197,13 +2539,14 @@ def sync_health_findings(findings: list[dict[str, str]], evaluated_ids: set[str]
                     connection.execute(
                         """
                         UPDATE health_findings SET severity=?,category=?,title=?,detail=?,evidence=?,
-                            remediation=?,active=1,last_seen=?,resolved_at=NULL,
+                            remediation=?,confidence=?,source_note=?,active=1,last_seen=?,resolved_at=NULL,
                             occurrences=occurrences+?
                         WHERE id=?
                         """,
                         (
                             item["severity"], item["category"], item["title"], item["detail"],
-                            item["evidence"], item["remediation"], now, int(not old["active"]), finding_id,
+                            item["evidence"], item["remediation"], item["confidence"], item["source_note"],
+                            now, int(not old["active"]), finding_id,
                         ),
                     )
                     if not old["active"]:
@@ -2215,12 +2558,13 @@ def sync_health_findings(findings: list[dict[str, str]], evaluated_ids: set[str]
                         """
                         INSERT INTO health_findings(
                             id,severity,category,title,detail,evidence,remediation,
-                            active,first_seen,last_seen,resolved_at,occurrences
-                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                            confidence,source_note,active,first_seen,last_seen,resolved_at,occurrences
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         """,
                         (
                             finding_id, item["severity"], item["category"], item["title"],
-                            item["detail"], item["evidence"], item["remediation"], 1,
+                            item["detail"], item["evidence"], item["remediation"],
+                            item["confidence"], item["source_note"], 1,
                             now, now, None, 1,
                         ),
                     )
@@ -2243,7 +2587,11 @@ def sync_health_findings(findings: list[dict[str, str]], evaluated_ids: set[str]
         )
 
 
-def health_center_payload(kernel_status: dict[str, Any] | None = None) -> dict[str, Any]:
+def health_center_payload(
+    kernel_status: dict[str, Any] | None = None,
+    runtime_status: dict[str, Any] | None = None,
+    collectors: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     rows = db.rows(
         """
         SELECT * FROM health_findings
@@ -2265,9 +2613,14 @@ def health_center_payload(kernel_status: dict[str, Any] | None = None) -> dict[s
     }
     return {
         "status": "critical" if summary["critical"] else "warning" if summary["warning"] else "healthy",
+        "diagnosis": {
+            "complete": not any(item.get("status") == "error" for item in collectors or []),
+            "collectors": collectors or [],
+        },
         "summary": summary,
         "findings": rows,
-        "kernel": kernel_status or {"available": None, "window_hours": 24, "xid_count": None, "oom_count": None},
+        "kernel": kernel_status or {"available": None, "scope": "current_boot", "xid_count": None, "oom_count": None},
+        "runtime": runtime_status or {},
         "evaluated_at": utc_now(),
     }
 
@@ -2280,7 +2633,11 @@ async def metrics_sampler() -> None:
             persist_metrics(sample)
             metric_findings, metric_ids = metric_health_findings(sample)
             model_findings, model_ids = model_run_health_findings()
-            sync_health_findings([*metric_findings, *model_findings], metric_ids | model_ids)
+            power_findings, power_ids = low_power_health_findings()
+            sync_health_findings(
+                [*metric_findings, *model_findings, *power_findings],
+                metric_ids | model_ids | power_ids,
+            )
             model_samples = await collect_model_metrics()
             persist_model_metrics(model_samples)
             cutoff = time.time() - settings.metrics_retention_hours * 3600
@@ -22604,19 +22961,78 @@ async def services() -> list[dict[str, Any]]:
 
 @app.get("/api/system/health-center", dependencies=secure)
 async def system_health_center() -> dict[str, Any]:
-    sample, service_values = await asyncio.gather(
+    sample, service_values, kernel_result, runtime_result = await asyncio.gather(
         asyncio.to_thread(collect_metrics),
         services(),
+        asyncio.to_thread(kernel_health_findings),
+        asyncio.to_thread(runtime_health_findings),
     )
     metric_findings, metric_ids = metric_health_findings(sample)
     model_findings, model_ids = model_run_health_findings()
-    kernel_findings, kernel_ids, kernel_status = await asyncio.to_thread(kernel_health_findings)
+    power_findings, power_ids = low_power_health_findings()
+    kernel_findings, kernel_ids, kernel_status = kernel_result
+    runtime_findings, runtime_ids, runtime_status = runtime_result
     managed_findings, managed_ids = service_health_findings(service_values)
     sync_health_findings(
-        [*metric_findings, *model_findings, *kernel_findings, *managed_findings],
-        metric_ids | model_ids | kernel_ids | managed_ids,
+        [
+            *metric_findings, *model_findings, *power_findings,
+            *kernel_findings, *runtime_findings, *managed_findings,
+        ],
+        metric_ids | model_ids | power_ids | kernel_ids | runtime_ids | managed_ids,
     )
-    return health_center_payload(kernel_status)
+    identity = device_identity()
+    gpu_observed = any(sample.get(key) is not None for key in (
+        "gpu_utilization", "gpu_temperature", "gpu_power_watts", "gpu_clock_mhz",
+    ))
+    collectors = [
+        {"id": "metrics", "status": "ok", "detail": "Métricas del host observadas"},
+        {
+            "id": "gpu", "status": "ok" if gpu_observed or not identity["is_dgx_spark"] else "error",
+            "detail": "Telemetría GPU observada" if gpu_observed else "Telemetría GPU no disponible",
+        },
+        {
+            "id": "kernel", "status": "ok" if kernel_status["available"] else "error",
+            "detail": "Journal del arranque actual accesible" if kernel_status["available"] else str(kernel_status.get("error") or "Journal no disponible"),
+        },
+        {
+            "id": "services", "status": "ok" if shutil.which("systemctl") else "not_applicable",
+            "detail": "Servicios systemd evaluados" if shutil.which("systemctl") else "systemd no disponible",
+        },
+        {
+            "id": "runtime", "status": "error" if runtime_status.get("python") == "error" else "ok",
+            "detail": "Entorno Python evaluado" if runtime_status.get("python") != "error" else "No se pudo evaluar Python",
+        },
+    ]
+    return health_center_payload(kernel_status, runtime_status, collectors)
+
+
+@app.get("/api/system/health-center/report", dependencies=secure)
+async def system_health_center_report() -> dict[str, Any]:
+    health_report = await system_health_center()
+    identity = device_identity()
+    os_info = os_information()
+    report = {
+        "schema_version": "mydgx-health-report-v1",
+        "generated_at": utc_now(),
+        "anonymized": True,
+        "mydgx_version": app.version,
+        "platform": {
+            "device_model": identity.get("device_model"),
+            "gpu_name": identity.get("gpu_name"),
+            "architecture": os.uname().machine,
+            "os_family": os_info.get("os_family"),
+            "os_name": os_info.get("os_name"),
+            "kernel": os.uname().release,
+        },
+        "health": health_report,
+        "privacy": {
+            "raw_logs_included": False,
+            "hostname_included": False,
+            "network_identifiers_included": False,
+            "matched_evidence_only": True,
+        },
+    }
+    return sanitize_log_detail(report)
 
 
 class ServiceActionRequest(BaseModel):

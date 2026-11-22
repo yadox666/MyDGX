@@ -1290,5 +1290,13 @@
   "Copia de seguridad no encontrada",
   "Ya se está creando una copia de seguridad",
   "No hay espacio libre suficiente para la copia de seguridad",
-  "Ya existe una copia de seguridad de este segundo; inténtalo de nuevo"
+  "Ya existe una copia de seguridad de este segundo; inténtalo de nuevo",
+  "Triton no puede compilar kernels para GB10",
+  "El ptxas que trae Triton no reconoce sm_121a; el Privacy Filter usa los kernels de PyTorch, más lentos, y arranca más despacio.",
+  "Instala o repara el CUDA Toolkit 13 (su ptxas admite sm_121a) y reinicia el perfil; MyDGX se lo pasa a Triton con TRITON_PTXAS_PATH.",
+  "ptxas --help del CUDA del sistema y el registro del último arranque del Privacy Filter.",
+  "sin ptxas de CUDA con sm_121a en CUDA_HOME ni /usr/local/cuda",
+  "último arranque del Privacy Filter: Triton MoE kernels failed (PTXASError)",
+  "Triton / ptxas para GB10",
+  "Sin perfiles Privacy Filter"
 ]

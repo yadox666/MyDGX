@@ -8838,6 +8838,43 @@ class PrivacyFilterRuntimeTests(unittest.TestCase):
                 main_module.privacy_filter_ptxas.cache_clear()
 
 
+class TritonHealthTests(unittest.TestCase):
+    def test_triton_fallback_in_latest_start_raises_a_warning(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "logs").mkdir()
+                db.path = root / "triton.db"
+                db.initialize()
+                self.assertEqual(main_module.triton_ptxas_health()[1], {"triton": "not_applicable"})
+                now = main_module.utc_now()
+                db.execute(
+                    "INSERT INTO profiles(id,name,engine,model_ref,port,context_size,gpu_layers,threads,batch_size,temperature,top_p,repeat_penalty,created_at,updated_at) "
+                    "VALUES('pf','Privacy','privacy-filter','openai/privacy-filter',8190,8192,0,1,1,0,1,1,?,?)",
+                    (now, now),
+                )
+                log = root / "logs" / "profile-pf-pf:primary.log"
+                log.write_text(
+                    "INFO: Started server process [1]\nptxas fatal : Value 'sm_121a' is not defined\nTriton MoE kernels failed (PTXASError); using PyTorch kernels\n",
+                    encoding="utf-8",
+                )
+                with patch.object(main_module, "ROOT", root), patch.object(main_module, "privacy_filter_ptxas", return_value="/usr/local/cuda/bin/ptxas"):
+                    findings, status = main_module.triton_ptxas_health()
+                    self.assertEqual([item["id"] for item in findings], ["runtime-triton-ptxas"])
+                    self.assertEqual(status["triton"], "warning")
+                    with log.open("a", encoding="utf-8") as handle:
+                        handle.write("INFO: Started server process [2]\nINFO: Uvicorn running on http://127.0.0.1:8190\n")
+                    findings, status = main_module.triton_ptxas_health()
+                    self.assertEqual((findings, status["triton"]), ([], "ok"))
+                with patch.object(main_module, "ROOT", root), patch.object(main_module, "privacy_filter_ptxas", return_value=""):
+                    findings, status = main_module.triton_ptxas_health()
+                    self.assertEqual(status["triton"], "warning")
+                    self.assertIn("sm_121a", findings[0]["evidence"])
+        finally:
+            db.path = original_path
+
+
 class BackupTests(unittest.TestCase):
     def test_backup_archives_database_and_config_without_secrets(self) -> None:
         import tarfile

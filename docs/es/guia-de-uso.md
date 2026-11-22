@@ -491,7 +491,9 @@ La pestaña **Health Center** evalúa de forma continua temperatura, memoria
 disponible, Linux PSI, swap, disco, reloj/potencia GPU y fallos de modelos. Al
 abrirla añade servicios, compatibilidad de PyTorch con CUDA/SM121, NVIDIA
 Docker/CDI, errores de reserva del KV cache de vLLM y eventos NVIDIA Xid, OOM y
-térmicos del journal del kernel del arranque actual.
+térmicos del journal del kernel del arranque actual. Con un perfil Privacy
+Filter instalado, también avisa si no hay un `ptxas` de CUDA con `sm_121a` o si
+el último arranque tuvo que dejar los kernels de Triton por los de PyTorch.
 
 Bajo los hallazgos, **Comprobaciones** agrupa por GPU, memoria,
 almacenamiento, kernel, runtimes, servicios e inferencia el valor observado de

@@ -487,7 +487,9 @@ The **Health Center** tab continuously evaluates temperature, available memory,
 Linux PSI, swap, disk, GPU clock/power, and model failures. When opened, it also
 checks services, PyTorch CUDA/SM121 compatibility, NVIDIA Docker/CDI, vLLM KV
 cache allocation errors, and NVIDIA Xid, OOM, and thermal events from the
-current-boot kernel journal.
+current-boot kernel journal. With a Privacy Filter profile installed, it also
+warns when no CUDA `ptxas` supports `sm_121a`, or when the latest start had to
+drop Triton's kernels for PyTorch's.
 
 Below the findings, **Checks** groups the observed value of every rule next to
 its threshold by GPU, memory, storage, kernel, runtimes, services, and

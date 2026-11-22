@@ -2522,10 +2522,58 @@ except Exception as exc:
     return dict(python_info)
 
 
+TRITON_FALLBACK_MARKERS = ("Triton MoE kernels failed", "ptxas fatal")
+
+
+def privacy_filter_last_start_log(profile_id: str) -> str:
+    """Only the latest start counts: an old fallback must not outlive the fix."""
+    logs = sorted(
+        (ROOT / "logs").glob(f"profile-{profile_id}-*.log"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not logs:
+        return ""
+    with logs[0].open("rb") as handle:
+        handle.seek(max(0, logs[0].stat().st_size - 512_000))
+        text = handle.read().decode("utf-8", errors="replace")
+    marker = text.rfind("Started server process")
+    return text[marker:] if marker >= 0 else text
+
+
+def triton_ptxas_health(refresh: bool = False) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    profiles = db.rows("SELECT id FROM profiles WHERE engine='privacy-filter'")
+    if not profiles:
+        return [], {"triton": "not_applicable"}
+    if refresh:
+        privacy_filter_ptxas.cache_clear()
+    ptxas = privacy_filter_ptxas()
+    fallback = any(
+        marker in privacy_filter_last_start_log(str(row["id"]))
+        for row in profiles for marker in TRITON_FALLBACK_MARKERS
+    )
+    status = {"triton": "warning" if fallback or not ptxas else "ok", "triton_ptxas": ptxas or None}
+    if not ptxas or fallback:
+        evidence = []
+        if not ptxas:
+            evidence.append(f"sin ptxas de CUDA con {PRIVACY_FILTER_GPU_ARCH} en CUDA_HOME ni /usr/local/cuda")
+        if fallback:
+            evidence.append("último arranque del Privacy Filter: Triton MoE kernels failed (PTXASError)")
+        return [health_finding(
+            "runtime-triton-ptxas", "warning", "Runtime", "Triton no puede compilar kernels para GB10",
+            "El ptxas que trae Triton no reconoce sm_121a; el Privacy Filter usa los kernels de PyTorch, más lentos, y arranca más despacio.",
+            " · ".join(evidence),
+            "Instala o repara el CUDA Toolkit 13 (su ptxas admite sm_121a) y reinicia el perfil; MyDGX se lo pasa a Triton con TRITON_PTXAS_PATH.",
+            confidence="high",
+            source_note="ptxas --help del CUDA del sistema y el registro del último arranque del Privacy Filter.",
+        )], status
+    return [], status
+
+
 def runtime_health_findings(refresh: bool = False) -> tuple[list[dict[str, str]], set[str], dict[str, Any]]:
     evaluated = {
         "runtime-torch-cpu", "runtime-torch-arch",
-        "runtime-docker-nvidia", "runtime-kv-cache-oom",
+        "runtime-docker-nvidia", "runtime-kv-cache-oom", "runtime-triton-ptxas",
     }
     status: dict[str, Any] = {
         "python": "unknown",
@@ -2599,6 +2647,10 @@ def runtime_health_findings(refresh: bool = False) -> tuple[list[dict[str, str]]
                     confidence="high",
                     source_note="docker info y nvidia-ctk cdi list; no se contactan hosts Docker remotos.",
                 ))
+
+    triton_findings, triton_status = triton_ptxas_health(refresh)
+    findings.extend(triton_findings)
+    status.update(triton_status)
 
     hits: set[str] = set()
     if shutil.which("journalctl"):
@@ -2927,6 +2979,13 @@ def health_checks(
         "runtime-docker", "runtime", "Docker con GPU NVIDIA",
         "not_applicable" if docker_state == "not_applicable" else finding_level("runtime-docker-nvidia") or "ok",
         "Sin perfiles Compose" if docker_state == "not_applicable" else "runtime nvidia / CDI",
+    ))
+    triton_state = runtime_status.get("triton")
+    checks.append(health_check(
+        "runtime-triton", "runtime", "Triton / ptxas para GB10",
+        "not_applicable" if triton_state == "not_applicable" else finding_level("runtime-triton-ptxas") or ("ok" if triton_state == "ok" else "unknown"),
+        "Sin perfiles Privacy Filter" if triton_state == "not_applicable" else runtime_status.get("triton_ptxas") or "—",
+        PRIVACY_FILTER_GPU_ARCH,
     ))
     kv_count = runtime_status.get("kv_cache_oom_count")
     checks.append(health_check(

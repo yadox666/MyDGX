@@ -926,6 +926,16 @@ function ModelSettingsDialog({ modelId, notify, onClose, onSaved }: {
 
   const spec = report?.speculative;
   const current = spec?.spec_type ? `${SPEC_LABELS[spec.spec_type] ?? spec.spec_type} · ${spec.draft_filename || t("MTP integrado en el GGUF")}` : t("Sin especulativa");
+  const hasProjector = Boolean(report?.mmproj.length);
+  const visionSelected = draft.mmproj ? draft.mmproj !== "none" : Boolean(report?.mmproj_filename);
+  const specSelected = Boolean(draft.spec) && draft.spec !== "off";
+  function chooseSpec(value: string) {
+    setDraft((previous) => ({
+      ...previous,
+      spec: value,
+      ...(value && value !== "off" && hasProjector && visionSelected ? { mmproj: "none" } : {}),
+    }));
+  }
   return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={t("Ajustes de {modelId}", { modelId: modelId })} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <Card className="model-help-dialog model-settings-dialog">
       <SectionHeading eyebrow={t("AJUSTES DE ARRANQUE")} title={modelId} action={<button className="icon-button" onClick={onClose} aria-label={t("Cerrar ajustes")}><X size={16} /></button>} />
@@ -961,9 +971,12 @@ function ModelSettingsDialog({ modelId, notify, onClose, onSaved }: {
         <section className="model-settings-section">
           <h4>{t("Decodificación especulativa")}{" "}<small>{t("ahora:")} {current}{spec?.origin ? t(" · origen {origin}", { origin: originLabel(spec.origin) }) : ""}</small></h4>
           {spec?.runtime_supported === false && <div className="profile-warning"><TriangleAlert size={14} />{t("El llama.cpp instalado no admite")}{" "}<code>--spec-type</code>.</div>}
-          {spec?.blocked_by_mmproj && <small className="preflight-note">{t("Con el mmproj activo llama.cpp no usa la especulativa. Elige «Sin visión» si prefieres velocidad a imágenes.")}</small>}
+          {spec?.blocked_by_mmproj && !specSelected && <small className="preflight-note">{t("Con el mmproj activo llama.cpp no usa la especulativa. Elige «Sin visión» si prefieres velocidad a imágenes.")}</small>}
+          {hasProjector && specSelected && (visionSelected
+            ? <div className="profile-warning"><TriangleAlert size={14} />{t("Hay un proyector visual elegido: llama.cpp no combina visión y especulativa, así que el arranque seguirá sin MTP. Elige «Sin visión» para usarla.")}</div>
+            : <div className="profile-warning"><TriangleAlert size={14} />{t("Al activar MTP se pierde la visión: el modelo arrancará solo con texto y no aceptará imágenes. Para recuperarla, vuelve a elegir el proyector visual.")}</div>)}
           <label>{t("Drafter")}
-            <select value={draft.spec ?? ""} onChange={(event) => set("spec", event.target.value)}>
+            <select value={draft.spec ?? ""} onChange={(event) => chooseSpec(event.target.value)}>
               <option value="">{t("Automático")}</option>
               <option value="off">{t("Desactivada")}</option>
               {spec?.candidates.map((item) => <option key={`${item.spec_type}|${item.draft_filename}`} value={`${item.spec_type}|${item.draft_filename}`}>

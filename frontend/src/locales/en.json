@@ -2016,5 +2016,7 @@
   "Antes de restaurar": "Before restore",
   "{count} desactivado(s): no arrancan ni cuentan en memoria": "{count} disabled: they do not start or count toward memory",
   "+{count} desactivados": "+{count} disabled",
-  "desactivado": "disabled"
+  "desactivado": "disabled",
+  "Hay un proyector visual elegido: llama.cpp no combina visión y especulativa, así que el arranque seguirá sin MTP. Elige «Sin visión» para usarla.": "A vision projector is selected: llama.cpp cannot combine vision and speculative decoding, so the model will still start without MTP. Choose “No vision” to use it.",
+  "Al activar MTP se pierde la visión: el modelo arrancará solo con texto y no aceptará imágenes. Para recuperarla, vuelve a elegir el proyector visual.": "Enabling MTP removes vision: the model will start text-only and will not accept images. To get it back, select the vision projector again."
 }

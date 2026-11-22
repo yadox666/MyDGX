@@ -1998,5 +1998,7 @@
   "Antes de restaurar",
   "+{count} desactivados",
   "desactivado",
-  "{count} desactivado(s): no arrancan ni cuentan en memoria"
+  "{count} desactivado(s): no arrancan ni cuentan en memoria",
+  "Hay un proyector visual elegido: llama.cpp no combina visión y especulativa, así que el arranque seguirá sin MTP. Elige «Sin visión» para usarla.",
+  "Al activar MTP se pierde la visión: el modelo arrancará solo con texto y no aceptará imágenes. Para recuperarla, vuelve a elegir el proyector visual."
 ]

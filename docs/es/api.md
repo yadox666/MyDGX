@@ -250,6 +250,7 @@ Detalle en [Asistente MyDGX](asistente-mydgx.md).
 | POST | `/v1/messages/count_tokens` | Recuento de tokens estilo Anthropic. |
 | POST | `/v1/embeddings` | Embeddings. |
 | POST | `/v1/rerank` | Reranking de documentos. |
+| POST | `/v1/redact` | Redacción de datos personales con un perfil de Privacy Filter. |
 | POST | `/v1/images/generations` | Generación de imagen (ComfyUI). |
 | POST | `/v1/audio/transcriptions` | Transcripción (Whisper). |
 | POST | `/v1/audio/translations` | Traducción de audio al inglés (Whisper). |

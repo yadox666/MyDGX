@@ -108,7 +108,7 @@ function resolveTheme(preference: ThemePreference, systemTheme: Theme): Theme {
   return preference === "system" ? systemTheme : preference;
 }
 type LocalModelFilter = "all" | "loaded" | "text" | "vision" | "audio" | "ollama" | "huggingface" | "compact" | "medium" | "large";
-type ModelTask = "chat" | "vision" | "embeddings" | "image-generation" | "asr" | "tts" | "video-generation" | "reranking";
+type ModelTask = "chat" | "vision" | "embeddings" | "image-generation" | "asr" | "tts" | "video-generation" | "reranking" | "redaction";
 type InputModality = "text" | "image" | "audio" | "video";
 type OutputModality = "text" | "image" | "audio" | "video" | "embedding" | "scores";
 
@@ -2229,7 +2229,7 @@ type HfSearchResult = HfRecommendation & {
 };
 
 type ModelConfig = {
-  engine: "llama.cpp" | "ollama" | "vllm" | "sglang" | "tensorrt-llm" | "openai-compatible" | "comfyui" | "diffusers" | "whisper" | "riva" | "nvidia-nim";
+  engine: "llama.cpp" | "ollama" | "vllm" | "sglang" | "tensorrt-llm" | "openai-compatible" | "comfyui" | "diffusers" | "whisper" | "riva" | "nvidia-nim" | "privacy-filter";
   model_ref: string;
   model_file: string;
   model_repo: string;
@@ -2428,11 +2428,12 @@ const taskOptions: Array<{ id: ModelTask; label: string; input: InputModality[];
   { id: "tts", label: t("Texto a audio (TTS)"), input: ["text"], output: ["audio"] },
   { id: "video-generation", label: t("Generación de vídeo"), input: ["text"], output: ["video"] },
   { id: "reranking", label: t("Reranking"), input: ["text"], output: ["scores"] },
+  { id: "redaction", label: t("Redacción de datos personales"), input: ["text"], output: ["text"] },
 ];
 
 const engineOptions: ModelConfig["engine"][] = [
   "llama.cpp", "ollama", "vllm", "sglang", "tensorrt-llm",
-  "openai-compatible", "comfyui", "diffusers", "whisper", "riva", "nvidia-nim",
+  "openai-compatible", "comfyui", "diffusers", "whisper", "riva", "nvidia-nim", "privacy-filter",
 ];
 
 function deviceBranding(host: Overview["host"]) {
@@ -2528,6 +2529,7 @@ const MODEL_CATEGORIES = {
   image: { label: t("Imagen"), icon: ImageIcon, color: "#c05bd6" },
   video: { label: t("Vídeo"), icon: Film, color: "#9b66db" },
   audio: { label: t("Voz / audio"), icon: Mic, color: "#3e8fdc" },
+  privacy: { label: t("Privacidad"), icon: ShieldCheck, color: "#d0a32b" },
 } satisfies Record<string, { label: string; icon: typeof Gauge; color: string }>;
 type ModelCategoryKey = keyof typeof MODEL_CATEGORIES;
 const MODEL_CATEGORY_KEYS = Object.keys(MODEL_CATEGORIES) as ModelCategoryKey[];
@@ -2552,6 +2554,7 @@ function profileModelCategory(model: ProfileModel): ModelCategoryKey {
   if (model.task === "image-generation") return "image";
   if (model.task === "video-generation") return "video";
   if (model.task === "embeddings" || model.task === "reranking") return "embeddings";
+  if (model.task === "redaction") return "privacy";
   if (model.task === "vision" || model.mmproj_filename || model.mmproj_file || model.input_modalities?.includes("image")) return "vision";
   const guessed = localModelCategoryKey(`${model.model_repo} ${model.model_filename} ${model.model_ref}`);
   return guessed === "code" || guessed === "vision" ? guessed : "text";
@@ -6667,6 +6670,7 @@ function MultimodalLabView({ notify }: { notify: (message: string, error?: boole
     : [];
   const imageBase64 = typeof openAIData[0]?.b64_json === "string" ? openAIData[0].b64_json : "";
   const imageUrl = typeof openAIData[0]?.url === "string" ? openAIData[0].url : "";
+  const redactedText = typeof openAIData[0]?.redacted_text === "string" ? openAIData[0].redacted_text : "";
   const binaryUrl = result?.data_base64 ? `data:${result.content_type};base64,${result.data_base64}` : "";
   const compactResult = result?.result
     ? JSON.stringify(result.result, (key, value) => key === "b64_json" ? t("[contenido base64 omitido]") : value, 2)
@@ -6688,7 +6692,7 @@ function MultimodalLabView({ notify }: { notify: (message: string, error?: boole
               <small>{selected?.input_modalities.join(" + ")} → {selected?.output_modalities.join(" + ")}</small>
               <small>{selected?.endpoint}</small>
             </div>
-            {selected?.task !== "asr" && <label>{t("Instrucción")}<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={selected?.task === "image-generation" ? t("Describe la imagen que quieres generar") : selected?.task === "tts" ? t("Texto que se convertirá en voz") : t("Introduce la petición")} required={selected?.task !== "reranking"} /></label>}
+            {selected?.task !== "asr" && <label>{t("Instrucción")}<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={selected?.task === "image-generation" ? t("Describe la imagen que quieres generar") : selected?.task === "tts" ? t("Texto que se convertirá en voz") : selected?.task === "redaction" ? t("Texto con datos personales que quieres ocultar") : t("Introduce la petición")} required={selected?.task !== "reranking"} /></label>}
             {selected?.task === "reranking" && <label>{t("Documentos")}{" "}<small>{t("(uno por línea)")}</small><textarea value={documents} onChange={(event) => setDocuments(event.target.value)} placeholder={t("Primer documento\nSegundo documento")} required /></label>}
             {needsFile && <label className="multimodal-upload">{t("Archivo")}<input type="file" accept={accept} onChange={(event) => setFile(event.target.files?.[0] || null)} required /><span>{file ? `${file.name} · ${bytes(file.size)}` : t("Máximo {max_input_mb} MiB", { max_input_mb: selected.max_input_mb })}</span></label>}
             <button className="button primary" type="submit" disabled={busy}>{busy ? t("Procesando…") : selected?.task === "video-generation" ? t("Crear trabajo") : t("Ejecutar")}</button>
@@ -6703,6 +6707,7 @@ function MultimodalLabView({ notify }: { notify: (message: string, error?: boole
           {binaryUrl && result?.content_type.startsWith("audio/") && <audio src={binaryUrl} controls />}
           {binaryUrl && result?.content_type.startsWith("image/") && <img src={binaryUrl} alt={t("Resultado generado")} />}
           {artifactObjectUrl && result?.content_type.startsWith("video/") && <video src={artifactObjectUrl} controls />}
+          {redactedText && <pre className="redacted-text">{redactedText}</pre>}
           {compactResult && <pre>{compactResult}</pre>}
         </Card>
       </div>}

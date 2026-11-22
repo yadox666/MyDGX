@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import math
+import re
 import sqlite3
 import hashlib
 import os
@@ -7115,7 +7116,7 @@ class ProfileApiTests(unittest.TestCase):
             rows = db.rows(
                 "SELECT id,name FROM profiles WHERE id NOT LIKE 'artifex-%' ORDER BY id"
             )
-            self.assertEqual(len(rows), 11)
+            self.assertEqual(len(rows), 12)
             self.assertIn("TTS Lab · Voces MLX", {row["name"] for row in rows})
             image = db.rows(
                 "SELECT engine,task,comfyui_json FROM profiles WHERE name=?",
@@ -7577,6 +7578,142 @@ class ComfyUIRecipeTests(unittest.TestCase):
                 self.assertFalse(profile["downloaded"])
         finally:
             db.path = original_path
+
+
+class PrivacyFilterRecipeTests(unittest.TestCase):
+    def test_existing_databases_accept_the_new_engine_and_keep_their_profiles(self) -> None:
+        original_path = db.path
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "engines.db"
+                db.initialize()
+                old_check = (
+                    "CHECK(engine IN ('llama.cpp','ollama','vllm','sglang',"
+                    "'tensorrt-llm','openai-compatible','comfyui','diffusers',"
+                    "'whisper','riva','nvidia-nim'))"
+                )
+                with sqlite3.connect(db.path) as connection:
+                    sql = connection.execute("SELECT sql FROM sqlite_master WHERE name='profiles'").fetchone()[0]
+                    old_sql = re.sub(r"CHECK\s*\(\s*engine\s+IN\s*\([^)]*\)\s*\)", old_check, sql)
+                    connection.execute("PRAGMA foreign_keys=OFF")
+                    connection.execute(old_sql.replace("CREATE TABLE profiles", "CREATE TABLE profiles_old", 1))
+                    connection.execute("DROP TABLE profiles")
+                    connection.execute("ALTER TABLE profiles_old RENAME TO profiles")
+                    self.assertIn('CREATE TABLE "profiles"', connection.execute(
+                        "SELECT sql FROM sqlite_master WHERE name='profiles'"
+                    ).fetchone()[0])
+                payload = main_module.ProfilePayload.model_validate({
+                    "name": "Chat", "engine": "llama.cpp", "model_ref": "chat", "model_file": "/m/chat.gguf",
+                    "port": 18080,
+                })
+                with db.connect() as connection:
+                    connection.execute(main_module.PROFILE_INSERT_SQL, main_module.profile_values("chat", payload, "now"))
+                    connection.execute(
+                        "INSERT INTO profile_model_runs(profile_id,model_id,model_name,status,updated_at) VALUES('chat','m','Chat','running','now')"
+                    )
+                    connection.commit()
+                db.initialize()
+                recipe = next(item for item in main_module.local_recipes() if item["engine"] == "privacy-filter")
+                main_module.insert_recipe_profile(recipe["id"], recipe)
+                self.assertEqual(
+                    {row["id"] for row in db.rows("SELECT id FROM profiles")}, {"chat", recipe["id"]},
+                )
+                self.assertEqual(len(db.rows("SELECT * FROM profile_model_runs WHERE profile_id='chat'")), 1)
+                self.assertTrue(db.rows("SELECT name FROM sqlite_master WHERE name='idx_profiles_one_active'"))
+        finally:
+            db.path = original_path
+
+    def payload(self) -> Any:
+        recipe = next(item for item in main_module.local_recipes() if item["engine"] == "privacy-filter")
+        return main_module.recipe_profile_payload(recipe)
+
+    def test_recipe_is_valid_and_engine_task_and_endpoint_are_enforced(self) -> None:
+        payload = self.payload()
+        main_module.validate_model(payload)
+        self.assertEqual((payload.task, payload.endpoint_url), ("redaction", "http://127.0.0.1:8190"))
+        cases = [
+            {"model_ref": "someone/other-filter"},
+            {"task": "chat", "output_modalities": ["text"]},
+            {"endpoint_url": "http://127.0.0.1:8190/v1"},
+            {"endpoint_url": "http://localhost:8190"},
+            {"endpoint_url": "http://127.0.0.1"},
+            {"engine": "openai-compatible"},
+        ]
+        for update in cases:
+            values = {**payload.model_dump(), **update}
+            with self.subTest(update=update), self.assertRaises(HTTPException) as caught:
+                main_module.validate_model(main_module.ModelPayload.model_validate(values))
+            self.assertEqual(caught.exception.status_code, 400)
+
+    def test_missing_files_cover_pinned_checkpoint_and_runtime(self) -> None:
+        model = {**self.payload().model_dump(), "id": "pf", "name": "Privacy Filter"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(main_module, "huggingface_cache_dir", return_value=root / "hub"), \
+                 patch.object(main_module, "privacy_filter_root", return_value=root / "runtime"):
+                missing = main_module.recipe_missing_files(model)
+                self.assertEqual(
+                    [item["filename"] for item in missing],
+                    [*main_module.PRIVACY_FILTER_FILES, main_module.PRIVACY_FILTER_RUNTIME_ITEM],
+                )
+                self.assertTrue(all(item["revision"] == main_module.PRIVACY_FILTER_REVISION for item in missing[:-1]))
+                self.assertFalse(main_module.profile_model_is_downloaded(model))
+                for filename in main_module.PRIVACY_FILTER_FILES:
+                    path = main_module.privacy_filter_snapshot() / filename
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("x")
+                python = root / "runtime" / "venv" / "bin" / "python"
+                python.parent.mkdir(parents=True)
+                python.write_text("")
+                (root / "runtime" / "ready").write_text("stale\n")
+                self.assertEqual(
+                    [item["filename"] for item in main_module.recipe_missing_files(model)],
+                    [main_module.PRIVACY_FILTER_RUNTIME_ITEM],
+                )
+                script_digest = hashlib.sha256(main_module.PRIVACY_FILTER_INSTALL_SCRIPT.read_bytes()).hexdigest()
+                (root / "runtime" / "ready").write_text(f"{script_digest}\n")
+                self.assertEqual(main_module.recipe_missing_files(model), [])
+                self.assertTrue(main_module.profile_model_is_downloaded(model))
+
+    def test_redaction_profiles_do_not_take_a_model_slot(self) -> None:
+        privacy = {"id": "privacy", "engine": "privacy-filter", "task": "redaction"}
+        chat = {"id": "chat", "engine": "llama.cpp", "task": "chat"}
+        mixed = {"id": "mixed", "engine": "llama.cpp", "task": "chat"}
+        models = {
+            "privacy": [{"task": "redaction", "enabled": True}],
+            "chat": [{"task": "chat", "enabled": True}],
+            "mixed": [{"task": "chat", "enabled": True}, {"task": "redaction", "enabled": True}],
+        }
+        with patch.object(main_module, "profile_models", side_effect=lambda profile: models[profile["id"]]):
+            self.assertEqual(main_module.loaded_llm_slots([privacy]), 0)
+            self.assertEqual(main_module.loaded_llm_slots([privacy, chat, mixed]), 2)
+
+    def test_service_environment_does_not_inherit_secrets(self) -> None:
+        secrets = {"HF_TOKEN": "hf_placeholder", "MYDGX_API_KEY": "placeholder", "PATH": "/usr/bin"}
+        with patch.dict(os.environ, secrets):
+            env = main_module.privacy_filter_env(HF_HUB_OFFLINE="1")
+        self.assertEqual(env["PATH"], "/usr/bin")
+        self.assertEqual(env["HF_HUB_OFFLINE"], "1")
+        self.assertNotIn("HF_TOKEN", env)
+        self.assertNotIn("MYDGX_API_KEY", env)
+
+    def test_gateway_and_lab_route_redaction_to_the_service(self) -> None:
+        self.assertTrue(supports_endpoint({"task": "redaction"}, "/v1/redact"))
+        self.assertFalse(supports_endpoint({"task": "chat"}, "/v1/redact"))
+        self.assertFalse(supports_endpoint({"task": "redaction"}, "/v1/chat/completions"))
+        model = {**self.payload().model_dump(), "id": "pf", "name": "Privacy Filter"}
+        response = httpx.Response(
+            200, json={"data": [{"redacted_text": "Hi <PRIVATE_PERSON>"}]},
+            request=httpx.Request("POST", "http://127.0.0.1:8190/v1/redact"),
+        )
+        with patch.object(main_module, "active_model_by_alias", return_value=model), \
+             patch.object(main_module.httpx.AsyncClient, "post", AsyncMock(return_value=response)) as post:
+            result = asyncio.run(main_module.execute_multimodal_request(main_module.MultimodalRunRequest(
+                model="privacy-filter", task="redaction", prompt="Hi Alice",
+            )))
+        self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8190/v1/redact")
+        self.assertEqual(post.call_args.kwargs["json"], {"model": "openai/privacy-filter", "input": "Hi Alice"})
+        self.assertEqual(result["result"]["data"][0]["redacted_text"], "Hi <PRIVATE_PERSON>")
 
 
 class GatewayTests(unittest.TestCase):

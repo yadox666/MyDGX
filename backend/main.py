@@ -661,6 +661,12 @@ def sanitize_log_detail(value: Any, key: str = "", depth: int = 0) -> Any:
     return redact_log_text(value, 1000)
 
 
+PROFILE_ENGINES = (
+    "llama.cpp", "ollama", "vllm", "sglang", "tensorrt-llm", "openai-compatible",
+    "comfyui", "diffusers", "whisper", "riva", "nvidia-nim", "privacy-filter",
+)
+
+
 class Database:
     def __init__(self, path: str):
         self.path = Path(path).expanduser()
@@ -829,7 +835,7 @@ class Database:
                     engine TEXT NOT NULL CHECK(engine IN (
                         'llama.cpp','ollama','vllm','sglang','tensorrt-llm',
                         'openai-compatible','comfyui','diffusers','whisper',
-                        'riva','nvidia-nim'
+                        'riva','nvidia-nim','privacy-filter'
                     )),
                     model_ref TEXT NOT NULL,
                     model_file TEXT NOT NULL DEFAULT '',
@@ -1256,17 +1262,14 @@ class Database:
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='profiles'"
             ).fetchone()
             profile_sql = profile_sql_row["sql"] if profile_sql_row else ""
-            legacy_check = "CHECK(engine IN ('llama.cpp', 'ollama'))"
-            if legacy_check in profile_sql:
+            engine_check = re.search(r"CHECK\s*\(\s*engine\s+IN\s*\([^)]*\)\s*\)", profile_sql)
+            if engine_check and set(re.findall(r"'([^']+)'", engine_check.group(0))) != set(PROFILE_ENGINES):
                 connection.execute("PRAGMA foreign_keys=OFF")
-                expanded_check = (
-                    "CHECK(engine IN ('llama.cpp','ollama','vllm','sglang',"
-                    "'tensorrt-llm','openai-compatible','comfyui','diffusers',"
-                    "'whisper','riva','nvidia-nim'))"
-                )
-                replacement_sql = profile_sql.replace(
-                    "CREATE TABLE profiles", "CREATE TABLE profiles_new", 1
-                ).replace(legacy_check, expanded_check)
+                expanded_check = "CHECK(engine IN (" + ",".join(f"'{engine}'" for engine in PROFILE_ENGINES) + "))"
+                # SQLite stores the name quoted after an earlier rebuild renamed the table.
+                replacement_sql = re.sub(
+                    r'^CREATE TABLE\s+"?profiles"?', "CREATE TABLE profiles_new", profile_sql, count=1
+                ).replace(engine_check.group(0), expanded_check)
                 columns = [
                     row["name"]
                     for row in connection.execute("PRAGMA table_info(profiles)").fetchall()
@@ -3119,7 +3122,7 @@ async def collect_model_metrics() -> list[dict[str, Any]]:
         pid = None
         attribution = "external-unattributed"
         cpu_percent = ram_bytes = gpu_memory_bytes = gpu_utilization = None
-        if engine == "llama.cpp":
+        if engine in {"llama.cpp", "privacy-filter"}:
             process = _profile_processes.get(runtime_key)
             if not process or process.returncode is not None:
                 continue
@@ -3270,7 +3273,7 @@ ARTIFEX_PROFILE_IDS = frozenset(preset["id"] for preset in ARTIFEX_PROFILES)
 
 RECIPES_PATH = ROOT / "config" / "recipes.json"
 RECIPE_ONLY_KEYS = ("id", "description", "memory_gib", "version", "changelog", "categories")
-RECIPE_CATEGORIES = ("text", "code", "vision", "embeddings", "image", "video", "audio")
+RECIPE_CATEGORIES = ("text", "code", "vision", "embeddings", "image", "video", "audio", "privacy")
 
 
 def local_recipes() -> list[dict[str, Any]]:
@@ -4111,7 +4114,7 @@ def profile_model_is_downloaded(model: dict[str, Any]) -> bool:
     if model["engine"] == "ollama":
         return True
     if model["engine"] != "llama.cpp":
-        return bool(model.get("endpoint_url")) and not comfyui_missing_files(model)
+        return bool(model.get("endpoint_url")) and not recipe_missing_files(model)
     try:
         model_ready = resolve_profile_model_file(model).is_file()
         if model.get("task") == "vision":
@@ -4392,7 +4395,7 @@ QUICK_SLOT_TASKS = {"chat", "vision"}
 
 
 def loaded_llm_slots(profiles: list[dict[str, Any]]) -> int:
-    """User profiles take one slot each and every Quick chat or vision model takes its own; Default is free."""
+    """User profiles take one slot each and every Quick chat or vision model takes its own; Default and redaction-only profiles are free."""
     slots = 0
     for profile in profiles:
         if profile["id"] == QUICK_PROFILE_ID:
@@ -4400,7 +4403,11 @@ def loaded_llm_slots(profiles: list[dict[str, Any]]) -> int:
                 1 for model in profile_models(profile)
                 if model.get("enabled", True) and model.get("task", "chat") in QUICK_SLOT_TASKS
             )
-        elif profile["id"] not in MANAGED_PROFILES:
+        elif profile["id"] not in MANAGED_PROFILES and not all(
+            model.get("task") == "redaction"
+            for model in profile_models(profile)
+            if model.get("enabled", True)
+        ):
             slots += 1
     return slots
 
@@ -5152,6 +5159,75 @@ class ExternalRuntimeUnavailable(RuntimeError):
     pass
 
 
+async def launch_privacy_filter(
+    profile: dict[str, Any],
+    model: dict[str, Any],
+    context: int,
+    model_id: str,
+) -> None:
+    """Run the Privacy Filter service as a profile process, like llama-server, on the port of its endpoint."""
+    port = urlparse(str(model["endpoint_url"])).port
+    if await external_endpoint_reachable(model, timeout=2):
+        raise RuntimeError(f"El puerto {port} ya está en uso; {model['name']} no puede arrancar")
+    await prepare_memory_for_model(model["name"], int(model.get("estimated_memory_mb") or 0) * 1024 * 1024)
+    root = privacy_filter_root()
+    log_path = ROOT / "logs" / f"profile-{profile['id']}-{model_id}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log = log_path.open("ab", buffering=0)
+    _profile_logs[model_id] = log
+    env = privacy_filter_env(
+        CUDA_VISIBLE_DEVICES="0",
+        HF_HUB_OFFLINE="1",
+        TIKTOKEN_CACHE_DIR=str(root / "tiktoken"),
+        XDG_CACHE_HOME=str(root / ".cache"),
+        PRIVACY_FILTER_CHECKPOINT=str(privacy_filter_snapshot() / "original"),
+        PRIVACY_FILTER_MODEL_ID=str(model["model_ref"]),
+        PRIVACY_FILTER_MAX_CHARS=str(int(model.get("max_input_mb") or 1) * 1_000_000),
+    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            str(root / "venv" / "bin" / "python"), "-m", "uvicorn", "server:app",
+            "--app-dir", str(PRIVACY_FILTER_SERVICE_DIR),
+            "--host", "127.0.0.1", "--port", str(port), "--workers", "1", "--no-access-log",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=log,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=root,
+            env=env,
+            preexec_fn=_die_with_parent(os.getpid()),
+        )
+    except Exception:
+        await stop_model_process(model_id)
+        raise
+    _profile_processes[model_id] = process
+    _runtime_effective_contexts[model_id] = context
+    deadline = time.monotonic() + settings.profile_start_timeout_seconds
+    async with httpx.AsyncClient(timeout=2) as client:
+        while time.monotonic() < deadline:
+            if process.returncode is not None:
+                lines = [line for line in log_tail(log_path, 20).splitlines() if line.strip()]
+                await stop_model_process(model_id)
+                notify_safely(
+                    "model.load_failed", "Error cargando modelo", f"{model['name']}: el servicio terminó al arrancar",
+                    target=PRIVACY_FILTER_REPO, log=log_tail(log_path),
+                )
+                raise RuntimeError(redact_log_text(lines[-1], 500) if lines else "Privacy Filter terminó sin diagnóstico")
+            try:
+                if (await client.get(f"{model['endpoint_url']}/health")).status_code == 200:
+                    _runtime_model_signatures[model_id] = model_runtime_signature(model, context)
+                    _runtime_model_routes[model_id] = {
+                        "port": port,
+                        "model_alias": model.get("model_alias") or model.get("model_ref"),
+                    }
+                    publish_runtime_snapshot()
+                    return
+            except httpx.HTTPError:
+                pass
+            await asyncio.sleep(1)
+    await stop_model_process(model_id)
+    raise RuntimeError(f"Privacy Filter agotó el tiempo de arranque ({settings.profile_start_timeout_seconds} s)")
+
+
 async def external_endpoint_reachable(model: dict[str, Any], timeout: float = 2) -> bool:
     endpoint = str(model.get("endpoint_url") or "").rstrip("/")
     if not endpoint:
@@ -5200,9 +5276,12 @@ async def launch_profile_model(
     if model["engine"] != "llama.cpp":
         if not str(model.get("endpoint_url") or "").strip():
             raise RuntimeError(f"{model['name']} no tiene endpoint configurado")
-        if missing := comfyui_missing_files(model):
+        if missing := recipe_missing_files(model):
             names = ", ".join(Path(str(item["filename"])).name for item in missing)
-            raise RuntimeError(f"Faltan archivos ComfyUI de {model['name']}: {names}. Descarga los modelos del perfil")
+            raise RuntimeError(f"Faltan archivos de {model['name']}: {names}. Descarga los modelos del perfil")
+        if model["engine"] == "privacy-filter":
+            await launch_privacy_filter(profile, model, context, model_id)
+            return
         if not await external_endpoint_reachable(model, timeout=5):
             raise ExternalRuntimeUnavailable(
                 f"El endpoint de {model['name']} no está disponible"
@@ -12176,6 +12255,7 @@ class ModelPayload(BaseModel):
     engine: Literal[
         "llama.cpp", "ollama", "vllm", "sglang", "tensorrt-llm",
         "openai-compatible", "comfyui", "diffusers", "whisper", "riva", "nvidia-nim",
+        "privacy-filter",
     ]
     model_ref: str = Field(min_length=1, max_length=300)
     model_file: str = Field(default="", max_length=1000)
@@ -12215,7 +12295,7 @@ class ModelPayload(BaseModel):
     runtime_requirement: str = Field(default="", max_length=300)
     task: Literal[
         "chat", "vision", "embeddings", "image-generation", "asr", "tts",
-        "video-generation", "reranking",
+        "video-generation", "reranking", "redaction",
     ] = "chat"
     input_modalities: list[Literal["text", "image", "audio", "video"]] = Field(
         default_factory=lambda: ["text"], min_length=1, max_length=4
@@ -12360,6 +12440,20 @@ def validate_model(payload: ModelPayload) -> None:
         targets = [(item.folder, Path(item.filename).name) for item in payload.comfyui.files]
         if len(targets) != len(set(targets)):
             raise HTTPException(status_code=400, detail="El bloque comfyui repite un archivo en la misma carpeta")
+    if (payload.engine == "privacy-filter") != (payload.task == "redaction"):
+        raise HTTPException(status_code=400, detail="La tarea de redacción solo la ejecuta el motor privacy-filter")
+    if payload.engine == "privacy-filter":
+        if payload.model_ref != PRIVACY_FILTER_REPO or payload.api_protocol != "openai":
+            raise HTTPException(
+                status_code=400,
+                detail=f"privacy-filter solo ejecuta {PRIVACY_FILTER_REPO} con el protocolo openai",
+            )
+        parsed = urlparse(payload.endpoint_url)
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or not parsed.port or parsed.path.strip("/"):
+            raise HTTPException(
+                status_code=400,
+                detail="privacy-filter necesita un endpoint http://127.0.0.1:PUERTO sin ruta",
+            )
     expected = {
         "chat": ({"text"}, {"text"}),
         "vision": ({"image"}, {"text"}),
@@ -12369,6 +12463,7 @@ def validate_model(payload: ModelPayload) -> None:
         "tts": ({"text"}, {"audio"}),
         "video-generation": ({"text"}, {"video"}),
         "reranking": ({"text"}, {"scores"}),
+        "redaction": ({"text"}, {"text"}),
     }
     required_input, required_output = expected[payload.task]
     if not required_input.issubset(payload.input_modalities) or not required_output.issubset(payload.output_modalities):
@@ -12774,7 +12869,7 @@ async def profile_recipes(refresh: bool = False) -> dict[str, Any]:
             for model in (profile_models(installed) if installed else [])
             if model.get("enabled", True) and (
                 (model["engine"] == "llama.cpp" and not profile_model_is_downloaded(model))
-                or comfyui_missing_files(model)
+                or recipe_missing_files(model)
             )
         ]
         recipes.append({
@@ -12809,9 +12904,9 @@ def queue_profile_downloads(profile_id: str, background: BackgroundTasks) -> lis
     for model in profile_models(row):
         if not model.get("enabled", True):
             continue
-        if model["engine"] == "comfyui" and comfyui_missing_files(model):
+        if recipe_missing_files(model):
             job_id = db.create_job("profile.download", model["name"])
-            background.add_task(download_comfyui_files, job_id, model)
+            background.add_task(download_recipe_files, job_id, model)
             jobs.append(job_id)
             continue
         if (
@@ -13233,9 +13328,9 @@ async def prepare_profile_models(job_id: str, profile: dict[str, Any]) -> int:
             downloaded += int(
                 await ensure_ollama_profile_model(job_id, model, start, end)
             )
-        elif engine == "comfyui" and model.get("comfyui"):
+        elif (engine == "comfyui" and model.get("comfyui")) or engine == "privacy-filter":
             downloaded += int(bool(
-                await ensure_comfyui_profile_files(job_id, model, start, end)
+                await ensure_recipe_files(job_id, model, start, end)
             ))
         elif not model.get("endpoint_url"):
             raise RuntimeError(
@@ -13294,7 +13389,7 @@ async def prepare_activate_and_start_profile(job_id: str, profile_id: str) -> No
                 if model.get("enabled", True)
                 and (
                     (model["engine"] == "llama.cpp" and not profile_model_is_downloaded(model))
-                    or comfyui_missing_files(model)
+                    or recipe_missing_files(model)
                 )
             ]
             if missing:
@@ -13489,8 +13584,8 @@ async def download_profile_models(job_id: str, profile: dict[str, Any]) -> None:
         await stop_hf_progress(stop, monitor)
 
 
-def install_comfyui_file(item: dict[str, Any]) -> Path:
-    """Fetch one recipe file into the HF cache, verify its pin and link it into the ComfyUI model folder."""
+def fetch_pinned_hf_file(item: dict[str, Any]) -> Path:
+    """Fetch one recipe file into the HF cache and verify its pin."""
     cached = Path(hf_hub_download(
         repo_id=str(item["repo"]),
         filename=str(item["filename"]),
@@ -13504,6 +13599,25 @@ def install_comfyui_file(item: dict[str, Any]) -> Path:
         if sha256_file_identity(str(cached), stat.st_size, stat.st_mtime_ns) != expected:
             cached.unlink(missing_ok=True)
             raise ValueError(f"Checksum inválido para {item['filename']}")
+    return cached
+
+
+def pinned_file_failure(model: dict[str, Any], item: dict[str, Any], exc: Exception) -> RuntimeError:
+    message = (
+        huggingface_failure_reason(exc, str(item["repo"]))
+        or (str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}: descarga no completada")
+    )
+    db.audit("profile.download", model["name"], False, f"{item['repo']}: {type(exc).__name__}")
+    notify_safely(
+        "download.failed", "Descarga fallida", f"{model['name']} · {item['repo']}: {message}",
+        target=str(item["repo"]), log=f"{type(exc).__name__}: {exc}\n{item['filename']}",
+    )
+    return RuntimeError(f"{model['name']}: {message}")
+
+
+def install_comfyui_file(item: dict[str, Any]) -> Path:
+    """Fetch one recipe file and link it into the ComfyUI model folder."""
+    cached = fetch_pinned_hf_file(item)
     target = comfyui_file_target(item)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f"{target.name}.new")
@@ -13536,27 +13650,90 @@ async def ensure_comfyui_profile_files(
         try:
             await asyncio.to_thread(install_comfyui_file, item)
         except Exception as exc:
-            message = (
-                huggingface_failure_reason(exc, str(item["repo"]))
-                or (str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}: descarga no completada")
-            )
-            db.audit("profile.download", model["name"], False, f"{item['repo']}: {type(exc).__name__}")
-            notify_safely(
-                "download.failed", "Descarga fallida", f"{model['name']} · {item['repo']}: {message}",
-                target=str(item["repo"]), log=f"{type(exc).__name__}: {exc}\n{item['filename']}",
-            )
-            raise RuntimeError(f"{model['name']}: {message}") from exc
+            raise pinned_file_failure(model, item, exc) from exc
     db.audit("profile.download", model["name"], True, ", ".join(sorted({str(item["repo"]) for item in missing})))
     return len(missing)
 
 
-async def download_comfyui_files(job_id: str, model: dict[str, Any]) -> None:
+async def install_privacy_filter_runtime(model: dict[str, Any]) -> None:
+    log_path = ROOT / "logs" / "privacy-filter-install.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab", buffering=0) as log:
+        process = await asyncio.create_subprocess_exec(
+            "bash", str(PRIVACY_FILTER_INSTALL_SCRIPT), str(ROOT),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=log,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=ROOT,
+            env=privacy_filter_env(),
+            preexec_fn=_die_with_parent(os.getpid()),
+        )
+        try:
+            returncode = await asyncio.wait_for(process.wait(), timeout=PRIVACY_FILTER_INSTALL_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise RuntimeError(f"{model['name']}: la instalación del entorno Python agotó el tiempo") from None
+    if returncode != 0 or not privacy_filter_runtime_ready():
+        tail = [line for line in log_tail(log_path, 20).splitlines() if line.strip()]
+        detail = redact_log_text(tail[-1], 300) if tail else f"código {returncode}"
+        notify_safely(
+            "download.failed", "Instalación fallida", f"{model['name']}: {detail}",
+            target=PRIVACY_FILTER_REPO, log=log_tail(log_path),
+        )
+        raise RuntimeError(f"{model['name']}: no se pudo preparar el entorno Python ({detail}); revisa {log_path.name}")
+
+
+async def ensure_privacy_filter_files(
+    job_id: str,
+    model: dict[str, Any],
+    progress_start: float,
+    progress_end: float,
+) -> int:
+    missing = privacy_filter_missing_files(model)
+    if not missing:
+        return 0
+    files = [item for item in missing if item["repo"]]
+    steps = len(missing)
+    for index, item in enumerate(files):
+        db.update_job(
+            job_id, "running",
+            progress_start + (progress_end - progress_start) * index / steps,
+            f"{model['name']}: descargando {index + 1}/{len(files)} {Path(str(item['filename'])).name}",
+        )
+        try:
+            await asyncio.to_thread(fetch_pinned_hf_file, item)
+        except Exception as exc:
+            raise pinned_file_failure(model, item, exc) from exc
+    if len(files) < steps:
+        db.update_job(
+            job_id, "running",
+            progress_start + (progress_end - progress_start) * len(files) / steps,
+            f"{model['name']}: preparando el entorno Python (PyTorch CUDA, varios minutos la primera vez)",
+        )
+        await install_privacy_filter_runtime(model)
+    db.audit("profile.download", model["name"], True, PRIVACY_FILTER_REPO)
+    return len(missing)
+
+
+async def ensure_recipe_files(
+    job_id: str,
+    model: dict[str, Any],
+    progress_start: float,
+    progress_end: float,
+) -> int:
+    if model.get("engine") == "privacy-filter":
+        return await ensure_privacy_filter_files(job_id, model, progress_start, progress_end)
+    return await ensure_comfyui_profile_files(job_id, model, progress_start, progress_end)
+
+
+async def download_recipe_files(job_id: str, model: dict[str, Any]) -> None:
     try:
-        count = await ensure_comfyui_profile_files(job_id, model, 0, 100)
+        count = await ensure_recipe_files(job_id, model, 0, 100)
     except RuntimeError as exc:
         db.update_job(job_id, "failed", 0, str(exc))
         return
-    db.update_job(job_id, "completed", 100, f"{count} archivo(s) ComfyUI preparados")
+    db.update_job(job_id, "completed", 100, f"{count} elemento(s) de {model['name']} preparados")
 
 
 @app.post("/api/profiles/{profile_id}/download", dependencies=secure)
@@ -13566,12 +13743,12 @@ async def download_profile(profile_id: str, background: BackgroundTasks) -> dict
         raise HTTPException(status_code=404, detail="Perfil no encontrado")
     profile = rows[0]
     primary = profile_models(profile)[0]
-    if primary["engine"] == "comfyui" and comfyui_missing_files(primary):
+    if recipe_missing_files(primary):
         job_id = db.create_job("profile.download", profile["name"])
-        background.add_task(download_comfyui_files, job_id, primary)
+        background.add_task(download_recipe_files, job_id, primary)
         return {"job_id": job_id}
     if profile["engine"] != "llama.cpp":
-        raise HTTPException(status_code=400, detail="La descarga por perfil solo aplica a llama.cpp y a recetas ComfyUI")
+        raise HTTPException(status_code=400, detail="La descarga por perfil solo aplica a llama.cpp y a recetas con archivos")
     job_id = db.create_job("profile.download", profile["name"])
     background.add_task(download_profile_models, job_id, profile)
     return {"job_id": job_id}
@@ -13589,12 +13766,12 @@ async def download_additional_profile_model(
     model = next((item for item in profile_models(rows[0]) if item["id"] == model_id), None)
     if not model:
         raise HTTPException(status_code=404, detail="Modelo no encontrado")
-    if model["engine"] == "comfyui" and comfyui_missing_files(model):
+    if recipe_missing_files(model):
         job_id = db.create_job("profile.download", model["name"])
-        background.add_task(download_comfyui_files, job_id, model)
+        background.add_task(download_recipe_files, job_id, model)
         return {"job_id": job_id}
     if model["engine"] != "llama.cpp":
-        raise HTTPException(status_code=400, detail="La descarga solo aplica a llama.cpp y a recetas ComfyUI")
+        raise HTTPException(status_code=400, detail="La descarga solo aplica a llama.cpp y a recetas con archivos")
     model["_profile_id"] = profile_id
     model["_is_additional"] = model_id != "primary"
     job_id = db.create_job("profile.download", model["name"])
@@ -14060,6 +14237,7 @@ MULTIMODAL_ENDPOINTS = {
     "tts": "/v1/audio/speech",
     "video-generation": "/v1/videos/generations",
     "reranking": "/v1/rerank",
+    "redaction": "/v1/redact",
 }
 MULTIMODAL_MIME_TYPES = {
     "image/jpeg", "image/png", "image/webp",
@@ -14119,6 +14297,74 @@ def comfyui_file_target(item: dict[str, Any]) -> Path:
 def comfyui_missing_files(model: dict[str, Any]) -> list[dict[str, Any]]:
     spec = model.get("comfyui") or {}
     return [item for item in spec.get("files") or [] if not comfyui_file_target(item).is_file()]
+
+
+PRIVACY_FILTER_REPO = "openai/privacy-filter"
+PRIVACY_FILTER_REVISION = "7ffa9a043d54d1be65afb281eddf0ffbe629385b"
+PRIVACY_FILTER_FILES = {
+    "original/config.json": "048a20604a3622de208d30df57cd5424bb583639b9ba20ddd7da593d3f89a248",
+    "original/dtypes.json": "e936acb3d039b35ec55438af2fffd424a53c7685b895775c186b26c7df79fcc7",
+    "original/model.safetensors": "9c262cbe68a0c8a50590a648ef8341a2b7d3be1fa11dfb79893fe0b03ce57b5c",
+    "original/viterbi_calibration.json": "bbc8611ef08a55ed72d64856cbbbb9a91db8dfa881f0a92e2afbad6e4bbc775a",
+}
+PRIVACY_FILTER_SERVICE_DIR = ROOT / "services" / "privacy-filter"
+PRIVACY_FILTER_INSTALL_SCRIPT = ROOT / "scripts" / "install-privacy-filter.sh"
+PRIVACY_FILTER_INSTALL_TIMEOUT_SECONDS = 3600
+PRIVACY_FILTER_RUNTIME_ITEM = "entorno Python de Privacy Filter"
+# Only what Python, pip and CUDA need; the service must not inherit MyDGX secrets.
+PRIVACY_FILTER_INHERITED_ENV = (
+    "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "SSL_CERT_FILE",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    "MYDGX_LANGUAGE",
+)
+
+
+def privacy_filter_root() -> Path:
+    return Path.home() / ".local" / "share" / "mydgx" / "privacy-filter"
+
+
+def privacy_filter_snapshot() -> Path:
+    return (
+        huggingface_cache_dir()
+        / f"models--{PRIVACY_FILTER_REPO.replace('/', '--')}"
+        / "snapshots"
+        / PRIVACY_FILTER_REVISION
+    )
+
+
+def privacy_filter_runtime_ready() -> bool:
+    root = privacy_filter_root()
+    try:
+        installed = (root / "ready").read_text(encoding="utf-8").strip()
+        expected = hashlib.sha256(PRIVACY_FILTER_INSTALL_SCRIPT.read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return installed == expected and (root / "venv" / "bin" / "python").is_file()
+
+
+def privacy_filter_missing_files(model: dict[str, Any]) -> list[dict[str, Any]]:
+    if model.get("engine") != "privacy-filter":
+        return []
+    snapshot = privacy_filter_snapshot()
+    missing = [
+        {"repo": PRIVACY_FILTER_REPO, "revision": PRIVACY_FILTER_REVISION, "filename": filename, "sha256": digest}
+        for filename, digest in PRIVACY_FILTER_FILES.items()
+        if not (snapshot / filename).is_file()
+    ]
+    if not privacy_filter_runtime_ready():
+        missing.append({"repo": "", "filename": PRIVACY_FILTER_RUNTIME_ITEM})
+    return missing
+
+
+def recipe_missing_files(model: dict[str, Any]) -> list[dict[str, Any]]:
+    """Files a ComfyUI or Privacy Filter profile downloads itself before it can start."""
+    return comfyui_missing_files(model) + privacy_filter_missing_files(model)
+
+
+def privacy_filter_env(**extra: str) -> dict[str, str]:
+    env = {key: os.environ[key] for key in PRIVACY_FILTER_INHERITED_ENV if key in os.environ}
+    env.update(extra)
+    return env
 
 
 def managed_flux_checkpoint() -> Path:
@@ -14599,7 +14845,7 @@ class MultimodalRunRequest(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     task: Literal[
         "chat", "vision", "embeddings", "image-generation", "asr", "tts",
-        "video-generation", "reranking",
+        "video-generation", "reranking", "redaction",
     ]
     prompt: str = Field(default="", max_length=32_000)
     data_url: str = Field(default="", max_length=100_000_000)
@@ -14755,6 +15001,10 @@ async def execute_multimodal_request(payload: MultimodalRunRequest) -> dict[str,
             }
     elif task == "video-generation":
         request_json = {"model": upstream_model, "prompt": payload.prompt}
+    elif task == "redaction":
+        if not payload.prompt.strip():
+            raise HTTPException(status_code=400, detail="La redacción requiere un texto")
+        request_json = {"model": upstream_model, "input": payload.prompt}
     else:
         if not payload.documents:
             raise HTTPException(status_code=400, detail="Reranking requiere documentos")

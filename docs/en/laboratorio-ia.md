@@ -39,6 +39,7 @@ The interface changes depending on the task:
 | TTS | Text | Playable audio | `/v1/audio/speech` |
 | Video generation | Text | URL via job | `/v1/videos/generations` |
 | Reranking | Query + documents | Scores/JSON | `/v1/rerank` |
+| Redaction | Text | Redacted text + spans | `/v1/redact` |
 
 ## Configuration by type
 

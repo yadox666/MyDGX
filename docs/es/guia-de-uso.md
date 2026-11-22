@@ -311,6 +311,39 @@ haber aceptado las condiciones del modelo en Hugging Face. El benchmark de
 imagen ejecuta el workflow de la receta con sus propios pasos. Los modelos
 FLUX.1 Schnell y Wan integrados siguen igual.
 
+#### Receta de Privacy Filter
+
+*RECIPE · Privacy · OpenAI Privacy Filter* oculta datos personales en texto:
+nombres, direcciones, emails, teléfonos, URLs, fechas, números de cuenta y
+secretos. Usa el motor `privacy-filter` y la tarea `redaction`.
+
+La primera vez, *Instalar con modelos* descarga el checkpoint
+`openai/privacy-filter` en una revisión fija, comprueba el SHA-256 de cada
+archivo y prepara un entorno Python con PyTorch CUDA en
+`~/.local/share/mydgx/privacy-filter`. Ese paso tarda unos minutos y deja su
+registro en `logs/privacy-filter-install.log`. Al encender el perfil, MyDGX
+ejecuta el servicio en `http://127.0.0.1:8190`. Funciona sin conexión, con los
+pesos y el tokenizador ya en disco, y sin secretos de MyDGX en su entorno. El watchdog lo relanza igual que a un modelo
+llama.cpp. No ocupa ninguno de los dos huecos de modelo, así que funciona junto
+a dos perfiles.
+
+Se llama a través del gateway con la clave habitual:
+
+```bash
+curl http://DGX:4000/v1/redact \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "privacy-filter", "input": "Llama a Alicia López al 612 345 678"}'
+```
+
+`input` admite un texto o una lista de hasta 64. Cada resultado trae
+`redacted_text`, con etiquetas como `<PRIVATE_PERSON>`, y `spans` con la
+etiqueta y la posición de cada dato. El texto original de cada dato solo se
+devuelve con `"include_text": true`. Ni el servicio ni el gateway registran el
+texto. El modelo está entrenado sobre todo en inglés: reduce la exposición de
+datos, pero no garantiza el anonimato y puede pasar por alto algunos, como
+secretos con formatos poco habituales.
+
 ### App del perfil
 
 Una app es un directorio con un `start.sh` que acepta `start`, `stop`, `restart`

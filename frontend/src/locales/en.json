@@ -1958,5 +1958,8 @@
   "Sano": "Healthy",
   "Receta": "Recipe",
   "editada": "edited",
-  "Actualizar {name} a v{version} sustituye tus cambios locales de modelos y parámetros; la app de arranque se conserva si la receta no define otra. ¿Continuar?": "Updating {name} to v{version} replaces your local model and parameter changes; the start app is kept unless the recipe sets another. Continue?"
+  "Actualizar {name} a v{version} sustituye tus cambios locales de modelos y parámetros; la app de arranque se conserva si la receta no define otra. ¿Continuar?": "Updating {name} to v{version} replaces your local model and parameter changes; the start app is kept unless the recipe sets another. Continue?",
+  "Redacción de datos personales": "Personal data redaction",
+  "Privacidad": "Privacy",
+  "Texto con datos personales que quieres ocultar": "Text with personal data you want to hide"
 }

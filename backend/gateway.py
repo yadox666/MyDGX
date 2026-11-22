@@ -424,6 +424,7 @@ ENDPOINT_TASKS: dict[str, set[str]] = {
     "/v1/videos/generations": {"video-generation"},
     "/v1/videos": {"video-generation"},
     "/v1/rerank": {"reranking"},
+    "/v1/redact": {"redaction"},
 }
 
 
@@ -1255,3 +1256,8 @@ async def delete_video(video_id: str, request: Request) -> Response:
 @app.post("/v1/rerank", dependencies=gateway_auth)
 async def rerank(request: Request) -> Response:
     return await proxy_openai_request(request, "/v1/rerank")
+
+
+@app.post("/v1/redact", dependencies=gateway_auth)
+async def redact(request: Request) -> Response:
+    return await proxy_openai_request(request, "/v1/redact")

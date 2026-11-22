@@ -772,6 +772,43 @@
           }
         ]
       }
+    },
+    {
+      "id": "e5d8c2a4-7f13-4b9e-a6c1-3d0f9b8e2a57",
+      "version": 1,
+      "changelog": {
+        "es": "Versión inicial: OpenAI Privacy Filter con opf en PyTorch CUDA, expuesto en /v1/redact.",
+        "en": "Initial version: OpenAI Privacy Filter with opf on CUDA PyTorch, served at /v1/redact."
+      },
+      "categories": [
+        "privacy"
+      ],
+      "description": {
+        "es": "Detecta y oculta datos personales en texto con OpenAI Privacy Filter: nombres, direcciones, emails, teléfonos, URLs, fechas, números de cuenta y secretos. Sustituye cada dato por una etiqueta como <PRIVATE_PERSON>. Sirve en el gateway como POST /v1/redact. Unos 2,8 GB; no ocupa hueco de modelo, así que funciona junto a dos perfiles. Licencia Apache 2.0. Entrenado sobre todo en inglés: reduce la exposición de datos, pero no garantiza el anonimato.",
+        "en": "Detects and masks personal data in text with OpenAI Privacy Filter: names, addresses, emails, phones, URLs, dates, account numbers and secrets. Replaces each item with a label such as <PRIVATE_PERSON>. Served on the gateway as POST /v1/redact. About 2.8 GB; it does not take a model slot, so it runs next to two profiles. Apache 2.0 license. Trained mostly on English: it reduces data exposure but does not guarantee anonymity."
+      },
+      "name": "RECIPE · Privacy · OpenAI Privacy Filter",
+      "engine": "privacy-filter",
+      "model_ref": "openai/privacy-filter",
+      "model_alias": "privacy-filter",
+      "port": 0,
+      "port_auto": true,
+      "source": "openai/privacy-filter @ 7ffa9a0 · opf f7f00ca · decodificación Viterbi calibrada",
+      "runtime_requirement": "Python 3.10+ · PyTorch 2.9 CUDA 13 (cu130) · CPU si no hay CUDA",
+      "task": "redaction",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "runtime_backend": "external",
+      "endpoint_url": "http://127.0.0.1:8190",
+      "api_protocol": "openai",
+      "estimated_memory_mb": 5120,
+      "max_input_mb": 1,
+      "timeout_seconds": 120,
+      "memory_reserve_mb": 4096
     }
   ]
 }

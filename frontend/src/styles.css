@@ -1512,6 +1512,7 @@ select { height: 34px; min-width: 170px; padding: 0 30px 0 10px; }
 .multimodal-result video { width: 100%; max-height: 560px; border-radius: 9px; background: #000; }
 .multimodal-result audio { width: 100%; }
 .multimodal-result pre { max-height: 480px; margin: 0; padding: 14px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 8px; color: var(--text-secondary); background: var(--surface-soft); font-size: calc(13px * var(--font-scale)); }
+.multimodal-result pre.redacted-text { color: var(--text); font-size: calc(14px * var(--font-scale)); line-height: 1.55; }
 .multimodal-job { display: flex; flex-direction: column; gap: 8px; }
 .multimodal-job code { overflow-wrap: anywhere; color: var(--accent-strong); }.multimodal-job small { color: var(--text-muted); }
 

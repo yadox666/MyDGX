@@ -39,6 +39,7 @@ La interfaz cambia según la tarea:
 | TTS | Texto | Audio reproducible | `/v1/audio/speech` |
 | Generación de vídeo | Texto | URL mediante trabajo | `/v1/videos/generations` |
 | Reranking | Consulta + documentos | Puntuaciones/JSON | `/v1/rerank` |
+| Redacción | Texto | Texto redactado + spans | `/v1/redact` |
 
 ## Configuración por tipo
 

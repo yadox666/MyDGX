@@ -27,7 +27,7 @@ struct SettingsView: View {
     var body: some View {
         HSplitView {
             VStack(spacing: 0) {
-                List(selection: $selectedID) {
+                List(selection: keptSelection) {
                     ForEach(draft.connections) { profile in
                         HStack {
                             ProfileThumbnail(
@@ -52,6 +52,7 @@ struct SettingsView: View {
                         .tag(Optional(profile.id))
                     }
                 }
+                .frame(minHeight: 120, maxHeight: .infinity)
                 HStack {
                     Button {
                         addProfile()
@@ -110,11 +111,11 @@ struct SettingsView: View {
                 .padding(10)
                 .help("Detectar y añadir automáticamente equipos con acceso SSH autorizado")
             }
-            .frame(minWidth: 190, idealWidth: 220)
+            .frame(minWidth: 190, idealWidth: 220, maxHeight: .infinity)
 
             if let profile = selectedProfileBinding {
                 profileForm(profile)
-                    .frame(minWidth: 540)
+                    .frame(minWidth: 540, maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "server.rack")
@@ -122,7 +123,7 @@ struct SettingsView: View {
                     Text("Selecciona un equipo")
                 }
                 .foregroundStyle(.secondary)
-                .frame(minWidth: 540)
+                .frame(minWidth: 540, maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(width: 820, height: 760)
@@ -164,6 +165,16 @@ struct SettingsView: View {
             model.settingsChanged(hasChanges)
         }
         .onChange(of: hasChanges) { model.settingsChanged($0) }
+    }
+
+    /// A click on the empty part of the list would clear the selection and collapse the split view.
+    private var keptSelection: Binding<String?> {
+        Binding(
+            get: { selectedID },
+            set: { newValue in
+                if newValue != nil || draft.connections.isEmpty { selectedID = newValue }
+            }
+        )
     }
 
     private var hasChanges: Bool {

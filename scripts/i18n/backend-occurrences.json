@@ -949,42 +949,6 @@
  },
  {
   "file": "main.py",
-  "line": 2230,
-  "context": "key:name",
-  "text": "ARTIFEX · Cyber-Tiel Q5"
- },
- {
-  "file": "main.py",
-  "line": 2240,
-  "context": "key:name",
-  "text": "ARTIFEX · Cyber-Tiel Q6"
- },
- {
-  "file": "main.py",
-  "line": 2250,
-  "context": "key:name",
-  "text": "ARTIFEX · BugHunter v7"
- },
- {
-  "file": "main.py",
-  "line": 2259,
-  "context": "key:name",
-  "text": "ARTIFEX · BugHunter v8"
- },
- {
-  "file": "main.py",
-  "line": 2268,
-  "context": "key:name",
-  "text": "ARTIFEX · GPT-OSS 120B"
- },
- {
-  "file": "main.py",
-  "line": 2277,
-  "context": "key:name",
-  "text": "ARTIFEX · Qwen Flash"
- },
- {
-  "file": "main.py",
   "line": 2344,
   "context": "Tuple",
   "text": "ARTIFEX gpu/remote/start_server.sh"
@@ -2296,12 +2260,6 @@
   "line": 8923,
   "context": "arg:reasons.append",
   "text": "Adecuado para {0}"
- },
- {
-  "file": "main.py",
-  "line": 8925,
-  "context": "arg:reasons.append",
-  "text": "Configuración verificada por ARTIFEX"
  },
  {
   "file": "main.py",

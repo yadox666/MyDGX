@@ -3264,72 +3264,7 @@ LLAMA_CPP_RUNTIME = "llama.cpp v1.0.0 · CUDA 13 · sm_121"
 # Labels written by earlier releases, when profiles were tied to a specific build.
 LEGACY_LLAMA_CPP_LABELS = ("llama.cpp b10679", "llama.cpp b11429")
 
-ARTIFEX_PROFILES: tuple[dict[str, Any], ...] = (
-    {
-        "id": "artifex-tiel-q5", "name": "ARTIFEX · Cyber-Tiel Q5", "model_ref": "bughunter-tiel",
-        "repo": "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF",
-        "files": ["Cyber-Tiel-Coder-35B-A3B-UD-Q5_K_XL.gguf"], "port": 18081,
-        "context": 262144, "parallel": 1, "batch": 2048, "ubatch": 512,
-        "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0,
-        "cache_k": "q8_0", "cache_v": "q8_0", "memory": 40960,
-        "spec": "draft-mtp", "draft": "mtp-Cyber-Tiel-Coder-35B-A3B.gguf",
-        "runtime": LLAMA_CPP_RUNTIME,
-    },
-    {
-        "id": "artifex-tiel-q6", "name": "ARTIFEX · Cyber-Tiel Q6", "model_ref": "bughunter-tiel",
-        "repo": "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF",
-        "files": ["Cyber-Tiel-Coder-35B-A3B-UD-Q6_K_XL.gguf"], "port": 18081,
-        "context": 262144, "parallel": 1, "batch": 2048, "ubatch": 512,
-        "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0,
-        "cache_k": "q8_0", "cache_v": "q8_0", "memory": 49152,
-        "spec": "draft-mtp", "draft": "mtp-Cyber-Tiel-Coder-35B-A3B.gguf",
-        "runtime": LLAMA_CPP_RUNTIME,
-    },
-    {
-        "id": "artifex-v7", "name": "ARTIFEX · BugHunter v7", "model_ref": "bughunter-v7",
-        "repo": "mmp2055/Qwen3.8-27B-Uncensored-bughunter-v7",
-        "files": ["Qwen3.8-27B-Uncensored.Q4_K_M.gguf"], "port": 18080,
-        "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
-        "temperature": 0.1, "top_p": 0.9, "top_k": 0, "min_p": 0,
-        "cache_k": "", "cache_v": "", "memory": 40960, "spec": "draft-mtp",
-        "runtime": LLAMA_CPP_RUNTIME,
-    },
-    {
-        "id": "artifex-v8", "name": "ARTIFEX · BugHunter v8", "model_ref": "bughunter-v8",
-        "repo": "mmp2055/Qwen3.5-35B-A3B-uncensored-bughunter-v8",
-        "files": ["Qwen3.5-35B-A3B-uncensored-bughunter-v8.Q4_K_M.gguf"], "port": 18080,
-        "context": 262144, "parallel": 1, "batch": 512, "ubatch": 256,
-        "temperature": 0.1, "top_p": 0.9, "top_k": 0, "min_p": 0,
-        "cache_k": "", "cache_v": "", "memory": 30720,
-        "runtime": LLAMA_CPP_RUNTIME,
-    },
-    {
-        "id": "artifex-gpt-oss", "name": "ARTIFEX · GPT-OSS 120B", "model_ref": "bughunter-gpt-oss",
-        "repo": "ggml-org/gpt-oss-120b-GGUF", "files": ["gpt-oss-120b-MXFP4.gguf"],
-        "port": 18080, "context": 131072, "parallel": 1, "batch": 2048, "ubatch": 2048,
-        "temperature": 1.0, "top_p": 1.0, "top_k": 0, "min_p": 0,
-        "cache_k": "", "cache_v": "", "memory": 81920, "reasoning_off": 0,
-        "reasoning_effort": "medium", "kv_unified": 0,
-        "runtime": LLAMA_CPP_RUNTIME,
-    },
-    {
-        "id": "artifex-qwen-flash", "name": "ARTIFEX · Qwen Flash", "model_ref": "bughunter-qwen-flash",
-        "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
-        "files": [
-            "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
-            "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf",
-            "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf",
-        ],
-        "port": 18080, "context": 262144, "parallel": 1, "batch": 2048, "ubatch": 2048,
-        "temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0,
-        "presence": 1.5, "cache_k": "", "cache_v": "", "memory": 102400,
-        "kv_unified": 0, "runtime": LLAMA_CPP_RUNTIME,
-    },
-)
-
-
 SEED_DISMISSED_KEY = "profiles.seed_dismissed"
-ARTIFEX_PROFILE_IDS = frozenset(preset["id"] for preset in ARTIFEX_PROFILES)
 
 
 RECIPES_PATH = ROOT / "config" / "recipes.json"
@@ -3383,41 +3318,13 @@ def restore_seed_profile(profile_id: str) -> None:
 
 
 def dismiss_seed_profile(profile_id: str) -> None:
-    """A deleted ARTIFEX or catalog preset stays deleted; otherwise the next start would seed it again."""
-    if profile_id in ARTIFEX_PROFILE_IDS or profile_id in default_catalog_profile_ids():
+    """A deleted catalog preset stays deleted; otherwise the next start would seed it again."""
+    if profile_id in default_catalog_profile_ids():
         save_preference(SEED_DISMISSED_KEY, json.dumps(sorted(dismissed_seed_profiles() | {profile_id})))
 
 
-def seed_artifex_profiles() -> None:
+def migrate_legacy_runtime_labels() -> None:
     now = utc_now()
-    dismissed = dismissed_seed_profiles()
-    for preset in ARTIFEX_PROFILES:
-        if preset["id"] in dismissed:
-            continue
-        files = preset["files"]
-        db.execute(
-            """
-            INSERT OR IGNORE INTO profiles(
-                id,name,engine,model_ref,model_file,model_repo,model_filename,model_files_json,
-                model_alias,port,context_size,gpu_layers,threads,parallel,batch_size,ubatch_size,
-                temperature,top_p,top_k,min_p,repeat_penalty,presence_penalty,flash_attention,
-                cache_type_k,cache_type_v,reasoning_off,reasoning_effort,kv_unified_per_slot,
-                jinja,min_free_memory_mb,source,runtime_requirement,spec_type,draft_filename,
-                active,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                preset["id"], preset["name"], "llama.cpp", preset["model_ref"], "",
-                preset["repo"], files[0], json.dumps(files), preset["model_ref"], preset["port"],
-                preset["context"], 99, 1, preset["parallel"], preset["batch"], preset["ubatch"],
-                preset["temperature"], preset["top_p"], preset["top_k"], preset["min_p"], 0,
-                preset.get("presence", 0), 1, preset["cache_k"], preset["cache_v"],
-                preset.get("reasoning_off", 1), preset.get("reasoning_effort", ""),
-                preset.get("kv_unified", 1), 1, preset["memory"],
-                "ARTIFEX gpu/remote/start_server.sh", preset["runtime"],
-                preset.get("spec", ""), preset.get("draft", ""), 0, now, now,
-            ),
-        )
     for legacy in LEGACY_LLAMA_CPP_LABELS:
         db.execute(
             "UPDATE profiles SET runtime_requirement=replace(runtime_requirement, ?, ?), updated_at=? "
@@ -5923,7 +5830,7 @@ async def lifespan(_: FastAPI):
         detect_unclean_shutdown_on_startup()
     except Exception as exc:
         db.log("warning", "system", "system.unclean_check_failed", redact_log_text(str(exc), 300))
-    for seed in (seed_artifex_profiles, seed_default_profiles):
+    for seed in (migrate_legacy_runtime_labels, seed_default_profiles):
         try:
             seed()
         except Exception as exc:
@@ -10211,11 +10118,6 @@ def hf_spark_recommendation(
     )
     if unsupported_reap:
         runtime_requirement = "No compatible · REAP requiere una rama especial de llama.cpp"
-    verified = next((item for item in ARTIFEX_PROFILES if item["repo"].casefold() == repo_id.casefold()), None)
-    if verified:
-        runtime_requirement = verified["runtime"]
-        score = min(100, score + 8)
-        status = "Ideal" if fits else status
     reasons = []
     warnings = []
     if groups:
@@ -10234,9 +10136,7 @@ def hf_spark_recommendation(
             )
     if task_match:
         reasons.append(f"Adecuado para {', '.join(tasks)}")
-    if verified:
-        reasons.append("Configuración verificada por ARTIFEX")
-    elif trusted_publisher:
+    if trusted_publisher:
         reasons.append("Editor o cuantizador reconocido")
     if uncensored:
         warnings.append("Variante sin censura o abliterada")
@@ -10338,7 +10238,6 @@ def hf_spark_recommendation(
         "reasons": reasons[:4],
         "warnings": warnings[:4],
         "gguf_search": f"{repo_id.rpartition('/')[2]} GGUF" if needs_gguf else "",
-        "artifex_verified": bool(verified),
         "trusted_publisher": trusted_publisher,
         "uncensored": uncensored,
     }
@@ -12854,7 +12753,7 @@ def seed_default_profiles() -> None:
                 continue
             connection.execute(statement, profile_values(profile_id, payload, now))
         connection.commit()
-    sync_installed_recipes(local_recipes(), install_missing=True)
+    sync_installed_recipes(local_recipes())
     retire_recipe_profiles(retired_recipe_ids())
 
 

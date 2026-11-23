@@ -67,7 +67,6 @@ from backend.main import (
     profile_model_is_downloaded,
     profile_memory_plan,
     profile_models,
-    seed_artifex_profiles,
     save_persistent_models,
     run_system_update,
     settings,
@@ -694,16 +693,17 @@ class DatabaseTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 db.path = Path(directory) / "default-profile.db"
                 db.initialize()
-                main_module.seed_artifex_profiles()
-                settings.default_profile_id = "artifex-tiel-q6"
+                recipe = main_module.local_recipes()[0]
+                main_module.insert_recipe_profile(recipe["id"], recipe)
+                settings.default_profile_id = recipe["id"]
 
                 profile = main_module.apply_configured_default_profile()
 
                 self.assertIsNotNone(profile)
-                self.assertEqual(profile["id"], "artifex-tiel-q6")
+                self.assertEqual(profile["id"], recipe["id"])
                 self.assertEqual(
                     db.rows("SELECT id FROM profiles WHERE active=1"),
-                    [{"id": "artifex-tiel-q6"}],
+                    [{"id": recipe["id"]}],
                 )
         finally:
             settings.default_profile_id = original_profile
@@ -6972,68 +6972,61 @@ class ProfileApiTests(unittest.TestCase):
         finally:
             db.path = original_path
 
-    def test_artifex_profiles_are_seeded_once(self) -> None:
+    def test_fresh_install_has_no_profiles_and_legacy_labels_migrate(self) -> None:
         original_path = db.path
         with tempfile.TemporaryDirectory() as directory:
-            db.path = Path(directory) / "artifex.db"
+            db.path = Path(directory) / "fresh.db"
             db.initialize()
-            seed_artifex_profiles()
-            seed_artifex_profiles()
-            profiles = db.rows("SELECT * FROM profiles WHERE id LIKE 'artifex-%' ORDER BY id")
-            self.assertEqual(len(profiles), 6)
-            qwen = next(item for item in profiles if item["id"] == "artifex-qwen-flash")
-            self.assertEqual(qwen["context_size"], 262144)
-            self.assertEqual(qwen["presence_penalty"], 1.5)
-            self.assertEqual(qwen["active"], 0)
-            self.assertEqual({item["runtime_requirement"] for item in profiles}, {main_module.LLAMA_CPP_RUNTIME})
-
-            db.execute("UPDATE profiles SET runtime_requirement=? WHERE id='artifex-v7'", ("llama.cpp b10679 · CUDA 13 · sm_121 · tool calling",))
-            db.execute("UPDATE profiles SET runtime_requirement=? WHERE id='artifex-gpt-oss'", ("Requiere llama.cpp b11429",))
-            seed_artifex_profiles()
-            self.assertEqual(db.rows("SELECT runtime_requirement FROM profiles WHERE id='artifex-v7'")[0]["runtime_requirement"], "llama.cpp v1.0.0 · CUDA 13 · sm_121 · tool calling")
-            self.assertEqual(db.rows("SELECT runtime_requirement FROM profiles WHERE id='artifex-gpt-oss'")[0]["runtime_requirement"], "Requiere llama.cpp b11429")
+            main_module.seed_default_profiles()
+            main_module.seed_default_profiles()
+            self.assertEqual(db.rows("SELECT id FROM profiles"), [])
+            recipe = main_module.local_recipes()[0]
+            main_module.insert_recipe_profile(recipe["id"], recipe)
+            db.execute("UPDATE profiles SET runtime_requirement=? WHERE id=?", ("llama.cpp b10679 · CUDA 13 · sm_121 · tool calling", recipe["id"]))
+            main_module.migrate_legacy_runtime_labels()
+            self.assertEqual(
+                db.rows("SELECT runtime_requirement FROM profiles WHERE id=?", (recipe["id"],))[0]["runtime_requirement"],
+                "llama.cpp v1.0.0 · CUDA 13 · sm_121 · tool calling",
+            )
         db.path = original_path
 
     def test_downloaded_drafter_is_attached_to_plain_profiles(self) -> None:
         original_path = db.path
+        repo = "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF"
+        recipes = [recipe for recipe in main_module.local_recipes() if recipe.get("model_repo") == repo]
+        self.assertGreaterEqual(len(recipes), 2)
+        with_projector, plain = recipes[0], recipes[1]
         try:
             with tempfile.TemporaryDirectory() as directory:
                 db.path = Path(directory) / "drafter.db"
                 db.initialize()
-                seed_artifex_profiles()
-                db.execute("UPDATE profiles SET spec_type='', draft_filename='' WHERE id LIKE 'artifex-tiel-%'")
-                db.execute("UPDATE profiles SET mmproj_filename='mmproj-BF16.gguf' WHERE id='artifex-tiel-q5'")
-                repo = "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF"
+                for recipe in (with_projector, plain):
+                    main_module.insert_recipe_profile(recipe["id"], recipe)
+                db.execute("UPDATE profiles SET spec_type='', draft_filename='' WHERE model_repo=?", (repo,))
+                db.execute("UPDATE profiles SET mmproj_filename='mmproj-BF16.gguf' WHERE id=?", (with_projector["id"],))
                 with patch.object(main_module, "local_gguf_metadata", return_value={}):
                     self.assertEqual(main_module.attach_downloaded_drafter(repo, ["README.md"]), [])
                     attached = main_module.attach_downloaded_drafter(repo, ["mtp-Cyber-Tiel-Coder-35B-A3B.gguf"])
-                self.assertEqual(attached, ["ARTIFEX · Cyber-Tiel Q6"])
-                rows = {row["id"]: row for row in db.rows("SELECT id,spec_type,draft_filename FROM profiles WHERE id LIKE 'artifex-tiel-%'")}
-                self.assertEqual(rows["artifex-tiel-q6"]["spec_type"], "draft-mtp")
-                self.assertEqual(rows["artifex-tiel-q6"]["draft_filename"], "mtp-Cyber-Tiel-Coder-35B-A3B.gguf")
-                self.assertEqual(rows["artifex-tiel-q5"]["spec_type"], "")
+                self.assertEqual(attached, [plain["name"]])
+                rows = {row["id"]: row for row in db.rows("SELECT id,spec_type,draft_filename FROM profiles WHERE model_repo=?", (repo,))}
+                self.assertEqual(rows[plain["id"]]["spec_type"], "draft-mtp")
+                self.assertEqual(rows[plain["id"]]["draft_filename"], "mtp-Cyber-Tiel-Coder-35B-A3B.gguf")
+                self.assertEqual(rows[with_projector["id"]]["spec_type"], "")
         finally:
             db.path = original_path
 
     def test_deleted_seed_profiles_are_not_seeded_again(self) -> None:
         original_path = db.path
-        deleted = {"artifex-v8", "artifex-gpt-oss", "security-tools-bughunter-v8"}
+        recipe = main_module.local_recipes()[0]
         try:
             with tempfile.TemporaryDirectory() as directory:
                 db.path = Path(directory) / "seed-dismissed.db"
                 db.initialize()
-                seed_artifex_profiles()
+                main_module.insert_recipe_profile(recipe["id"], recipe)
+                asyncio.run(main_module.delete_profile(recipe["id"], confirm=recipe["name"]))
                 main_module.seed_default_profiles()
-                for profile_id in sorted(deleted):
-                    name = db.rows("SELECT name FROM profiles WHERE id=?", (profile_id,))[0]["name"]
-                    asyncio.run(main_module.delete_profile(profile_id, confirm=name))
-                seed_artifex_profiles()
-                main_module.seed_default_profiles()
-                remaining = {row["id"] for row in db.rows("SELECT id FROM profiles")}
-                self.assertFalse(deleted & remaining)
-                self.assertTrue((set(main_module.ARTIFEX_PROFILE_IDS) - deleted) <= remaining)
-                self.assertIn("ragkit-paramita", remaining)
-                self.assertEqual(main_module.dismissed_seed_profiles(), deleted)
+                self.assertEqual(db.rows("SELECT id FROM profiles"), [])
+                self.assertEqual(main_module.dismissed_seed_profiles(), {recipe["id"]})
         finally:
             db.path = original_path
 
@@ -7156,18 +7149,15 @@ class ProfileApiTests(unittest.TestCase):
             db.path = original_path
             main_module._recipes_cache.clear()
 
-    def test_recovered_default_profiles_are_seeded_once_without_overwriting(self) -> None:
+    def test_installed_recipes_stay_in_sync_without_auto_install(self) -> None:
         original_path = db.path
         with tempfile.TemporaryDirectory() as directory:
             db.path = Path(directory) / "defaults.db"
             db.initialize()
             main_module.seed_default_profiles()
-            main_module.seed_default_profiles()
-            rows = db.rows(
-                "SELECT id,name FROM profiles WHERE id NOT LIKE 'artifex-%' ORDER BY id"
-            )
-            self.assertEqual(len(rows), 11)
-            self.assertIn("TTS Lab · Voces MLX", {row["name"] for row in rows})
+            self.assertEqual(db.rows("SELECT id FROM profiles"), [])
+            for recipe in main_module.local_recipes():
+                main_module.insert_recipe_profile(recipe["id"], recipe)
             image = db.rows(
                 "SELECT engine,task,comfyui_json,additional_models_json FROM profiles WHERE name=?",
                 ("RECIPE · Image · High Quality",),
@@ -7197,15 +7187,6 @@ class ProfileApiTests(unittest.TestCase):
             self.assertEqual(adopted["recipe_id"], legacy_id)
             self.assertGreaterEqual(adopted["recipe_version"], 1)
             self.assertEqual(adopted["context_size"], main_module.local_recipes()[0]["context_size"])
-            db.execute(
-                "UPDATE profiles SET name=? WHERE id=?",
-                ("TTS Lab personalizado", "tts-lab-mlx"),
-            )
-            main_module.seed_default_profiles()
-            name = db.rows(
-                "SELECT name FROM profiles WHERE id='tts-lab-mlx'"
-            )[0]["name"]
-            self.assertEqual(name, "TTS Lab personalizado")
         db.path = original_path
 
     def test_create_and_activate_profile(self) -> None:

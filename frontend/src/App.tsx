@@ -2228,7 +2228,6 @@ type HfRecommendation = {
   fits: boolean;
   reasons: string[];
   warnings: string[];
-  artifex_verified: boolean;
   uncensored: boolean;
   hft_catalog?: {
     url: string;
@@ -5092,7 +5091,6 @@ function ModelsView({
                   </div>
                   <div className="memory-fit"><div><span style={{ width: `${memoryPercent}%` }} /></div><small>{memoryPercent}{t("% del presupuesto ·")}{" "}{Math.round(model.memory_budget_mb / 1024)}{" "}{t("GB utilizables")}</small></div>
                   <div className="recommendation-reasons">
-                    {model.artifex_verified && <span className="verified"><ShieldCheck size={12} />{t("Verificado por ARTIFEX")}</span>}
                     {model.recommended_mmproj_file && <span className="verified"><ShieldCheck size={12} />{t("mmproj incluido ·")}{" "}{model.recommended_mmproj_file}</span>}
                     {model.reasons.slice(0, 2).map((reason) => <span key={reason}><Zap size={11} />{reason}</span>)}
                     {model.warnings.slice(0, 1).map((warning) => <span className="warning" key={warning}><Activity size={11} />{warning}</span>)}

@@ -736,6 +736,7 @@ input { height: 36px; padding: 0 11px; }
 .badge.uncensored { color: #fff; background: var(--red); border-color: var(--red); font-weight: 700; }
 .badge.failed { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 .badge.running { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.badge.vision { gap: 4px; color: #b8781c; background: color-mix(in srgb, #e09a2b 15%, transparent); }
 .profile-name .badge.recipe { display: inline-block; margin-right: 6px; padding: 2px 7px; color: #fff; background: var(--blue); font-size: calc(10px * var(--font-scale)); line-height: 1.4; vertical-align: 2px; }
 .badge.warning { color: #b87919; background: color-mix(in srgb, #e7a83e 16%, transparent); }
 .search-bar { display: grid; grid-template-columns: 20px 1fr auto; align-items: center; gap: 7px; padding: 7px 7px 7px 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }

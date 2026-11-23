@@ -8120,6 +8120,7 @@ async def models() -> dict[str, Any]:
             effective = quick_by_identity.get(f"huggingface:{model['repo_id'].casefold()}") or config
             model["memory_estimate"] = memory_summary(effective)
             model["manual_settings"] = bool(model_overrides(f"huggingface:{model['repo_id']}"))
+            model["vision"] = bool(effective and effective.get("mmproj_filename"))
             if effective and effective.get("spec_type"):
                 model["speculative"] = {
                     "spec_type": effective["spec_type"],

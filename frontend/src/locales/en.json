@@ -532,8 +532,11 @@
   "Eliminar {name}": "Remove {name}",
   "Eliminar {repo_id}": "Remove {repo_id}",
   "Embeddings": "Embeddings",
-  "Embeddings / Reranker": "Embeddings / Reranker",
-  "Embeddings convierten texto en vectores; un reranker reordena resultados. No son modelos de chat.": "Embeddings turn text into vectors; a reranker reorders results. They are not chat models.",
+  "Embeddings · modelo de embedding": "Embeddings · embedding model",
+  "Convierte cada texto en un vector de números que representa su significado: textos parecidos quedan cerca aunque usen otras palabras. Es la búsqueda semántica del RAG: se vectorizan los documentos una vez y cada pregunta se compara con ellos. No conversa ni genera texto; es pequeño y rápido (BGE-M3 ocupa unos 2 GB). Los vectores solo se comparan con los del mismo modelo: si lo cambias, hay que volver a vectorizar todo.": "Turns each text into a vector of numbers that represents its meaning: similar texts end up close together even when they use different words. It is the semantic search behind RAG: documents are vectorised once and every question is compared with them. It does not chat or generate text; it is small and fast (BGE-M3 takes about 2 GB). Vectors can only be compared with those from the same model: if you change it, everything has to be vectorised again.",
+  "Reranker · reordenador": "Reranker",
+  "Lee cada par pregunta + fragmento y le da una puntuación de relevancia. Es más preciso que comparar vectores, pero más lento, así que solo revisa los mejores candidatos que devuelve el embedding (por ejemplo los 12 primeros). Tampoco es un modelo de chat.": "Reads each question + chunk pair and gives it a relevance score. It is more precise than comparing vectors but slower, so it only reviews the best candidates returned by the embedding (for example the top 12). It is not a chat model either.",
+  "Embeddings / rerank": "Embeddings / rerank",
   "Embeddings y rerank": "Embeddings and rerank",
   "Embeddings y reranking": "Embeddings and reranking",
   "En cola": "Queued",
@@ -2018,5 +2021,6 @@
   "+{count} desactivados": "+{count} disabled",
   "desactivado": "disabled",
   "Hay un proyector visual elegido: llama.cpp no combina visión y especulativa, así que el arranque seguirá sin MTP. Elige «Sin visión» para usarla.": "A vision projector is selected: llama.cpp cannot combine vision and speculative decoding, so the model will still start without MTP. Choose “No vision” to use it.",
-  "Al activar MTP se pierde la visión: el modelo arrancará solo con texto y no aceptará imágenes. Para recuperarla, vuelve a elegir el proyector visual.": "Enabling MTP removes vision: the model will start text-only and will not accept images. To get it back, select the vision projector again."
+  "Al activar MTP se pierde la visión: el modelo arrancará solo con texto y no aceptará imágenes. Para recuperarla, vuelve a elegir el proyector visual.": "Enabling MTP removes vision: the model will start text-only and will not accept images. To get it back, select the vision projector again.",
+  "Acepta imágenes: el proyector visual se carga al encender": "Accepts images: the vision projector is loaded at start"
 }

@@ -532,8 +532,11 @@
   "Eliminar {name}",
   "Eliminar {repo_id}",
   "Embeddings",
-  "Embeddings / Reranker",
-  "Embeddings convierten texto en vectores; un reranker reordena resultados. No son modelos de chat.",
+  "Embeddings · modelo de embedding",
+  "Convierte cada texto en un vector de números que representa su significado: textos parecidos quedan cerca aunque usen otras palabras. Es la búsqueda semántica del RAG: se vectorizan los documentos una vez y cada pregunta se compara con ellos. No conversa ni genera texto; es pequeño y rápido (BGE-M3 ocupa unos 2 GB). Los vectores solo se comparan con los del mismo modelo: si lo cambias, hay que volver a vectorizar todo.",
+  "Reranker · reordenador",
+  "Lee cada par pregunta + fragmento y le da una puntuación de relevancia. Es más preciso que comparar vectores, pero más lento, así que solo revisa los mejores candidatos que devuelve el embedding (por ejemplo los 12 primeros). Tampoco es un modelo de chat.",
+  "Embeddings / rerank",
   "Embeddings y rerank",
   "Embeddings y reranking",
   "En cola",
@@ -2000,5 +2003,6 @@
   "desactivado",
   "{count} desactivado(s): no arrancan ni cuentan en memoria",
   "Hay un proyector visual elegido: llama.cpp no combina visión y especulativa, así que el arranque seguirá sin MTP. Elige «Sin visión» para usarla.",
-  "Al activar MTP se pierde la visión: el modelo arrancará solo con texto y no aceptará imágenes. Para recuperarla, vuelve a elegir el proyector visual."
+  "Al activar MTP se pierde la visión: el modelo arrancará solo con texto y no aceptará imágenes. Para recuperarla, vuelve a elegir el proyector visual.",
+  "Acepta imágenes: el proyector visual se carga al encender"
 ]

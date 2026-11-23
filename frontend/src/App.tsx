@@ -108,7 +108,7 @@ function storedThemePreference(): ThemePreference {
 function resolveTheme(preference: ThemePreference, systemTheme: Theme): Theme {
   return preference === "system" ? systemTheme : preference;
 }
-type LocalModelFilter = "all" | "loaded" | "text" | "vision" | "audio" | "ollama" | "huggingface" | "compact" | "medium" | "large";
+type LocalModelFilter = "all" | "loaded" | "text" | "vision" | "audio" | "embeddings" | "ollama" | "huggingface" | "compact" | "medium" | "large";
 type ModelTask = "chat" | "vision" | "embeddings" | "image-generation" | "asr" | "tts" | "video-generation" | "reranking" | "redaction";
 type InputModality = "text" | "image" | "audio" | "video";
 type OutputModality = "text" | "image" | "audio" | "video" | "embedding" | "scores";
@@ -462,6 +462,7 @@ type Models = {
     quick_start?: QuickStart;
     memory_estimate?: MemoryEstimate | null;
     manual_settings?: boolean;
+    vision?: boolean;
     speculative?: { spec_type: string; draft_filename: string };
     health?: ModelHealth | null;
   }>;
@@ -612,7 +613,8 @@ const MODEL_GLOSSARY: ModelGlossaryEntry[] = [
   { id: "reasoning", term: t("Reasoning / Thinking"), summary: t("Optimizado para resolver problemas paso a paso. Puede ser más capaz, pero también más lento y verboso."), category: "Uso", patterns: [/reasoning/i, /thinking/i, /\breasoner\b/i] },
   { id: "rag", term: "RAG", summary: t("Busca información en tus documentos y la añade al prompt antes de responder. No reentrena el modelo."), category: "Uso", patterns: [/\brag\b/i, /retrieval.augmented/i] },
   { id: "agents-tools", term: t("Agentes / tool calling"), summary: t("El modelo puede elegir y llamar herramientas, APIs o funciones. Requiere una plantilla y un runtime compatibles."), category: "Uso", patterns: [/\bagents?\b/i, /agentic/i, /tool.call/i, /tool.use/i, /function.call/i, /computer.use/i] },
-  { id: "embeddings-reranker", term: t("Embeddings / Reranker"), summary: t("Embeddings convierten texto en vectores; un reranker reordena resultados. No son modelos de chat."), category: "Uso", patterns: [/embedding/i, /\bembed\b/i, /rerank/i, /\b(?:bge|e5|gte|minilm|mpnet|mxbai|splade)\b/i, /nomic.embed/i, /jina.embed/i] },
+  { id: "embeddings", term: t("Embeddings · modelo de embedding"), summary: t("Convierte cada texto en un vector de números que representa su significado: textos parecidos quedan cerca aunque usen otras palabras. Es la búsqueda semántica del RAG: se vectorizan los documentos una vez y cada pregunta se compara con ellos. No conversa ni genera texto; es pequeño y rápido (BGE-M3 ocupa unos 2 GB). Los vectores solo se comparan con los del mismo modelo: si lo cambias, hay que volver a vectorizar todo."), category: "Uso", patterns: [/embedding/i, /\bembed\b/i, /\b(?:bge|e5|gte|minilm|mpnet|mxbai|splade)\b/i, /nomic.embed/i, /jina.embed/i, /sentence.transformers/i] },
+  { id: "reranker", term: t("Reranker · reordenador"), summary: t("Lee cada par pregunta + fragmento y le da una puntuación de relevancia. Es más preciso que comparar vectores, pero más lento, así que solo revisa los mejores candidatos que devuelve el embedding (por ejemplo los 12 primeros). Tampoco es un modelo de chat."), category: "Uso", patterns: [/rerank/i, /cross.encoder/i] },
   { id: "asr-tts", term: "ASR / STT / TTS", summary: t("ASR o STT transcribe voz a texto. TTS convierte texto en voz."), category: "Uso", patterns: [/\basr\b/i, /\bstt\b/i, /\btts\b/i, /whisper/i, /\bspeech\b/i, /text.to.speech/i, /speech.to.text/i, /\b(?:parakeet|canary|voxtral|moonshine|kokoro|chatterbox)\b/i, /wav2vec/i] },
   { id: "voice-cloning", term: t("Voice cloning / speaker embedding"), summary: t("Imita una voz usando una muestra o una representación del hablante. Usa solo voces con permiso."), category: "Uso", patterns: [/voice.clon/i, /speaker.embedding/i, /reference.audio/i, /zero.shot.voice/i] },
   { id: "vocoder-codec", term: t("Vocoder / audio codec"), summary: t("Un vocoder convierte representaciones acústicas en audio. Un codec comprime audio en tokens que otro modelo puede procesar."), category: "Uso", patterns: [/\bvocoder\b/i, /\bvocos\b/i, /audio.codec/i, /codec.model/i] },
@@ -2570,9 +2572,24 @@ function profileModelCategory(model: ProfileModel): ModelCategoryKey {
   if (model.task === "video-generation") return "video";
   if (model.task === "embeddings" || model.task === "reranking") return "embeddings";
   if (model.task === "redaction") return "privacy";
-  if (model.task === "vision" || model.mmproj_filename || model.mmproj_file || model.input_modalities?.includes("image")) return "vision";
+  if (profileModelHasVision(model)) return "vision";
   const guessed = localModelCategoryKey(`${model.model_repo} ${model.model_filename} ${model.model_ref}`);
-  return guessed === "code" || guessed === "vision" ? guessed : "text";
+  if (guessed === "vision") return profileModelVisionPossible(model) ? "vision" : "text";
+  return guessed === "code" ? guessed : "text";
+}
+
+/** llama.cpp only sees images with an mmproj, and drops it when speculative decoding (MTP) is on. */
+function profileModelVisionPossible(model: ProfileModel): boolean {
+  return model.engine !== "llama.cpp" && !model.spec_type;
+}
+
+function profileModelHasVision(model: ProfileModel): boolean {
+  if (model.mmproj_filename || model.mmproj_file) return true;
+  return profileModelVisionPossible(model) && (model.task === "vision" || Boolean(model.input_modalities?.includes("image")));
+}
+
+function VisionBadge() {
+  return <span className="badge vision" title={t("Acepta imágenes: el proyector visual se carga al encender")}><Eye size={11} />{" "}{t("Visión")}</span>;
 }
 
 function profileCategories(models: ProfileModel[]): ModelCategoryKey[] {
@@ -4485,12 +4502,14 @@ function ModelsView({
     const category = localModelCategory(localModelCategoryHint(source, model)).label;
     const vision = [t("Visión"), t("Imagen"), t("Vídeo")].includes(category);
     const audio = category === t("Voz / audio");
+    const embeddings = category === t("Embeddings");
     if (localQuery.trim() && !searchable.includes(localQuery.trim().toLowerCase())) return false;
     if (filter === "all") return true;
     if (filter === "loaded") return source === "ollama" ? isOllamaLoaded(model) : Boolean(model.loaded);
-    if (filter === "text") return !vision && !audio;
+    if (filter === "text") return !vision && !audio && !embeddings;
     if (filter === "vision") return vision;
     if (filter === "audio") return audio;
+    if (filter === "embeddings") return embeddings;
     if (filter === "ollama" || filter === "huggingface") return source === filter;
     if (filter === "compact") return sizeBytes <= 10 * 1024 ** 3;
     if (filter === "medium") return sizeBytes > 10 * 1024 ** 3 && sizeBytes <= 50 * 1024 ** 3;
@@ -4682,6 +4701,7 @@ function ModelsView({
               ["text", t("Texto")],
               ["vision", t("Visión / imagen / vídeo")],
               ["audio", t("Voz / audio")],
+              ["embeddings", t("Embeddings / rerank")],
               ["ollama", t("Ollama")],
               ["huggingface", t("Hugging Face")],
               ["compact", t("≤ 10 GB")],
@@ -4836,6 +4856,7 @@ function ModelsView({
                     <UncensoredBadge name={model.repo_id} flagged={model.uncensored} />
                     {model.health && !(incomplete && model.health.status === "healthy") ? <ModelHealthBadge health={model.health} /> : incomplete && <span className="badge warning">{t("Incompleto")}</span>}
                     {cardOnly && <span className="badge warning" title={t("Solo está la ficha del modelo; no hay archivos de pesos")}>{t("Sin pesos")}</span>}
+                    {model.vision && <VisionBadge />}
                     {model.speculative && <span className="badge" title={t("Decodificación especulativa con {value}", { value: model.speculative.draft_filename || t("el MTP integrado en el GGUF") })}><Zap size={11} /> {SPEC_LABELS[model.speculative.spec_type] ?? model.speculative.spec_type}</span>}
                     {model.manual_settings && <span className="badge" title={t("Tiene ajustes manuales que mandan sobre la ficha y la cabecera GGUF")}><SlidersHorizontal size={11} />{" "}{t("Manual")}</span>}
                   </>}
@@ -6013,8 +6034,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
               ["chat", "vision", "embeddings"].includes(model.task) ? `${(effectiveContext / 1024).toLocaleString(locale)}K ctx${effectiveContext !== model.context_size ? ` ${t("(ajustado)")}` : ""}` : "",
               kvCache ? `KV ${kvCache}` : "",
               model.spec_type ? SPEC_LABELS[model.spec_type] ?? model.spec_type : "",
-              model.mmproj_filename || model.mmproj_file ? t("visión") : "",
-              model.task !== "chat" ? model.task : "",
+              model.task !== "chat" && model.task !== "vision" ? model.task : "",
               `${model.engine} :${model.port}`,
             ].filter(Boolean);
             const modelDisabled = model.enabled === false;
@@ -6025,6 +6045,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
                 <span className="profile-model-name">
                   <strong title={[identity.file || model.model_repo || model.model_ref, model.spec_type ? `${SPEC_LABELS[model.spec_type] ?? model.spec_type}: ${model.draft_filename || t("MTP integrado en el GGUF")}` : ""].filter(Boolean).join("\n")}>{identity.name}</strong>
                   <UncensoredBadge name={`${model.uncensored ?? ""} ${identity.name}`} flagged={Boolean(model.uncensored)} showKind />
+                  {profileModelHasVision(model) && <VisionBadge />}
                 </span>
                 {aliases.length > 0 && <small>{aliases.join(" · ")}</small>}
               </span>

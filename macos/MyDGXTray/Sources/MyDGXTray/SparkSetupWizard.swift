@@ -350,7 +350,17 @@ final class SparkSetupWizard: ObservableObject {
                 mark("identity", .running)
                 let scan = try await SparkSetup.scanHostKeys(host: profile.ssh.host, port: profile.ssh.port)
                 hostFingerprint = scan.fingerprint
-                try await SparkSetup.trustHostKeys(scan.keys, host: profile.ssh.host, port: profile.ssh.port)
+                let stored = await SparkSetup.knownFingerprints(host: profile.ssh.host, port: profile.ssh.port)
+                if !stored.isEmpty && stored.isDisjoint(with: scan.allFingerprints) {
+                    guard confirmHostKeyChange(
+                        host: "\(profile.ssh.host):\(profile.ssh.port)",
+                        stored: stored,
+                        current: scan.fingerprint
+                    ) else { throw SetupError.hostKeyChanged }
+                    try await SparkSetup.replaceHostKeys(scan.keys, host: profile.ssh.host, port: profile.ssh.port)
+                } else {
+                    try await SparkSetup.trustHostKeys(scan.keys, host: profile.ssh.host, port: profile.ssh.port)
+                }
                 mark("identity", .done)
 
                 current = "key"
@@ -684,6 +694,17 @@ final class SparkSetupWizard: ObservableObject {
             profile.detectedDeviceVariant = facts.device.variant
         }
         return profile
+    }
+
+    /// Rented machines (AxForge) reuse host:port with a new host key on every rental; never replace it silently.
+    private func confirmHostKeyChange(host: String, stored: Set<String>, current: String) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(localized: "La huella SSH de \(host) ha cambiado")
+        alert.informativeText = String(localized: "Es normal en un alquiler nuevo (AxForge) o en un equipo reinstalado. Si no es tu caso, cancela: alguien podría estar interceptando la conexión.\n\nGuardada: \(stored.sorted().joined(separator: ", "))\nActual: \(current)\n\nCompara la actual con la que muestra la consola del proveedor o del equipo antes de sustituirla.")
+        alert.addButton(withTitle: String(localized: "Sustituir huella"))
+        alert.addButton(withTitle: String(localized: "Cancelar"))
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// Same SSH host key, same hostname or same host:port as a saved profile means the same Spark.

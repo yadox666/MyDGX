@@ -1111,6 +1111,30 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    func copyDashboardPassword() {
+        let profile = configuration.activeConnection
+        Task {
+            let password = try? await SSHBootstrap.fetchDashboardPassword(
+                profile: profileUsingSelectedSSH(profile),
+                remoteDirectory: profile.deployment.remoteDirectory
+            )
+            guard let password else {
+                lastError = String(localized: "El DGX no tiene contraseña del dashboard o no se pudo leer por SSH. Vuelve a desplegar para generarla.")
+                return
+            }
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(password, forType: .string)
+            let copiedChange = pasteboard.changeCount
+            lastError = nil
+            statusMessage = String(localized: "Contraseña del dashboard copiada · se borra en 60 s")
+            try? await Task.sleep(for: .seconds(60))
+            if pasteboard.changeCount == copiedChange {
+                pasteboard.clearContents()
+            }
+        }
+    }
+
     func openOpenWebUI() {
         guard let url = configuration.resolvedOpenWebUIURL else {
             lastError = String(localized: "La URL de Open WebUI no es válida.")
@@ -1182,7 +1206,7 @@ final class AppModel: ObservableObject {
 
     func openWebApp(_ app: WebApp) {
         if app.reachable == false {
-            reportWebAppProblem(app, String(localized: "\(app.alias) no responde en el puerto \(app.port) del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app."))
+            reportWebAppProblem(app, String(localized: "\(app.alias) no responde en el puerto \(String(app.port)) del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app."))
             return
         }
         let profile = configuration.activeConnection
@@ -1232,7 +1256,7 @@ final class AppModel: ObservableObject {
                 throw RemoteActionError.webAppUnavailable(app.alias, app.port)
             } catch {
                 if let owner = await localPortListener(app.port), owner != "ssh" {
-                    reportWebAppProblem(app, String(localized: "El puerto \(app.port) de este Mac lo usa \(owner), así que el túnel no puede abrir \(app.alias). Cierra \(owner) o cambia el puerto web de la app en Perfiles."))
+                    reportWebAppProblem(app, String(localized: "El puerto \(String(app.port)) de este Mac lo usa \(owner), así que el túnel no puede abrir \(app.alias). Cierra \(owner) o cambia el puerto web de la app en Perfiles."))
                 } else {
                     reportWebAppProblem(app, error.localizedDescription)
                 }
@@ -2740,7 +2764,7 @@ enum RemoteActionError: LocalizedError {
         case .unsafeIdentity:
             return String(localized: "La clave SSH no existe o sus permisos permiten acceso a otros usuarios; usa chmod 600.")
         case let .webAppUnavailable(alias, port):
-            return String(localized: "\(alias) no responde en el puerto \(port). Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac.")
+            return String(localized: "\(alias) no responde en el puerto \(String(port)). Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac.")
         }
     }
 }

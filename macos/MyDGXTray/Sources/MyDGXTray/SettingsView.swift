@@ -274,7 +274,7 @@ struct SettingsView: View {
                     Text("HTTPS").tag("https")
                 }
                 TextField("Host", text: profile.apiHost)
-                TextField("Puerto", value: profile.apiPort, format: .number)
+                TextField("Puerto", value: profile.apiPort, format: .number.grouping(.never))
                 TextField("Ruta del dashboard", text: profile.dashboardPath)
                 TextField(
                     "URL de Open WebUI",
@@ -306,9 +306,9 @@ struct SettingsView: View {
             Section("SSH") {
                 TextField("IP o hostname de red local", text: profile.ssh.host)
                 TextField("Usuario", text: profile.ssh.user)
-                TextField("Puerto en red local", value: profile.ssh.port, format: .number)
+                TextField("Puerto en red local", value: profile.ssh.port, format: .number.grouping(.never))
                 TextField("IP o hostname público (opcional)", text: profile.ssh.publicHost)
-                TextField("Puerto público/NAT", value: profile.ssh.publicPort, format: .number)
+                TextField("Puerto público/NAT", value: profile.ssh.publicPort, format: .number.grouping(.never))
                 Text("Se prueba primero la red local y, si no responde, la dirección pública.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -322,16 +322,16 @@ struct SettingsView: View {
             Section("Túnel SSH administrado") {
                 Toggle("Usar túnel", isOn: profile.tunnel.enabled)
                 if profile.wrappedValue.tunnel.enabled {
-                    TextField("Puerto API local", value: profile.tunnel.localAPIPort, format: .number)
-                    TextField("Puerto API remoto", value: profile.tunnel.remoteAPIPort, format: .number)
-                    TextField("Puerto Open WebUI local", value: profile.tunnel.localOpenWebUIPort, format: .number)
-                    TextField("Puerto Open WebUI remoto", value: profile.tunnel.remoteOpenWebUIPort, format: .number)
-                    TextField("Puerto ComfyUI local", value: profile.tunnel.localComfyUIPort, format: .number)
-                    TextField("Puerto ComfyUI remoto", value: profile.tunnel.remoteComfyUIPort, format: .number)
-                    TextField("Puerto Gateway local", value: profile.tunnel.localGatewayPort, format: .number)
-                    TextField("Puerto Gateway remoto", value: profile.tunnel.remoteGatewayPort, format: .number)
-                    TextField("Puerto DGX Dashboard local", value: profile.tunnel.localDGXDashboardPort, format: .number)
-                    TextField("Puerto DGX Dashboard remoto", value: profile.tunnel.remoteDGXDashboardPort, format: .number)
+                    TextField("Puerto API local", value: profile.tunnel.localAPIPort, format: .number.grouping(.never))
+                    TextField("Puerto API remoto", value: profile.tunnel.remoteAPIPort, format: .number.grouping(.never))
+                    TextField("Puerto Open WebUI local", value: profile.tunnel.localOpenWebUIPort, format: .number.grouping(.never))
+                    TextField("Puerto Open WebUI remoto", value: profile.tunnel.remoteOpenWebUIPort, format: .number.grouping(.never))
+                    TextField("Puerto ComfyUI local", value: profile.tunnel.localComfyUIPort, format: .number.grouping(.never))
+                    TextField("Puerto ComfyUI remoto", value: profile.tunnel.remoteComfyUIPort, format: .number.grouping(.never))
+                    TextField("Puerto Gateway local", value: profile.tunnel.localGatewayPort, format: .number.grouping(.never))
+                    TextField("Puerto Gateway remoto", value: profile.tunnel.remoteGatewayPort, format: .number.grouping(.never))
+                    TextField("Puerto DGX Dashboard local", value: profile.tunnel.localDGXDashboardPort, format: .number.grouping(.never))
+                    TextField("Puerto DGX Dashboard remoto", value: profile.tunnel.remoteDGXDashboardPort, format: .number.grouping(.never))
                 }
             }
 

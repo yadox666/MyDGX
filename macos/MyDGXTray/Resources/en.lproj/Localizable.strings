@@ -10,7 +10,8 @@
 "%@ está listo en %@." = "%@ is ready on %@.";
 "%@ ha dejado de responder por API y SSH." = "%@ stopped responding over API and SSH.";
 "%@ no disponible" = "%@ unavailable";
-"%@ no responde en el puerto %lld. Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac." = "%@ isn’t responding on port %lld. Make sure its start.sh uses MYDGX_APP_PORT and that the local port is free on the Mac.";
+"%@ no responde en el puerto %@ del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app." = "%@ is not responding on DGX port %@. Check in Profiles that the web port matches the one the app uses.";
+"%@ no responde en el puerto %@. Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac." = "%@ is not responding on port %@. Check that its start.sh uses MYDGX_APP_PORT and that the local port is free on the Mac.";
 "%@ no responde por API ni SSH." = "%@ isn’t responding over API or SSH.";
 "%@ no responde; MyDGXTray usa %@ %@." = "%@ isn’t responding; MyDGXTray is using %@ %@.";
 "%@ no se puede abrir: %@" = "%@ can’t be opened: %@";
@@ -24,7 +25,7 @@
 "%@ · encendido desde Modelos" = "%@ · started from Models";
 "%@ · plan, solo lectura" = "%@ · plan, read-only";
 "%@ · predeterminado · %@" = "%@ · default · %@";
-"%@ · puerto SSH %lld" = "%@ · SSH port %lld";
+"%@ · puerto SSH %@" = "%@ · SSH port %@";
 "%@%@ · %@" = "%@%@ · %@";
 "%lld" = "%lld";
 "%lld equipo(s) detectado(s)" = "%lld device(s) found";
@@ -146,12 +147,14 @@
 "Continuar" = "Continue";
 "Contraseña" = "Password";
 "Contraseña de administrador del Spark" = "Spark administrator password";
+"Contraseña del dashboard copiada · se borra en 60 s" = "Dashboard password copied · cleared in 60 s";
 "Contraseña del Spark" = "Spark password";
 "copia" = "backup";
 "Copia de seguridad" = "Backup";
 "Copia de Seguridad DGX" = "DGX backup";
 "Copia guardada · %@" = "Saved backup · %@";
 "Copiar" = "Copy";
+"Copiar contraseña del dashboard" = "Copy dashboard password";
 "Copiar MyDGX" = "Copy MyDGX";
 "Creando copia…" = "Creating backup…";
 "Crear una clave segura para este Mac" = "Create a secure key for this Mac";
@@ -185,6 +188,7 @@
 "El alias del equipo no es válido." = "The device alias isn’t valid.";
 "El certificado CA configurado no es válido." = "The configured CA certificate is invalid.";
 "El despliegue falló (código %d). Revisa ~/.MyDGX/logs." = "The deployment failed (code %d). Check ~/.MyDGX/logs.";
+"El DGX no tiene contraseña del dashboard o no se pudo leer por SSH. Vuelve a desplegar para generarla." = "The DGX has no dashboard password or it could not be read over SSH. Deploy again to generate it.";
 "El directorio remoto de despliegue no es válido." = "The remote deployment directory is invalid.";
 "El equipo remoto necesita permisos sudo no interactivos para los comandos de instalación autorizados." = "The remote device needs non-interactive sudo permissions for the authorized install commands.";
 "El equipo remoto no tiene espacio suficiente para completar el despliegue." = "The remote device doesn’t have enough space to complete the deployment.";
@@ -197,7 +201,7 @@
 "El nombre viene en la etiqueta del Spark. Si no sabes el puerto, déjalo en «auto»." = "The name is on the Spark’s label. If you don’t know the port, leave it set to “auto.”";
 "El paquete descargado no es una MyDGXTray válida y firmada." = "The downloaded package isn’t a valid, signed MyDGXTray.";
 "El perfil activo no existe." = "The active profile doesn’t exist.";
-"El puerto %lld de este Mac lo usa %@, así que el túnel no puede abrir %@. Cierra %@ o cambia el puerto web de la app en Perfiles." = "Port %lld on this Mac is used by %@, so the tunnel can't open %@. Quit %@ or change the app's web port in Profiles.";
+"El puerto %@ de este Mac lo usa %@, así que el túnel no puede abrir %@. Cierra %@ o cambia el puerto web de la app en Perfiles." = "Port %@ on this Mac is used by %@, so the tunnel cannot open %@. Quit %@ or change the app's web port in Profiles.";
 "El puerto local del gateway no es válido." = "The gateway’s local port isn’t valid.";
 "El puerto o intervalo de actualización no es válido." = "The port or refresh interval isn’t valid.";
 "El puerto SSH remoto rechazó la conexión." = "The remote SSH port refused the connection.";
@@ -232,6 +236,7 @@
 "Error al cargar perfil" = "Couldn’t load profile";
 "Error de conexión" = "Connection error";
 "Error de despliegue" = "Deployment error";
+"Es normal en un alquiler nuevo (AxForge) o en un equipo reinstalado. Si no es tu caso, cancela: alguien podría estar interceptando la conexión.\n\nGuardada: %@\nActual: %@\n\nCompara la actual con la que muestra la consola del proveedor o del equipo antes de sustituirla." = "This is expected on a new rental (AxForge) or a reinstalled machine. Otherwise, cancel: someone could be intercepting the connection.\n\nStored: %@\nCurrent: %@\n\nCompare the current one with the fingerprint shown by the provider or machine console before replacing it.";
 "Escribe el usuario que creaste al encender el Spark por primera vez." = "Enter the user name you created when you first started the Spark.";
 "Escribe la contraseña del Spark para autorizar este Mac la primera vez." = "Enter the Spark’s password to authorize this Mac the first time.";
 "Escribe una IP (192.168.1.50) o un nombre (spark-1a2b.local)." = "Enter an IP (192.168.1.50) or a name (spark-1a2b.local).";
@@ -306,7 +311,8 @@
 "La credencial no puede ser un enlace simbólico." = "The credential can't be a symbolic link.";
 "La descarga no coincide con su checksum SHA-256; se ha descartado." = "The download doesn’t match its SHA-256 checksum and was discarded.";
 "La frase de paso de la clave no es correcta." = "The key’s passphrase is incorrect.";
-"La identidad del Spark no coincide con la guardada. Si lo has reinstalado, elimina su entrada de ~/.MyDGX/known_hosts y vuelve a intentarlo." = "The Spark’s identity doesn’t match the saved one. If you reinstalled it, remove its entry from ~/.MyDGX/known_hosts and try again.";
+"La huella SSH de %@ ha cambiado" = "The SSH fingerprint of %@ has changed";
+"La identidad del equipo no coincide con la guardada y no se ha sustituido. Si es un alquiler nuevo o lo has reinstalado, vuelve a conectar y confirma la huella nueva." = "The machine's identity does not match the stored one and was not replaced. If this is a new rental or you reinstalled it, connect again and confirm the new fingerprint.";
 "La identidad SSH del equipo cambió. Verifica su huella antes de actualizar known_hosts." = "The device’s SSH identity changed. Verify its fingerprint before updating known_hosts.";
 "La instalación se detuvo en «%@». Pulsa Reintentar: lo ya instalado se conserva. El registro tiene los detalles." = "Installation stopped at “%@.” Click Retry: anything already installed is kept. See the log for details.";
 "La operación continúa en segundo plano" = "The operation continues in the background";
@@ -434,7 +440,7 @@
 "Proyecto sincronizado" = "Project synced";
 "Puede tardar unos segundos." = "This may take a few seconds.";
 "Puerto" = "Port";
-"puerto %lld ocupado" = "port %lld in use";
+"puerto %@ ocupado" = "port %@ in use";
 "Puerto API local" = "Local API port";
 "Puerto API remoto" = "Remote API port";
 "Puerto ComfyUI local" = "Local ComfyUI port";
@@ -495,6 +501,7 @@
 "SSH" = "SSH";
 "SSH rechazó la autenticación. Comprueba el usuario, la clave privada y sus permisos." = "SSH rejected authentication. Check the user, the private key, and its permissions.";
 "Suite de benchmarks" = "Benchmark suite";
+"Sustituir huella" = "Replace fingerprint";
 "Terminar" = "Finish";
 "Tipo" = "Type";
 "Todavía no existe un log de despliegue para este equipo." = "There’s no deployment log for this device yet.";
@@ -523,9 +530,9 @@
 "Verificando versiones" = "Verifying versions";
 "Verificar" = "Verify";
 "Versión %@" = "Version %@";
-"Ya configurado · SSH actualizado %lld → %lld" = "Already set up · SSH updated %lld → %lld";
+"Ya configurado · SSH actualizado %@ → %@" = "Already configured · SSH updated %@ → %@";
 "Ya está configurado · puerto anunciado sin verificar" = "Already set up · advertised port not verified";
-"Ya está configurado · SSH %lld" = "Already set up · SSH %lld";
+"Ya está configurado · SSH %@" = "Already configured · SSH %@";
 "Ya hay %lld equipo(s). Sigo buscando…" = "%lld device(s) found so far. Still searching…";
 "Ya hay dos perfiles o modelos Quick cargados." = "Two profiles or Quick models are already loaded.";
 "Ya tengo una clave SSH" = "I already have an SSH key";
@@ -545,4 +552,3 @@
 "¿Sobrescribir los archivos cloud-init?" = "Overwrite the cloud-init files?";
 "¿Tienes otro Spark? Abre Preferencias y pulsa el botón del asistente." = "Have another Spark? Open Settings and click the assistant button.";
 "¿Tu Spark es nuevo y aún no lo has encendido?" = "Is your Spark new and not started yet?";
-"%@ no responde en el puerto %lld del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app." = "%@ isn’t responding on port %lld on the DGX. Check in Profiles that the web port matches the one the app uses.";

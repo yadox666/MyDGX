@@ -56,8 +56,8 @@ enum DGXAutoImporter {
                             ? String(localized: "Ya está configurado · puerto anunciado sin verificar")
                             : (
                                 oldPort == device.port
-                                    ? String(localized: "Ya está configurado · SSH \(device.port)")
-                                    : String(localized: "Ya configurado · SSH actualizado \(oldPort) → \(device.port)")
+                                    ? String(localized: "Ya está configurado · SSH \(String(device.port))")
+                                    : String(localized: "Ya configurado · SSH actualizado \(String(oldPort)) → \(String(device.port))")
                             ),
                         completed: index + 1,
                         total: devices.count

@@ -319,7 +319,7 @@ private struct CandidateRow: View {
                 Text(verbatim: "\(candidate.guess.brand) \(candidate.guess.model)")
                     .font(.headline)
                 Text(
-                    String(localized: "\([candidate.name, candidate.host].uniqued().joined(separator: " · ")) · puerto SSH \(candidate.port)")
+                    String(localized: "\([candidate.name, candidate.host].uniqued().joined(separator: " · ")) · puerto SSH \(String(candidate.port))")
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)

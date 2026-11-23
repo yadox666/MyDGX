@@ -384,15 +384,16 @@ fi
 selected_port=""
 seen_ports=""
 deploy_known_hosts="$(mktemp)"
+live_host_keys="$(mktemp)"
 control_dir=""
-chmod 0600 "$deploy_known_hosts"
+chmod 0600 "$deploy_known_hosts" "$live_host_keys"
 cleanup_local() {
   local status=$?
   if [[ -n "$control_dir" && -S "$control_dir/ssh.sock" ]]; then
     ssh -S "$control_dir/ssh.sock" -O exit "$ssh_user@$host" >/dev/null 2>&1 || true
   fi
   [[ -z "$control_dir" ]] || rm -rf -- "$control_dir"
-  rm -f -- "$deploy_known_hosts"
+  rm -f -- "$deploy_known_hosts" "$live_host_keys"
   return "$status"
 }
 trap cleanup_local EXIT HUP INT TERM
@@ -428,16 +429,54 @@ load_trusted_host_key() {
   [[ -s "$deploy_known_hosts" ]]
 }
 
+host_key_fingerprints() {
+  ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}' | sort -u
+}
+
+# Rented machines (AxForge) reuse host:port with a new host key on every rental,
+# so a stored key is only trusted while the live server still presents it.
+stored_key_changed() {
+  ssh-keyscan -T 5 -p "$2" "$1" >"$live_host_keys" 2>/dev/null || return 1
+  [[ -s "$live_host_keys" ]] || return 1
+  ! host_key_fingerprints "$live_host_keys" | grep -Fxq -f <(host_key_fingerprints "$deploy_known_hosts")
+}
+
+replace_stored_host_key() {
+  ssh-keygen -R "$(host_key_name "$host" "$ssh_port")" -f "$known_hosts_store" >/dev/null 2>&1 || true
+  rm -f -- "$known_hosts_store.old"
+  cat "$deploy_known_hosts" >>"$known_hosts_store"
+  chmod 0600 "$known_hosts_store"
+}
+
 host_key_source=""
 untrusted_ports=""
 mismatched_ports=""
+changed_ports=""
+previous_host_keys=""
 port_candidates=("$ssh_port")
 [[ "$INTERACTIVE" == "1" ]] || port_candidates+=(22080 22081 22082 22083)
 for candidate in "${port_candidates[@]}"; do
   [[ "$candidate" =~ ^[0-9]+$ ]] || continue
   [[ "$seen_ports" == *" $candidate "* ]] && continue
   seen_ports+=" $candidate "
-  if load_trusted_host_key "$host" "$candidate"; then
+  if load_trusted_host_key "$host" "$candidate" && stored_key_changed "$host" "$candidate"; then
+    previous_host_keys="$(host_key_fingerprints "$deploy_known_hosts")"
+    cp -- "$live_host_keys" "$deploy_known_hosts"
+    if [[ -n "$expected_host_fingerprint" ]]; then
+      if ! host_key_fingerprints "$deploy_known_hosts" | grep -Fxq "$expected_host_fingerprint"; then
+        mismatched_ports+=" $candidate"
+        continue
+      fi
+      host_key_source="pinned-replaced"
+    elif [[ "$INTERACTIVE" == "1" ]]; then
+      host_key_source="confirm-replaced"
+    elif [[ "$accept_new_host_key" == "1" ]]; then
+      host_key_source="accepted-replaced"
+    else
+      changed_ports+=" $candidate"
+      continue
+    fi
+  elif [[ -s "$deploy_known_hosts" ]]; then
     host_key_source="trusted"
   else
     ssh-keyscan -T 5 -p "$candidate" "$host" >"$deploy_known_hosts" 2>/dev/null || continue
@@ -477,6 +516,8 @@ for candidate in "${port_candidates[@]}"; do
   fi
 done
 if [[ -z "$selected_port" ]]; then
+  [[ -z "$changed_ports" ]] ||
+    die "La clave SSH de $host (puertos:$changed_ports) cambió respecto a la guardada en $known_hosts_store. Si es un alquiler nuevo o un equipo reinstalado, usa --interactive para confirmar la huella nueva, fija MYDGX_SSH_HOST_FINGERPRINT=SHA256:... o, solo para alquileres efímeros, MYDGX_SSH_ACCEPT_NEW=1." "SSH key for $host (ports:$changed_ports) changed from the one stored in $known_hosts_store. If this is a new rental or a reinstalled machine, use --interactive to confirm the new fingerprint, set MYDGX_SSH_HOST_FINGERPRINT=SHA256:..., or for ephemeral rentals only, MYDGX_SSH_ACCEPT_NEW=1."
   [[ -z "$mismatched_ports" ]] ||
     die "La clave SSH de $host (puertos:$mismatched_ports) no coincide con MYDGX_SSH_HOST_FINGERPRINT. No continúes sin verificarla en el DGX." "SSH key for $host (ports:$mismatched_ports) does not match MYDGX_SSH_HOST_FINGERPRINT. Do not continue without verifying it on the DGX."
   [[ -z "$untrusted_ports" ]] ||
@@ -502,7 +543,16 @@ if [[ -n "$identity" ]]; then
 fi
 if [[ "$INTERACTIVE" == "1" ]]; then
   [[ -t 0 && -t 1 ]] || die "--interactive requiere una terminal." "--interactive requires a terminal."
-  if [[ "$host_key_source" == "confirm" ]]; then
+  if [[ "$host_key_source" == "confirm-replaced" ]]; then
+    say "AVISO: la huella SSH de $host:$ssh_port no es la guardada. Es normal en un alquiler nuevo o un equipo reinstalado; si no es tu caso, no continúes." "WARNING: the SSH fingerprint of $host:$ssh_port is not the stored one. This is expected on a new rental or a reinstalled machine; otherwise, do not continue."
+    say "Huella guardada:" "Stored fingerprint:"
+    printf '  %s\n' $previous_host_keys
+    say "Huella actual:" "Current fingerprint:"
+    ssh-keygen -lf "$deploy_known_hosts"
+    pick "Confírmala desde la consola del proveedor o del DGX. Escribe yes para sustituirla: " "Confirm it from the provider or DGX console. Type yes to replace it: "
+    read -r host_key_confirmation
+    [[ "$host_key_confirmation" == "yes" ]] || die "Huella SSH no confirmada." "SSH fingerprint not confirmed."
+  elif [[ "$host_key_source" == "confirm" ]]; then
     say "Huella(s) SSH recibida(s) de $host:$ssh_port:" "SSH fingerprint(s) received from $host:$ssh_port:"
     ssh-keygen -lf "$deploy_known_hosts"
     pick "Confirma esta huella desde la consola del DGX. Escribe yes para continuar: " "Confirm this fingerprint from the DGX console. Type yes to continue: "
@@ -525,6 +575,8 @@ ssh "${ssh_args[@]}" "$ssh_user@$host" true ||
 if [[ "$host_key_source" == "confirm" || "$host_key_source" == "pinned" ]]; then
   cat "$deploy_known_hosts" >>"$known_hosts_store"
   chmod 0600 "$known_hosts_store"
+elif [[ "$host_key_source" == *-replaced ]]; then
+  replace_stored_host_key
 fi
 rsync_ssh=""
 for part in ssh "${ssh_args[@]}"; do
@@ -537,6 +589,9 @@ case "$host_key_source" in
   trusted) pick "Clave de host ya conocida y verificada: " "Host key already known and verified: " ;;
   pinned) pick "Clave de host verificada con MYDGX_SSH_HOST_FINGERPRINT: " "Host key verified with MYDGX_SSH_HOST_FINGERPRINT: " ;;
   confirm) pick "Clave de host confirmada y guardada en $known_hosts_store: " "Host key confirmed and saved in $known_hosts_store: " ;;
+  confirm-replaced) pick "Clave de host nueva confirmada; sustituye a la anterior en $known_hosts_store: " "New host key confirmed; it replaces the previous one in $known_hosts_store: " ;;
+  pinned-replaced) pick "Clave de host nueva verificada con MYDGX_SSH_HOST_FINGERPRINT; sustituye a la anterior: " "New host key verified with MYDGX_SSH_HOST_FINGERPRINT; it replaces the previous one: " ;;
+  accepted-replaced) pick "AVISO: clave de host nueva aceptada sin verificar (MYDGX_SSH_ACCEPT_NEW=1); sustituye a la anterior: " "WARNING: new host key accepted without verification (MYDGX_SSH_ACCEPT_NEW=1); it replaces the previous one: " ;;
   *) pick "AVISO: clave de host aceptada sin verificar (MYDGX_SSH_ACCEPT_NEW=1): " "WARNING: host key accepted without verification (MYDGX_SSH_ACCEPT_NEW=1): " ;;
 esac
 ssh-keygen -lf "$deploy_known_hosts" 2>/dev/null | awk 'NR==1 {print $2, $4}'
@@ -1309,6 +1364,36 @@ else
   log "Clave API del dashboard ya configurada; se conserva" "Dashboard API key already configured; keeping it"
 fi
 
+dashboard_password_status="$(
+  ./.venv/bin/python - "$app_root/.env" <<'PY'
+import pathlib
+import secrets
+import sys
+
+path = pathlib.Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+key = "MYDGX_DASHBOARD_PASSWORD"
+for line in lines:
+    if line.startswith(f"{key}=") and line.split("=", 1)[1].strip().strip("'\""):
+        print("existing")
+        raise SystemExit(0)
+value = secrets.token_urlsafe(18)
+output = [line for line in lines if not line.startswith(f"{key}=")]
+output.append(f"{key}={value}")
+temporary = path.with_suffix(".new")
+temporary.write_text("\n".join(output) + "\n", encoding="utf-8")
+temporary.chmod(0o600)
+temporary.replace(path)
+print("generated")
+PY
+)"
+if [[ "$dashboard_password_status" == "generated" ]]; then
+  log "Contraseña del dashboard generada; cópiala desde el menú de MyDGXTray (Copiar contraseña del dashboard)" \
+    "Dashboard password generated; copy it from the MyDGXTray menu (Copy dashboard password)"
+else
+  log "Contraseña del dashboard ya configurada; se conserva" "Dashboard password already configured; keeping it"
+fi
+
 if [[ -n "$default_profile_id" ]]; then
   log "Configurando perfil predeterminado $default_profile_id" "Setting default profile $default_profile_id"
   ./.venv/bin/python - "$app_root/.env" "$default_profile_id" <<'PY'
@@ -1614,6 +1699,7 @@ if [[ "$code_changed" == "1" ||
       "$component_changed" == "1" ||
       "$repair_required" == "1" ||
       "$restore_database" == "1" ||
+      "$dashboard_password_status" == "generated" ||
       "$deploy_mode" != "incremental" ]]; then
   restart_required=1
 fi

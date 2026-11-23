@@ -209,6 +209,17 @@ enum SparkSetup {
         try handle.write(contentsOf: Data(keys.utf8))
     }
 
+    /// Replaces the stored keys for host:port after the user confirmed a changed fingerprint.
+    static func replaceHostKeys(_ keys: String, host: String, port: Int) async throws {
+        let store = SupportLayout.knownHosts
+        let name = port == 22 ? host : "[\(host)]:\(port)"
+        if FileManager.default.fileExists(atPath: store.path) {
+            _ = try await run("/usr/bin/ssh-keygen", ["-R", name, "-f", store.path], timeout: 10)
+            try? FileManager.default.removeItem(atPath: store.path + ".old")
+        }
+        try await trustHostKeys(keys, host: host, port: port)
+    }
+
     struct PrivateKeyInfo: Equatable {
         let fingerprint: String
         let encrypted: Bool
@@ -638,7 +649,7 @@ enum SetupError: LocalizedError {
         case .hostUnreachable:
             return String(localized: "No se pudo contactar con el Spark. Comprueba que está encendido y en la misma red.")
         case .hostKeyChanged:
-            return String(localized: "La identidad del Spark no coincide con la guardada. Si lo has reinstalado, elimina su entrada de ~/.MyDGX/known_hosts y vuelve a intentarlo.")
+            return String(localized: "La identidad del equipo no coincide con la guardada y no se ha sustituido. Si es un alquiler nuevo o lo has reinstalado, vuelve a conectar y confirma la huella nueva.")
         case .wrongPassword:
             return String(localized: "Usuario o contraseña incorrectos.")
         case .passwordRequired:

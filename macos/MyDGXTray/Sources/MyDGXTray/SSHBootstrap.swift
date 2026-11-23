@@ -189,6 +189,32 @@ enum SSHBootstrap {
         profile: ConnectionProfile,
         remoteDirectory: String
     ) async throws -> String? {
+        try await fetchRemoteEnvValue(
+            "MYDGX_API_KEY",
+            pattern: #"^[A-Za-z0-9_-]{32,256}$"#,
+            profile: profile,
+            remoteDirectory: remoteDirectory
+        )
+    }
+
+    static func fetchDashboardPassword(
+        profile: ConnectionProfile,
+        remoteDirectory: String
+    ) async throws -> String? {
+        try await fetchRemoteEnvValue(
+            "MYDGX_DASHBOARD_PASSWORD",
+            pattern: #"^[\x21-\x7E]{1,256}$"#,
+            profile: profile,
+            remoteDirectory: remoteDirectory
+        )
+    }
+
+    private static func fetchRemoteEnvValue(
+        _ name: String,
+        pattern: String,
+        profile: ConnectionProfile,
+        remoteDirectory: String
+    ) async throws -> String? {
         try profile.validate()
         let privateKey = NSString(string: profile.ssh.identityFile).expandingTildeInPath
         guard FileManager.default.fileExists(atPath: privateKey) else {
@@ -199,12 +225,12 @@ enum SSHBootstrap {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         let envPath = "\(remoteDirectory)/.env"
         let remoteCommand = """
-        python3 - \(shellQuote(envPath)) <<'PY'
+        python3 - \(shellQuote(envPath)) \(shellQuote(name)) <<'PY'
         import pathlib
         import sys
         path = pathlib.Path(sys.argv[1]).expanduser()
         for line in path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("MYDGX_API_KEY="):
+            if line.startswith(sys.argv[2] + "="):
                 print(line.split("=", 1)[1].strip().strip("'\\\""), end="")
                 break
         PY
@@ -238,7 +264,7 @@ enum SSHBootstrap {
             decoding: output.fileHandleForReading.readDataToEndOfFile(),
             as: UTF8.self
         ).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard value.range(of: #"^[A-Za-z0-9_-]{32,256}$"#, options: .regularExpression) != nil else {
+        guard value.range(of: pattern, options: .regularExpression) != nil else {
             return nil
         }
         return value

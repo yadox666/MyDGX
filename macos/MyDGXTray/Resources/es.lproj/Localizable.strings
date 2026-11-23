@@ -10,7 +10,8 @@
 "%@ está listo en %@." = "%@ está listo en %@.";
 "%@ ha dejado de responder por API y SSH." = "%@ ha dejado de responder por API y SSH.";
 "%@ no disponible" = "%@ no disponible";
-"%@ no responde en el puerto %lld. Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac." = "%@ no responde en el puerto %lld. Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac.";
+"%@ no responde en el puerto %@ del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app." = "%@ no responde en el puerto %@ del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app.";
+"%@ no responde en el puerto %@. Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac." = "%@ no responde en el puerto %@. Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac.";
 "%@ no responde por API ni SSH." = "%@ no responde por API ni SSH.";
 "%@ no responde; MyDGXTray usa %@ %@." = "%@ no responde; MyDGXTray usa %@ %@.";
 "%@ no se puede abrir: %@" = "%@ no se puede abrir: %@";
@@ -24,7 +25,7 @@
 "%@ · encendido desde Modelos" = "%@ · encendido desde Modelos";
 "%@ · plan, solo lectura" = "%@ · plan, solo lectura";
 "%@ · predeterminado · %@" = "%@ · predeterminado · %@";
-"%@ · puerto SSH %lld" = "%@ · puerto SSH %lld";
+"%@ · puerto SSH %@" = "%@ · puerto SSH %@";
 "%@%@ · %@" = "%@%@ · %@";
 "%lld" = "%lld";
 "%lld equipo(s) detectado(s)" = "%lld equipo(s) detectado(s)";
@@ -146,12 +147,14 @@
 "Continuar" = "Continuar";
 "Contraseña" = "Contraseña";
 "Contraseña de administrador del Spark" = "Contraseña de administrador del Spark";
+"Contraseña del dashboard copiada · se borra en 60 s" = "Contraseña del dashboard copiada · se borra en 60 s";
 "Contraseña del Spark" = "Contraseña del Spark";
 "copia" = "copia";
 "Copia de seguridad" = "Copia de seguridad";
 "Copia de Seguridad DGX" = "Copia de Seguridad DGX";
 "Copia guardada · %@" = "Copia guardada · %@";
 "Copiar" = "Copiar";
+"Copiar contraseña del dashboard" = "Copiar contraseña del dashboard";
 "Copiar MyDGX" = "Copiar MyDGX";
 "Creando copia…" = "Creando copia…";
 "Crear una clave segura para este Mac" = "Crear una clave segura para este Mac";
@@ -185,6 +188,7 @@
 "El alias del equipo no es válido." = "El alias del equipo no es válido.";
 "El certificado CA configurado no es válido." = "El certificado CA configurado no es válido.";
 "El despliegue falló (código %d). Revisa ~/.MyDGX/logs." = "El despliegue falló (código %d). Revisa ~/.MyDGX/logs.";
+"El DGX no tiene contraseña del dashboard o no se pudo leer por SSH. Vuelve a desplegar para generarla." = "El DGX no tiene contraseña del dashboard o no se pudo leer por SSH. Vuelve a desplegar para generarla.";
 "El directorio remoto de despliegue no es válido." = "El directorio remoto de despliegue no es válido.";
 "El equipo remoto necesita permisos sudo no interactivos para los comandos de instalación autorizados." = "El equipo remoto necesita permisos sudo no interactivos para los comandos de instalación autorizados.";
 "El equipo remoto no tiene espacio suficiente para completar el despliegue." = "El equipo remoto no tiene espacio suficiente para completar el despliegue.";
@@ -197,7 +201,7 @@
 "El nombre viene en la etiqueta del Spark. Si no sabes el puerto, déjalo en «auto»." = "El nombre viene en la etiqueta del Spark. Si no sabes el puerto, déjalo en «auto».";
 "El paquete descargado no es una MyDGXTray válida y firmada." = "El paquete descargado no es una MyDGXTray válida y firmada.";
 "El perfil activo no existe." = "El perfil activo no existe.";
-"El puerto %lld de este Mac lo usa %@, así que el túnel no puede abrir %@. Cierra %@ o cambia el puerto web de la app en Perfiles." = "El puerto %lld de este Mac lo usa %@, así que el túnel no puede abrir %@. Cierra %@ o cambia el puerto web de la app en Perfiles.";
+"El puerto %@ de este Mac lo usa %@, así que el túnel no puede abrir %@. Cierra %@ o cambia el puerto web de la app en Perfiles." = "El puerto %@ de este Mac lo usa %@, así que el túnel no puede abrir %@. Cierra %@ o cambia el puerto web de la app en Perfiles.";
 "El puerto local del gateway no es válido." = "El puerto local del gateway no es válido.";
 "El puerto o intervalo de actualización no es válido." = "El puerto o intervalo de actualización no es válido.";
 "El puerto SSH remoto rechazó la conexión." = "El puerto SSH remoto rechazó la conexión.";
@@ -232,6 +236,7 @@
 "Error al cargar perfil" = "Error al cargar perfil";
 "Error de conexión" = "Error de conexión";
 "Error de despliegue" = "Error de despliegue";
+"Es normal en un alquiler nuevo (AxForge) o en un equipo reinstalado. Si no es tu caso, cancela: alguien podría estar interceptando la conexión.\n\nGuardada: %@\nActual: %@\n\nCompara la actual con la que muestra la consola del proveedor o del equipo antes de sustituirla." = "Es normal en un alquiler nuevo (AxForge) o en un equipo reinstalado. Si no es tu caso, cancela: alguien podría estar interceptando la conexión.\n\nGuardada: %@\nActual: %@\n\nCompara la actual con la que muestra la consola del proveedor o del equipo antes de sustituirla.";
 "Escribe el usuario que creaste al encender el Spark por primera vez." = "Escribe el usuario que creaste al encender el Spark por primera vez.";
 "Escribe la contraseña del Spark para autorizar este Mac la primera vez." = "Escribe la contraseña del Spark para autorizar este Mac la primera vez.";
 "Escribe una IP (192.168.1.50) o un nombre (spark-1a2b.local)." = "Escribe una IP (192.168.1.50) o un nombre (spark-1a2b.local).";
@@ -306,7 +311,8 @@
 "La credencial no puede ser un enlace simbólico." = "La credencial no puede ser un enlace simbólico.";
 "La descarga no coincide con su checksum SHA-256; se ha descartado." = "La descarga no coincide con su checksum SHA-256; se ha descartado.";
 "La frase de paso de la clave no es correcta." = "La frase de paso de la clave no es correcta.";
-"La identidad del Spark no coincide con la guardada. Si lo has reinstalado, elimina su entrada de ~/.MyDGX/known_hosts y vuelve a intentarlo." = "La identidad del Spark no coincide con la guardada. Si lo has reinstalado, elimina su entrada de ~/.MyDGX/known_hosts y vuelve a intentarlo.";
+"La huella SSH de %@ ha cambiado" = "La huella SSH de %@ ha cambiado";
+"La identidad del equipo no coincide con la guardada y no se ha sustituido. Si es un alquiler nuevo o lo has reinstalado, vuelve a conectar y confirma la huella nueva." = "La identidad del equipo no coincide con la guardada y no se ha sustituido. Si es un alquiler nuevo o lo has reinstalado, vuelve a conectar y confirma la huella nueva.";
 "La identidad SSH del equipo cambió. Verifica su huella antes de actualizar known_hosts." = "La identidad SSH del equipo cambió. Verifica su huella antes de actualizar known_hosts.";
 "La instalación se detuvo en «%@». Pulsa Reintentar: lo ya instalado se conserva. El registro tiene los detalles." = "La instalación se detuvo en «%@». Pulsa Reintentar: lo ya instalado se conserva. El registro tiene los detalles.";
 "La operación continúa en segundo plano" = "La operación continúa en segundo plano";
@@ -434,7 +440,7 @@
 "Proyecto sincronizado" = "Proyecto sincronizado";
 "Puede tardar unos segundos." = "Puede tardar unos segundos.";
 "Puerto" = "Puerto";
-"puerto %lld ocupado" = "puerto %lld ocupado";
+"puerto %@ ocupado" = "puerto %@ ocupado";
 "Puerto API local" = "Puerto API local";
 "Puerto API remoto" = "Puerto API remoto";
 "Puerto ComfyUI local" = "Puerto ComfyUI local";
@@ -495,6 +501,7 @@
 "SSH" = "SSH";
 "SSH rechazó la autenticación. Comprueba el usuario, la clave privada y sus permisos." = "SSH rechazó la autenticación. Comprueba el usuario, la clave privada y sus permisos.";
 "Suite de benchmarks" = "Suite de benchmarks";
+"Sustituir huella" = "Sustituir huella";
 "Terminar" = "Terminar";
 "Tipo" = "Tipo";
 "Todavía no existe un log de despliegue para este equipo." = "Todavía no existe un log de despliegue para este equipo.";
@@ -523,9 +530,9 @@
 "Verificando versiones" = "Verificando versiones";
 "Verificar" = "Verificar";
 "Versión %@" = "Versión %@";
-"Ya configurado · SSH actualizado %lld → %lld" = "Ya configurado · SSH actualizado %lld → %lld";
+"Ya configurado · SSH actualizado %@ → %@" = "Ya configurado · SSH actualizado %@ → %@";
 "Ya está configurado · puerto anunciado sin verificar" = "Ya está configurado · puerto anunciado sin verificar";
-"Ya está configurado · SSH %lld" = "Ya está configurado · SSH %lld";
+"Ya está configurado · SSH %@" = "Ya está configurado · SSH %@";
 "Ya hay %lld equipo(s). Sigo buscando…" = "Ya hay %lld equipo(s). Sigo buscando…";
 "Ya hay dos perfiles o modelos Quick cargados." = "Ya hay dos perfiles o modelos Quick cargados.";
 "Ya tengo una clave SSH" = "Ya tengo una clave SSH";
@@ -545,4 +552,3 @@
 "¿Sobrescribir los archivos cloud-init?" = "¿Sobrescribir los archivos cloud-init?";
 "¿Tienes otro Spark? Abre Preferencias y pulsa el botón del asistente." = "¿Tienes otro Spark? Abre Preferencias y pulsa el botón del asistente.";
 "¿Tu Spark es nuevo y aún no lo has encendido?" = "¿Tu Spark es nuevo y aún no lo has encendido?";
-"%@ no responde en el puerto %lld del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app." = "%@ no responde en el puerto %lld del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app.";

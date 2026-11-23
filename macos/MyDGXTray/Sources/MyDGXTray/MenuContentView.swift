@@ -227,6 +227,13 @@ struct MenuContentView: View {
         .disabled(!model.canOpenDashboard)
 
         Button {
+            model.copyDashboardPassword()
+        } label: {
+            Label("Copiar contraseña del dashboard", systemImage: "key")
+        }
+        .disabled(!model.canOpenDashboard)
+
+        Button {
             model.openOpenWebUI()
         } label: {
             Label("Abrir Open WebUI", systemImage: "message")
@@ -421,7 +428,7 @@ struct MenuContentView: View {
             return " · " + String(localized: "alias en uso")
         }
         if let port = plan.portConflicts.first {
-            return " · " + String(localized: "puerto \(port) ocupado")
+            return " · " + String(localized: "puerto \(String(port)) ocupado")
         }
         if plan.requiredMB > plan.capacityMB {
             return " · " + String(localized: "total \(formatGB(plan.requiredMB)) > \(formatGB(plan.capacityMB))")

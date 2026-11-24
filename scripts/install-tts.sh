@@ -38,7 +38,9 @@ installed_fingerprint="$(
   sudo -n docker image inspect --format '{{ index .Config.Labels "org.mydgx.fingerprint" }}' \
     "$IMAGE" 2>/dev/null || true
 )"
+image_rebuilt=0
 if [[ "$force_install" == "1" || "$fingerprint" != "$installed_fingerprint" ]]; then
+  image_rebuilt=1
   say "Construyendo el runtime TTS CUDA (PyTorch cu130, un entorno por motor)..." "Building the CUDA TTS runtime (PyTorch cu130, one environment per engine)..."
   sudo -n docker build \
     --build-arg "BASE_IMAGE=$BASE_IMAGE" \
@@ -73,10 +75,19 @@ ExecStop=$docker_path stop -t 30 mydgx-tts
 WantedBy=multi-user.target
 EOF
 
-sudo -n install -o root -g root -m 0644 "$unit_tmp" "$UNIT"
-sudo -n systemctl daemon-reload
+unit_changed=0
+if ! cmp -s "$unit_tmp" "$UNIT"; then
+  unit_changed=1
+  sudo -n install -o root -g root -m 0644 "$unit_tmp" "$UNIT"
+  sudo -n systemctl daemon-reload
+fi
 sudo -n systemctl enable mydgx-tts.service
-sudo -n systemctl restart mydgx-tts.service
+# A restart drops the model loaded in the GPU worker; the next request would pay a cold load.
+if [[ "$image_rebuilt" == "1" || "$unit_changed" == "1" ]] || ! systemctl is-active --quiet mydgx-tts.service; then
+  sudo -n systemctl restart mydgx-tts.service
+else
+  say "Runtime TTS sin cambios; se conserva el modelo cargado." "TTS runtime unchanged; keeping the loaded model."
+fi
 
 for _ in {1..60}; do
   if curl -fsS http://127.0.0.1:9010/health 2>/dev/null | jq -e '.status == "ok"' >/dev/null; then

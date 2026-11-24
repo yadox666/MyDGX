@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -42,6 +43,46 @@ class SynthesisBody(BaseModel):
     reference_audio: str = Field(default="", max_length=14_000_000)
     reference_text: str = Field(default="", max_length=2000)
     temperature: float | None = Field(default=None, ge=0.05, le=1.5)
+    extras: dict[str, float] = Field(default_factory=dict, max_length=16)
+
+
+# Per-engine sampling knobs and their safe ranges; values outside are clamped.
+EXTRA_BOUNDS: dict[str, tuple[float, float]] = {
+    "temperature": (0.05, 1.5),
+    "top_k": (0, 1000),
+    "top_p": (0.05, 1.0),
+    "min_p": (0.0, 1.0),
+    "repetition_penalty": (1.0, 3.0),
+    "max_new_tokens": (64, 4096),
+    "cfg_weight": (0.0, 2.0),
+    "exaggeration": (0.0, 2.0),
+    "num_steps": (4, 128),
+    "guidance_scale": (0.0, 10.0),
+    "class_temperature": (0.0, 5.0),
+    "position_temperature": (0.0, 20.0),
+    "cfg_strength": (0.0, 10.0),
+    "steps": (4, 128),
+}
+INTEGER_EXTRAS = {"top_k", "max_new_tokens", "num_steps", "steps"}
+ENGINE_EXTRAS: dict[str, set[str]] = {
+    "qwen3": {"temperature", "top_k", "top_p", "repetition_penalty", "max_new_tokens"},
+    "chatterbox": {"temperature", "cfg_weight", "exaggeration", "repetition_penalty", "min_p", "top_p"},
+    "omnivoice": {"num_steps", "guidance_scale", "class_temperature", "position_temperature"},
+    "f5": {"cfg_strength", "steps"},
+}
+
+
+def engine_extras(body: SynthesisBody) -> dict[str, float]:
+    """Knobs this engine reads, clamped; others are ignored so a client can send one set for every model."""
+    raw = dict(body.extras)
+    if body.temperature is not None:
+        raw.setdefault("temperature", body.temperature)
+    clean: dict[str, float] = {}
+    for key in ENGINE_EXTRAS.get(ENGINE, set()) & raw.keys():
+        low, high = EXTRA_BOUNDS[key]
+        value = min(max(float(raw[key]), low), high)
+        clean[key] = int(round(value)) if key in INTEGER_EXTRAS else value
+    return clean
 
 
 def client_reference(encoded: str) -> Path:
@@ -106,7 +147,7 @@ def as_mono(audio: Any) -> np.ndarray:
     return np.asarray(audio, dtype=np.float32).reshape(-1)
 
 
-Synth = Callable[[str, str, Path, str, "float | None"], np.ndarray]
+Synth = Callable[[str, str, Path, str, "dict[str, float]"], np.ndarray]
 
 
 def load_qwen3(_ref_audio: Path, _ref_text: str) -> tuple[Synth, int]:
@@ -118,7 +159,12 @@ def load_qwen3(_ref_audio: Path, _ref_text: str) -> tuple[Synth, int]:
     model.warmup(prefill_len=100)
     sample_rate = 24_000
 
-    def synth(text: str, language: str, ref_audio: Path, ref_text: str, temperature: float | None) -> np.ndarray:
+    def synth(text: str, language: str, ref_audio: Path, ref_text: str, extras: dict[str, float]) -> np.ndarray:
+        sampling = {key: extras[key] for key in ("top_k", "top_p") if key in extras}
+        # Below 1.1 the CUDA model stops emitting EOS and pads with silence up to
+        # max_new_tokens (minutes of audio for one sentence). The text-based budget
+        # (12 Hz codec, ~14 chars/s, 3x slack + 3 s) bounds any other runaway.
+        budget = int(12 * (len(text) / 14 * 3 + 3))
         chunks = []
         for audio, rate, _ in model.generate_voice_clone_streaming(
             text=text,
@@ -126,10 +172,11 @@ def load_qwen3(_ref_audio: Path, _ref_text: str) -> tuple[Synth, int]:
             ref_audio=str(ref_audio),
             ref_text=ref_text,
             chunk_size=8,
-            max_new_tokens=1200,
-            temperature=0.3 if temperature is None else temperature,
-            repetition_penalty=1.5,
+            max_new_tokens=min(int(extras.get("max_new_tokens", 1200)), budget),
+            temperature=extras.get("temperature", 0.3),
+            repetition_penalty=max(extras.get("repetition_penalty", 1.5), 1.1),
             non_streaming_mode=True,
+            **sampling,
         ):
             if int(rate) != sample_rate:
                 raise RuntimeError(f"Sample rate inesperado: {rate}")
@@ -146,17 +193,20 @@ def load_chatterbox(ref_audio: Path, _: str) -> tuple[Synth, int]:
     model.prepare_conditionals(str(ref_audio), exaggeration=0.35)
     prepared = {"path": ref_audio}
 
-    def synth(text: str, language: str, ref: Path, _text: str, temperature: float | None) -> np.ndarray:
+    def synth(text: str, language: str, ref: Path, _text: str, extras: dict[str, float]) -> np.ndarray:
+        exaggeration = extras.get("exaggeration", 0.35)
         if ref != prepared["path"]:
-            model.prepare_conditionals(str(ref), exaggeration=0.35)
+            model.prepare_conditionals(str(ref), exaggeration=exaggeration)
             prepared["path"] = ref
+        sampling = {key: extras[key] for key in ("min_p", "top_p") if key in extras}
         return as_mono(model.generate(
             text,
             language_id=language,
-            exaggeration=0.35,
-            cfg_weight=0.35,
-            temperature=0.6 if temperature is None else temperature,
-            repetition_penalty=1.2,
+            exaggeration=exaggeration,
+            cfg_weight=extras.get("cfg_weight", 0.35),
+            temperature=extras.get("temperature", 0.6),
+            repetition_penalty=extras.get("repetition_penalty", 1.2),
+            **sampling,
         ))
 
     return synth, int(model.sr)
@@ -170,13 +220,23 @@ def load_omnivoice(ref_audio: Path, ref_text: str) -> tuple[Synth, int]:
         (ref_audio, ref_text): model.create_voice_clone_prompt(ref_audio=str(ref_audio), ref_text=ref_text),
     }
 
-    def synth(text: str, _: str, ref: Path, ref_text_: str, _temperature: float | None) -> np.ndarray:
+    config_type = sys.modules[OmniVoice.__module__].OmniVoiceGenerationConfig
+
+    def synth(text: str, _: str, ref: Path, ref_text_: str, extras: dict[str, float]) -> np.ndarray:
         key = (ref, ref_text_)
         if key not in prompts:
             if len(prompts) >= 8:
                 prompts.pop(next(iter(prompts)))
             prompts[key] = model.create_voice_clone_prompt(ref_audio=str(ref), ref_text=ref_text_)
-        return as_mono(model.generate(text=text, voice_clone_prompt=prompts[key]))
+        config = None
+        if extras:
+            config = config_type(
+                num_step=int(extras.get("num_steps", 32)),
+                guidance_scale=extras.get("guidance_scale", 2.0),
+                class_temperature=extras.get("class_temperature", 0.0),
+                position_temperature=extras.get("position_temperature", 5.0),
+            )
+        return as_mono(model.generate(text=text, voice_clone_prompt=prompts[key], generation_config=config))
 
     return synth, 24_000
 
@@ -197,9 +257,10 @@ def load_f5(_ref_audio: Path, _ref_text: str) -> tuple[Synth, int]:
         device="cuda",
     )
 
-    def synth(text: str, _: str, ref: Path, ref_text: str, _temperature: float | None) -> np.ndarray:
+    def synth(text: str, _: str, ref: Path, ref_text: str, extras: dict[str, float]) -> np.ndarray:
         wav, _rate, _spec = model.infer(
             ref_file=str(ref), ref_text=ref_text, gen_text=text, seed=SEED,
+            cfg_strength=extras.get("cfg_strength", 2.0), nfe_step=int(extras.get("steps", 32)),
             remove_silence=False, show_info=lambda *_: None,
         )
         return as_mono(wav)
@@ -241,7 +302,7 @@ def synthesize(body: SynthesisBody) -> Response:
         torch.cuda.manual_seed_all(SEED)
         started = time.monotonic()
         with torch.inference_mode():
-            samples = state["synth"](text, body.language, ref_audio, ref_text, body.temperature)
+            samples = state["synth"](text, body.language, ref_audio, ref_text, engine_extras(body))
         torch.cuda.synchronize()
         elapsed_ms = (time.monotonic() - started) * 1000
     if not samples.size:

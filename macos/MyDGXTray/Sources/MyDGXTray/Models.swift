@@ -6,11 +6,13 @@ struct OverviewResponse: Decodable {
     let services: [String: Bool]
     let benchmarkSuite: BenchmarkSuiteStatus?
     let webApps: [WebApp]?
+    let dashboardPasswordClaimed: Bool?
 
     enum CodingKeys: String, CodingKey {
         case metrics, host, services
         case benchmarkSuite = "benchmark_suite"
         case webApps = "web_apps"
+        case dashboardPasswordClaimed = "dashboard_password_claimed"
     }
 }
 

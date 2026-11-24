@@ -17,7 +17,7 @@ administra.
 
 | Superficie | Mecanismo |
 |---|---|
-| Interfaz del dashboard | Si `MYDGX_DASHBOARD_PASSWORD` está definida, login con cookie firmada `HttpOnly`, `SameSite=Strict` y caducidad absoluta de 60 minutos. |
+| Interfaz del dashboard | Si `MYDGX_DASHBOARD_PASSWORD` está definida, login con cookie firmada `HttpOnly`, `SameSite=Strict` y caducidad absoluta de 60 minutos. Si la genera el despliegue, «Copiar contraseña del dashboard» de la app de barra de menús solo funciona hasta el primer inicio de sesión correcto (marca `data/.dashboard-password-claimed`). |
 | API del dashboard | La cookie web anterior o la cabecera `X-MyDGX-Key: YOUR_API_KEY` para scripts cuando `MYDGX_API_KEY` está definida. |
 | Gateway | `Authorization: Bearer YOUR_GATEWAY_API_KEY` o `x-api-key` para clientes que no estén en loopback. |
 | Herramientas de Open WebUI | Clave propia `OPENWEBUI_TOOL_API_KEY`, generada por el despliegue. |
@@ -109,7 +109,7 @@ procesos completo.
   clave verificada. hashcat se comprueba por SHA-256. El instalador nativo de
   Claude Code exige `MYDGX_CLAUDE_INSTALLER_SHA256`.
 - **Versiones fijadas.** Open WebUI por versión, SearXNG por digest de imagen,
-  ComfyUI por commit y llama.cpp v1.0.0 por commit verificado.
+  ComfyUI por commit y llama.cpp b12669 por commit verificado.
 
 ## Servicios multimodales
 

@@ -33,6 +33,8 @@ MCP_ENV = Path(__file__).resolve().parent / "mcp_env.py"
 def with_secrets(names: list[str], command: list[str]) -> list[str]:
     return [sys.executable, str(MCP_ENV), *names, "--", *command]
 DEFAULT_CONTEXT = 262_144
+SMALL_MODEL_MIN_CONTEXT = 16_384
+REASONING_VARIANTS = ("none", "low", "medium", "high")
 DEFAULT_STEPS = 8192
 DEFAULT_MAX_OUTPUT = 32_000
 MIN_MAX_OUTPUT = 4096
@@ -139,10 +141,12 @@ def discover(base_url: str, api_key: str) -> tuple[list[dict], bool]:
             modalities = item.get("input_modalities") or ["text"]
             models.append({
                 "id": model_id,
+                "name": str(item.get("name") or item.get("display_name") or model_id),
                 "context": context,
                 "task": task,
                 "tools": bool(capabilities.get("tools", True)),
                 "reasoning": bool(capabilities.get("reasoning", False)),
+                "reasoning_default": bool(capabilities.get("reasoning_default", capabilities.get("reasoning", False))),
                 "vision": bool(capabilities.get("vision", task == "vision" or "image" in modalities)),
                 "assistant": item.get("owned_by") == MANAGED_ASSISTANT_OWNER,
                 "profile": str(item.get("owned_by") or "").removeprefix("mydgx:"),
@@ -252,6 +256,45 @@ def select_model(models: list[dict], requested: str) -> dict:
     return selected
 
 
+def parameter_billions(model: dict) -> float | None:
+    """Active parameters from names like 'Qwen3-8B' or 'Qwen3-30B-A3B'."""
+    text = f"{model.get('name', '')} {model['id']}"
+    active = re.search(r"(?<![A-Za-z0-9])A(\d+(?:\.\d+)?)B(?![A-Za-z])", text)
+    if active:
+        return float(active.group(1))
+    total = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)[Bb](?![A-Za-z])", text)
+    return float(total.group(1)) if total else None
+
+
+def select_small_model(models: list[dict], selected: dict) -> dict | None:
+    """Faster loaded model for titles and summaries; None reuses the main one."""
+    requested = os.environ.get("MYDGX_SMALL_MODEL", "").strip()
+    if requested:
+        chosen = next((model for model in models if model["id"] == requested), None)
+        if chosen is None:
+            raise SystemExit(
+                tr(
+                    f"ERROR: MYDGX_SMALL_MODEL={requested!r} no está cargado.",
+                    f"ERROR: MYDGX_SMALL_MODEL={requested!r} is not loaded.",
+                )
+            )
+        return None if chosen["id"] == selected["id"] else chosen
+    main_size = parameter_billions(selected)
+    if main_size is None:
+        return None
+    candidates = [
+        (size, model)
+        for model in models
+        if model["id"] != selected["id"]
+        and model["tools"]
+        and not model["assistant"]
+        and model["context"] >= SMALL_MODEL_MIN_CONTEXT
+        and (size := parameter_billions(model)) is not None
+        and size <= main_size * 0.6
+    ]
+    return min(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
 def playwright_command(workspace: Path) -> list[str]:
     command = ["npx", "-y", PLAYWRIGHT_MCP, "--headless", "--no-sandbox"]
     chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -308,6 +351,42 @@ def write_config(
         for model in models
         if model["context"] >= min_agent_context() or model["id"] == selected["id"]
     }
+    small = select_small_model(models, selected)
+    small_id = (small or selected)["id"]
+    if small and small_id not in model_config:
+        model_config[small_id] = {
+            "name": small_id,
+            "modelID": small_id,
+            "tool_call": small["tools"],
+            "reasoning": small["reasoning"],
+            "attachment": small["vision"],
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "temperature": True,
+            "limit": {
+                "context": small["context"],
+                "output": max_output_tokens(small["context"], "MYDGX_OPENCODE_MAX_OUTPUT_TOKENS"),
+            },
+        }
+    if major < 2:
+        # Validated with OpenCode 1.19: variants feed reasoning_effort (--variant or
+        # the variant shortcut); without one the profile's default applies.
+        for model in models:
+            if model["reasoning"] and model["id"] in model_config:
+                model_config[model["id"]]["variants"] = {
+                    effort: {"reasoningEffort": effort} for effort in REASONING_VARIANTS
+                }
+        # Titles and summaries should not think; this entry calls the same model
+        # with reasoning_effort=none.
+        if (small or selected)["reasoning"]:
+            fast_id = f"{small_id}-fast"
+            model_config[fast_id] = {
+                **{key: value for key, value in model_config[small_id].items() if key != "variants"},
+                "id": small_id,
+                "name": f"{small_id} (fast)",
+                "reasoning": False,
+                "options": {"reasoningEffort": "none"},
+            }
+            small_id = fast_id
     if major >= 2:
         provider = {
             "name": "MyDGX",
@@ -360,7 +439,7 @@ def write_config(
     config: dict = {
         "$schema": "https://opencode.ai/config.json",
         "model": f"mydgx/{selected['id']}",
-        "small_model": f"mydgx/{selected['id']}",
+        "small_model": f"mydgx/{small_id}",
         "share": "disabled",
         "autoupdate": False,
         "snapshot": False,

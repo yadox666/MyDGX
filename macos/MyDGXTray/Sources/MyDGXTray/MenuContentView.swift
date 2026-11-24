@@ -226,12 +226,14 @@ struct MenuContentView: View {
         }
         .disabled(!model.canOpenDashboard)
 
-        Button {
-            model.copyDashboardPassword()
-        } label: {
-            Label("Copiar contraseña del dashboard", systemImage: "key")
+        if model.overview?.dashboardPasswordClaimed != true {
+            Button {
+                model.copyDashboardPassword()
+            } label: {
+                Label("Copiar contraseña del dashboard", systemImage: "key")
+            }
+            .disabled(!model.canCopyDashboardPassword)
         }
-        .disabled(!model.canOpenDashboard)
 
         Button {
             model.openOpenWebUI()

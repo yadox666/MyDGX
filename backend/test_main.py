@@ -30,9 +30,18 @@ import backend.main as main_module
 from backend import recovery as backup_recovery
 from backend.i18n import Catalog, request_language, translate_payload
 from backend.gateway import (
+    INTERNAL_UPSTREAM_TOKEN,
+    ReasoningStream,
     active_routes,
     app as gateway_app,
+    apply_reasoning_controls,
+    chat_message_for_count,
+    fold_thinking_history,
     litellm_adapter,
+    model_reasoning_capability,
+    normalize_anthropic_thinking,
+    normalize_chat_body,
+    repair_tool_arguments,
     supports_endpoint,
     supports_gateway_protocol,
 )
@@ -758,6 +767,26 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(video["37"]["inputs"]["unet_name"], "wan2.1_t2v_1.3B_bf16.safetensors")
         self.assertEqual(video["47"]["class_type"], "SaveWEBM")
 
+    def test_managed_comfyui_image_edit_workflow_uses_uploaded_image_and_mask(self) -> None:
+        img2img = main_module.comfyui_image_edit_workflow(
+            "hazlo nocturno",
+            "mydgx-edit.png",
+            denoise=0.6,
+        )
+        inpaint = main_module.comfyui_image_edit_workflow(
+            "cambia el cielo",
+            "mydgx-edit.png",
+            mask_name="mydgx-mask.png",
+        )
+        self.assertEqual(img2img["5"]["class_type"], "VAEEncode")
+        self.assertEqual(img2img["10"]["inputs"]["image"], "mydgx-edit.png")
+        self.assertEqual(img2img["3"]["inputs"]["latent_image"], ["5", 0])
+        self.assertEqual(img2img["3"]["inputs"]["denoise"], 0.6)
+        self.assertEqual(inpaint["5"]["class_type"], "VAEEncodeForInpaint")
+        self.assertEqual(inpaint["11"]["class_type"], "LoadImageMask")
+        self.assertEqual(inpaint["11"]["inputs"]["channel"], "alpha")
+        self.assertEqual(inpaint["5"]["inputs"]["mask"], ["11", 0])
+
     def test_managed_comfyui_ephemeral_output_is_deleted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -771,6 +800,26 @@ class DatabaseTests(unittest.TestCase):
                     "type": "output",
                 })
         self.assertFalse(output.exists())
+
+    def test_managed_comfyui_edit_input_upload_is_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upload = root / "source" / "input" / "mydgx-edit-abc.png"
+            upload.parent.mkdir(parents=True)
+            upload.write_bytes(b"user-image")
+            with patch("backend.main.managed_comfyui_root", return_value=root):
+                main_module.delete_managed_comfyui_output({
+                    "filename": "mydgx-edit-abc.png",
+                    "subfolder": "",
+                    "type": "input",
+                })
+                with self.assertRaises(ValueError):
+                    main_module.delete_managed_comfyui_output({
+                        "filename": "x.png",
+                        "subfolder": "../output",
+                        "type": "input",
+                    })
+        self.assertFalse(upload.exists())
 
     def test_llama_vision_adds_mmproj_argument(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2501,6 +2550,38 @@ class SpeculativeDecodingTests(unittest.TestCase):
         cut = main_module.parse_gguf_header(io.BytesIO(data[: len(data) // 2]), partial=True)
         self.assertEqual(cut["general.architecture"], "llama")
         self.assertNotIn("llama.context_length", cut)
+
+    def test_reasoning_badge_state_comes_from_profile_name_and_chat_template(self) -> None:
+        def text(value: str) -> bytes:
+            return struct.pack("<Q", len(value.encode())) + value.encode()
+
+        template = "{#- " + "x" * 4000 + " -#}{%- if enable_thinking %}<think>{%- endif %}"
+        header = (
+            text("general.architecture") + struct.pack("<I", 8) + text("llama")
+            + text("tokenizer.chat_template") + struct.pack("<I", 8) + text(template)
+            + text("tokenizer.ggml.model") + struct.pack("<I", 8) + text("gpt2")
+        )
+        metadata = main_module.parse_gguf_header(io.BytesIO(b"GGUF" + struct.pack("<IQQ", 3, 0, 3) + header))
+        self.assertEqual(metadata["tokenizer.chat_template"], template)
+        self.assertNotIn("tokenizer.ggml.model", metadata)
+
+        state = main_module.model_reasoning_state
+        self.assertEqual(state({"engine": "llama.cpp", "task": "vision", "model_alias": "inkling-2-mini", "reasoning_off": False}), "on")
+        self.assertEqual(state({"engine": "llama.cpp", "task": "chat", "model_repo": "unsloth/Qwen3.8-27B-GGUF", "reasoning_off": True}), "optional")
+        self.assertEqual(state({"engine": "llama.cpp", "task": "chat", "model_repo": "unsloth/Qwen3-Coder-30B-GGUF", "reasoning_off": True}), "")
+        self.assertEqual(state({"engine": "llama.cpp", "task": "embeddings", "model_repo": "Qwen/Qwen3-Embedding", "reasoning_off": False}), "")
+        unknown = {"engine": "llama.cpp", "task": "chat", "model_repo": "Org/Mystery-GGUF", "reasoning_off": True}
+        with patch("backend.main.model_chat_template", return_value=""):
+            self.assertEqual(state(unknown), "")
+        with patch("backend.main.model_chat_template", return_value=template):
+            self.assertEqual(state(unknown), "optional")
+            coder = {"engine": "llama.cpp", "task": "chat", "model_repo": "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF", "reasoning_off": False}
+            self.assertEqual(state(coder), "on")
+        plain = "{%- for message in messages %}[INST]{{ message.content }}[/INST]{%- endfor %}"
+        with patch("backend.main.model_chat_template", return_value=plain):
+            quick = {"engine": "llama.cpp", "task": "chat", "model_repo": "bartowski/Dolphin-Mistral-24B-GGUF", "reasoning_off": False}
+            self.assertEqual(state(quick), "")
+        self.assertEqual(state({"engine": "ollama", "task": "chat", "model_ref": "llama3.2", "reasoning_off": False}), "on")
 
     def test_weight_digest_survives_a_restart_until_the_file_changes(self) -> None:
         original_path = db.path
@@ -4650,6 +4731,35 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(model["api_protocol"], "mydgx-tts")
         self.assertTrue(issubclass(main_module.ManagedTtsUnavailable, main_module.ExternalRuntimeUnavailable))
 
+    def test_profile_tts_warmup_loads_only_an_empty_managed_worker(self) -> None:
+        model = {
+            "name": "TTS", "task": "tts", "engine": "openai-compatible", "api_protocol": "openai",
+            "model_ref": "Qwen/Qwen3-TTS-12Hz-1.7B-Base", "endpoint_url": settings.tts_url,
+        }
+        self.assertTrue(main_module.is_managed_tts_model(model))
+        self.assertFalse(main_module.is_managed_tts_model({**model, "endpoint_url": "http://127.0.0.1:8010/api/projects/x"}))
+        self.assertFalse(main_module.is_managed_tts_model({**model, "task": "asr"}))
+        for loaded, expected_loads in ((None, 1), ("k2-fsa/OmniVoice", 0)):
+            health = httpx.Response(200, json={"status": "ok", "loaded": loaded}, request=httpx.Request("GET", settings.tts_url))
+            with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=health)), \
+                    patch("backend.main.load_managed_tts_model", new=AsyncMock()) as load:
+                asyncio.run(main_module.warm_managed_tts(model))
+            self.assertEqual(load.await_count, expected_loads)
+            if expected_loads:
+                load.assert_awaited_with("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+
+    def test_memory_counts_one_budget_per_external_endpoint(self) -> None:
+        def external(repo: str, endpoint: str, memory: int) -> tuple[str, int]:
+            return json.dumps({"engine": "openai-compatible", "endpoint_url": endpoint, "model_ref": repo}), memory
+
+        groups = main_module.grouped_memory_mb([
+            external("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "http://127.0.0.1:9010", 9000),
+            external("ResembleAI/chatterbox", "http://127.0.0.1:9010", 7000),
+            external("dropbox-dash/faster-whisper-large-v3-turbo", "http://127.0.0.1:9000", 3500),
+            (json.dumps({"args": ["llama-server"], "engine": "llama.cpp"}), 26000),
+        ])
+        self.assertEqual(sorted(groups.values()), [3500, 9000, 26000])
+
     def test_managed_tts_sample_posts_speech_and_measures_wav(self) -> None:
         import io
         import wave
@@ -5016,11 +5126,14 @@ class ProfileApiTests(unittest.TestCase):
         settings.mydgx_api_key = None
         settings.host = "127.0.0.1"
         main_module._dashboard_login_failures.clear()
+        temporary = tempfile.TemporaryDirectory()
+        claimed = Path(temporary.name) / "data" / ".dashboard-password-claimed"
         try:
-            with TestClient(app) as client:
+            with TestClient(app) as client, patch.object(main_module, "DASHBOARD_PASSWORD_CLAIMED", claimed):
                 status = client.get("/api/auth/status")
                 denied = client.get("/api/config")
                 wrong = client.post("/api/auth/login", json={"password": "wrong"})
+                claimed_after_failure = claimed.exists()
                 login = client.post(
                     "/api/auth/login",
                     json={"password": "test-only-dashboard-password"},
@@ -5048,6 +5161,9 @@ class ProfileApiTests(unittest.TestCase):
             self.assertEqual((denied.status_code, wrong.status_code), (401, 401))
             self.assertEqual(denied.headers["x-mydgx-auth-required"], "password")
             self.assertEqual(login.status_code, 200)
+            self.assertFalse(claimed_after_failure)
+            self.assertTrue(claimed.exists())
+            self.assertEqual(claimed.stat().st_mode & 0o077, 0)
             cookie = login.headers["set-cookie"]
             self.assertIn("HttpOnly", cookie)
             self.assertIn("SameSite=strict", cookie)
@@ -5066,6 +5182,7 @@ class ProfileApiTests(unittest.TestCase):
                 settings.host,
             ) = original
             main_module._dashboard_login_failures.clear()
+            temporary.cleanup()
 
     def test_dashboard_session_signature_and_absolute_expiration(self) -> None:
         original = (
@@ -6385,6 +6502,45 @@ class ProfileApiTests(unittest.TestCase):
         self.assertEqual(states["stopped-app"]["state"], "stopped")
         self.assertEqual(states["busy-app"]["state"], "starting")
 
+    def test_profile_app_prestarts_when_it_serves_unreachable_endpoints(self) -> None:
+        state = {"app_up": False}
+        calls: list[str] = []
+
+        async def fake_action(name: str, action: str) -> int:
+            calls.append(action)
+            if action == "start":
+                state["app_up"] = True
+            return 0 if state["app_up"] else 3
+
+        async def fake_reachable(model: dict[str, object], timeout: float = 2) -> bool:
+            return state["app_up"]
+
+        profile = {"id": "voices", "app": "tts-lab"}
+        models = [{"engine": "openai-compatible", "endpoint_url": "http://127.0.0.1:8010/api/projects/demo"}]
+        with patch.object(main_module, "run_profile_app_action", side_effect=fake_action), \
+                patch.object(main_module, "external_endpoint_reachable", side_effect=fake_reachable), \
+                patch.object(main_module.db, "log"), \
+                patch.dict(main_module._runtime_profile_apps, {}, clear=True), \
+                patch.dict(main_module._profile_app_state, {}, clear=True):
+            started = asyncio.run(main_module.prestart_profile_app_for_endpoints(profile, models))
+            self.assertTrue(started)
+            self.assertEqual(calls, ["status", "start"])
+            self.assertEqual(main_module._runtime_profile_apps["voices"], "tts-lab")
+            self.assertEqual(main_module._profile_app_state["tts-lab"]["state"], "running")
+
+    def test_profile_app_waits_for_inference_when_endpoints_answer(self) -> None:
+        action = AsyncMock(return_value=0)
+        profile = {"id": "rag", "app": "rag-ai"}
+        models = [
+            {"engine": "llama.cpp", "endpoint_url": ""},
+            {"engine": "whisper", "endpoint_url": "http://127.0.0.1:9000"},
+        ]
+        with patch.object(main_module, "run_profile_app_action", action), \
+                patch.object(main_module, "external_endpoint_reachable", AsyncMock(return_value=True)):
+            self.assertFalse(asyncio.run(main_module.prestart_profile_app_for_endpoints(profile, models)))
+            self.assertFalse(asyncio.run(main_module.prestart_profile_app_for_endpoints({"id": "x", "app": ""}, models)))
+        action.assert_not_called()
+
     def test_huggingface_favorites_are_persisted(self) -> None:
         original_path = db.path
         with tempfile.TemporaryDirectory() as directory:
@@ -6986,7 +7142,13 @@ class ProfileApiTests(unittest.TestCase):
             main_module.migrate_legacy_runtime_labels()
             self.assertEqual(
                 db.rows("SELECT runtime_requirement FROM profiles WHERE id=?", (recipe["id"],))[0]["runtime_requirement"],
-                "llama.cpp v1.0.0 · CUDA 13 · sm_121 · tool calling",
+                "llama.cpp b12669 · CUDA 13 · sm_121 · tool calling",
+            )
+            db.execute("UPDATE profiles SET runtime_requirement=? WHERE id=?", ("llama.cpp v1.0.0 · CUDA 13 · sm_121", recipe["id"]))
+            main_module.migrate_legacy_runtime_labels()
+            self.assertEqual(
+                db.rows("SELECT runtime_requirement FROM profiles WHERE id=?", (recipe["id"],))[0]["runtime_requirement"],
+                "llama.cpp b12669 · CUDA 13 · sm_121",
             )
         db.path = original_path
 
@@ -7854,6 +8016,9 @@ class GatewayTests(unittest.TestCase):
         self.assertTrue(supports_gateway_protocol(
             {"api_protocol": "comfyui"}, "/v1/images/generations"
         ))
+        self.assertTrue(supports_gateway_protocol(
+            {"api_protocol": "comfyui"}, "/v1/images/edits"
+        ))
 
     def test_gateway_adapts_managed_comfyui_image_to_openai(self) -> None:
         model = {
@@ -7886,6 +8051,103 @@ class GatewayTests(unittest.TestCase):
             })
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"][0]["b64_json"], "iVBORw0KGgo=")
+
+    def test_gateway_adapts_comfyui_image_edits_to_openai(self) -> None:
+        model = {
+            "id": "comfyui-image",
+            "engine": "comfyui",
+            "model_ref": "flux.safetensors",
+            "model_alias": "comfyui-image",
+            "endpoint_url": "http://127.0.0.1:8188",
+            "api_protocol": "comfyui",
+            "task": "image-generation",
+        }
+        with (
+            patch(
+                "backend.gateway.loaded_routes",
+                new=AsyncMock(return_value=({"id": "managed-comfyui"}, {"comfyui-image": model})),
+            ),
+            patch(
+                "backend.gateway.execute_managed_comfyui_edit",
+                new=AsyncMock(return_value={
+                    "content_type": "image/png",
+                    "data_base64": "ZWRpdGVk",
+                }),
+            ) as edit,
+            TestClient(gateway_app) as gateway,
+        ):
+            response = gateway.post("/v1/images/edits", json={
+                "model": "comfyui-image",
+                "prompt": "Make the sky darker",
+                "images": [{
+                    "image_url": "data:image/png;base64,"
+                    + base64.b64encode(b"\x89PNG\r\n\x1a\nimage").decode(),
+                }],
+                "response_format": "b64_json",
+                "denoise": 0.6,
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"][0]["b64_json"], "ZWRpdGVk")
+        self.assertEqual(edit.await_args.args[1], b"\x89PNG\r\n\x1a\nimage")
+        self.assertEqual(edit.await_args.args[2], "image/png")
+        self.assertEqual(edit.await_args.kwargs["denoise"], 0.6)
+
+    def test_gateway_image_edits_refuses_remote_image_fetches(self) -> None:
+        with TestClient(gateway_app) as gateway:
+            response = gateway.post("/v1/images/edits", json={
+                "model": "comfyui-image",
+                "prompt": "Edit",
+                "images": [{"image_url": "https://example.com/private.png"}],
+            })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "image_required")
+
+    def test_gateway_image_edits_accepts_openai_multipart(self) -> None:
+        model = {
+            "engine": "comfyui",
+            "model_ref": "flux.safetensors",
+            "model_alias": "comfyui-image",
+            "endpoint_url": "http://127.0.0.1:8188",
+            "api_protocol": "comfyui",
+            "task": "image-generation",
+        }
+        with (
+            patch(
+                "backend.gateway.loaded_routes",
+                new=AsyncMock(return_value=({"id": "managed-comfyui"}, {"comfyui-image": model})),
+            ),
+            patch(
+                "backend.gateway.execute_managed_comfyui_edit",
+                new=AsyncMock(return_value={
+                    "content_type": "image/png",
+                    "data_base64": "ZWRpdGVk",
+                }),
+            ) as edit,
+            TestClient(gateway_app) as gateway,
+        ):
+            response = gateway.post(
+                "/v1/images/edits",
+                data={"model": "comfyui-image", "prompt": "Edit", "response_format": "b64_json"},
+                files={
+                    "image[]": ("input", b"\xff\xd8\xffjpeg", "application/octet-stream"),
+                    "mask": ("mask.png", b"\x89PNG\r\n\x1a\nmask", "image/png"),
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(edit.await_args.args[1], b"\xff\xd8\xffjpeg")
+        self.assertEqual(edit.await_args.args[2], "image/jpeg")
+        self.assertEqual(edit.await_args.kwargs["mask"], b"\x89PNG\r\n\x1a\nmask")
+        self.assertEqual(edit.await_args.kwargs["denoise"], 1.0)
+
+    def test_gateway_image_edits_rejects_non_image_bytes(self) -> None:
+        with TestClient(gateway_app) as gateway:
+            response = gateway.post(
+                "/v1/images/edits",
+                data={"model": "comfyui-image", "prompt": "Edit"},
+                files={"image": ("fake.png", b"<svg/>", "image/png")},
+            )
+        self.assertEqual(response.status_code, 415)
+        self.assertEqual(response.json()["error"]["code"], "invalid_image_type")
 
     def test_gateway_network_binding_requires_key(self) -> None:
         original_path = db.path
@@ -8122,6 +8384,65 @@ class GatewayTests(unittest.TestCase):
             if scripts in sys.path:
                 sys.path.remove(scripts)
 
+    def test_agent_configs_offer_reasoning_variants_and_a_fast_background_model(self) -> None:
+        import importlib.util
+        import sys
+
+        root = Path(__file__).resolve().parents[1]
+        scripts = str(root / "scripts")
+        sys.path.insert(0, scripts)
+        try:
+            modules = {}
+            for name in ("opencode_workspace", "claude_code_workspace"):
+                spec = importlib.util.spec_from_file_location(f"{name}_reasoning_test", root / "scripts" / f"{name}.py")
+                assert spec is not None and spec.loader is not None
+                modules[name] = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(modules[name])
+            opencode, claude = modules["opencode_workspace"], modules["claude_code_workspace"]
+            base = {"context": 65536, "tools": True, "vision": False, "assistant": False, "task": "chat"}
+            main = {**base, "id": "rag", "name": "Qwen3.8-27B", "reasoning": True, "reasoning_default": False}
+            tiny = {**base, "id": "tiny", "name": "Qwen3-4B", "reasoning": True, "reasoning_default": False}
+            moe = {**base, "id": "moe", "name": "Qwen3-30B-A3B", "reasoning": True, "reasoning_default": False}
+            self.assertEqual(opencode.parameter_billions(moe), 3.0)
+            self.assertIs(opencode.select_small_model([main, tiny, moe], main), moe)
+            self.assertIsNone(opencode.select_small_model([main], main))
+            with patch.dict(os.environ, {"MYDGX_SMALL_MODEL": "tiny"}):
+                self.assertIs(opencode.select_small_model([main, tiny, moe], main), tiny)
+
+            with tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                (workspace / ".opencode").mkdir()
+                path = opencode.write_config(workspace, "http://127.0.0.1:14000/v1", [main], main, False, "1.19.0", False)
+                config = json.loads(path.read_text(encoding="utf-8"))
+                models = config["provider"]["mydgx"]["models"]
+                self.assertEqual(
+                    models["rag"]["variants"],
+                    {effort: {"reasoningEffort": effort} for effort in ("none", "low", "medium", "high")},
+                )
+                self.assertNotIn("options", models["rag"])
+                self.assertEqual(config["small_model"], "mydgx/rag-fast")
+                self.assertEqual(models["rag-fast"]["id"], "rag")
+                self.assertEqual(models["rag-fast"]["options"], {"reasoningEffort": "none"})
+                self.assertNotIn("variants", models["rag-fast"])
+
+                settings = json.loads(
+                    claude.write_config(workspace, "http://127.0.0.1:14000/v1", main, False, False, moe).read_text(encoding="utf-8")
+                )
+                self.assertFalse(settings["alwaysThinkingEnabled"])
+                self.assertEqual(settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "moe")
+                self.assertEqual(settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"], "rag")
+                self.assertNotIn("CLAUDE_CODE_DISABLE_THINKING", settings["env"])
+                plain = {**main, "reasoning": False}
+                settings = json.loads(
+                    claude.write_config(workspace, "http://127.0.0.1:14000/v1", plain, False, False).read_text(encoding="utf-8")
+                )
+                self.assertEqual(settings["env"]["CLAUDE_CODE_DISABLE_THINKING"], "1")
+                self.assertNotIn("alwaysThinkingEnabled", settings)
+                self.assertEqual(settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "rag")
+        finally:
+            if scripts in sys.path:
+                sys.path.remove(scripts)
+
     def test_searxng_mcp_returns_snippets_and_fixed_errors(self) -> None:
         import importlib.util
         import io
@@ -8248,6 +8569,11 @@ class GatewayTests(unittest.TestCase):
                 "task": "chat", "endpoint_url": "http://127.0.0.1:8000",
             },
             "embed": {**base, "model_ref": "embed", "task": "embeddings", "jinja": 1, "reasoning_off": 0},
+            "thinker": {**base, "model_ref": "Qwen3-8B-Q4_K_M.gguf", "task": "chat", "jinja": 1, "reasoning_off": 1},
+            "instruct": {
+                **base, "model_ref": "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf", "task": "chat",
+                "jinja": 1, "reasoning_off": 1,
+            },
         }
         with (
             patch(
@@ -8259,11 +8585,14 @@ class GatewayTests(unittest.TestCase):
             listed = {item["id"]: item["capabilities"] for item in gateway.get("/v1/models").json()["data"]}
             single = gateway.get("/v1/models/eyes").json()["capabilities"]
         settings.gateway_api_key = original_key
-        self.assertEqual(listed["coder"], {"tools": True, "reasoning": True, "vision": False})
-        self.assertEqual(listed["no-jinja"], {"tools": False, "reasoning": False, "vision": False})
-        self.assertEqual(listed["eyes"], {"tools": True, "reasoning": False, "vision": True})
-        self.assertEqual(listed["external"], {"tools": True, "reasoning": False, "vision": False})
-        self.assertEqual(listed["embed"], {"tools": False, "reasoning": False, "vision": False})
+        off = {"tools": False, "reasoning": False, "reasoning_default": False, "vision": False}
+        self.assertEqual(listed["coder"], {**off, "tools": True})
+        self.assertEqual(listed["no-jinja"], off)
+        self.assertEqual(listed["eyes"], {**off, "tools": True, "vision": True})
+        self.assertEqual(listed["external"], {**off, "tools": True})
+        self.assertEqual(listed["embed"], off)
+        self.assertEqual(listed["thinker"], {**off, "tools": True, "reasoning": True})
+        self.assertEqual(listed["instruct"], {**off, "tools": True})
         self.assertEqual(single, listed["eyes"])
 
     def test_gateway_requires_bearer_key_and_rewrites_public_alias(self) -> None:
@@ -8331,8 +8660,15 @@ class GatewayTests(unittest.TestCase):
             ["llama-local", "ollama-local"],
         )
         encoded = json.dumps(config)
-        self.assertIn("http://127.0.0.1:18080/v1", encoded)
         self.assertNotIn("private-api", encoded)
+        llama = config["model_list"][0]["litellm_params"]
+        self.assertEqual(llama["model"], "hosted_vllm/llama-local")
+        self.assertEqual(
+            llama["api_base"],
+            f"http://127.0.0.1:{settings.gateway_port}/internal/litellm/llama-local/v1",
+        )
+        self.assertEqual(llama["api_key"], INTERNAL_UPSTREAM_TOKEN)
+        self.assertGreaterEqual(len(INTERNAL_UPSTREAM_TOKEN), 32)
 
     def test_gateway_proxies_anthropic_messages_through_litellm(self) -> None:
         original_key = settings.gateway_api_key
@@ -8407,6 +8743,485 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("response.completed", response.text)
         self.assertEqual(response.headers.get("x-request-id"), "req-local")
         settings.gateway_api_key = original_key
+
+    def test_gateway_proxies_responses_compact_through_litellm(self) -> None:
+        original_key = settings.gateway_api_key
+        settings.gateway_api_key = None
+        model = {
+            "engine": "llama.cpp", "model_ref": "internal", "model_alias": "public-model",
+            "port": 18080, "task": "chat", "api_protocol": "openai",
+        }
+        upstream = httpx.Response(
+            200,
+            json={
+                "id": "resp_compact_local",
+                "object": "response.compaction",
+                "created_at": 1,
+                "output": [],
+                "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+            },
+            request=httpx.Request("POST", "http://127.0.0.1:4001/v1/responses/compact"),
+        )
+        with patch(
+            "backend.gateway.loaded_routes",
+            new=AsyncMock(return_value=({"id": "profile"}, {"public-model": model})),
+        ), patch.object(
+            litellm_adapter, "ensure", new=AsyncMock(return_value=True)
+        ), patch(
+            "httpx.AsyncClient.send", new=AsyncMock(return_value=upstream)
+        ) as send:
+            with TestClient(gateway_app) as gateway:
+                response = gateway.post(
+                    "/v1/responses/compact",
+                    json={"model": "public-model", "input": "conversación larga"},
+                )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["object"], "response.compaction")
+        self.assertEqual(
+            str(send.await_args.args[0].url),
+            "http://127.0.0.1:4001/v1/responses/compact",
+        )
+        settings.gateway_api_key = original_key
+
+    def test_gateway_compacts_locally_when_litellm_endpoint_is_missing(self) -> None:
+        original_key = settings.gateway_api_key
+        settings.gateway_api_key = None
+        model = {
+            "engine": "llama.cpp", "model_ref": "internal", "model_alias": "public-model",
+            "port": 18080, "task": "chat", "api_protocol": "openai",
+        }
+        missing = httpx.Response(
+            404,
+            json={"error": {"code": 404, "message": "Not Found"}},
+            request=httpx.Request("POST", "http://127.0.0.1:4001/v1/responses/compact"),
+        )
+        compacted = httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Resumen fiel."}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+            },
+            request=httpx.Request("POST", "http://127.0.0.1:4001/v1/chat/completions"),
+        )
+        with patch(
+            "backend.gateway.loaded_routes",
+            new=AsyncMock(return_value=({"id": "profile"}, {"public-model": model})),
+        ), patch.object(
+            litellm_adapter, "ensure", new=AsyncMock(return_value=True)
+        ), patch(
+            "httpx.AsyncClient.send", new=AsyncMock(return_value=missing)
+        ), patch(
+            "httpx.AsyncClient.post", new=AsyncMock(return_value=compacted)
+        ) as post:
+            with TestClient(gateway_app) as gateway:
+                response = gateway.post(
+                    "/v1/responses/compact",
+                    json={
+                        "model": "public-model",
+                        "input": [
+                            {"role": "user", "content": "Pregunta"},
+                            {"role": "assistant", "content": "Respuesta"},
+                        ],
+                    },
+                )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["object"], "response.compaction")
+        self.assertEqual(payload["output"][0]["type"], "message")
+        self.assertEqual(payload["output"][0]["content"][0]["text"], "Resumen fiel.")
+        self.assertEqual(payload["usage"]["total_tokens"], 15)
+        self.assertEqual(payload["mydgx"]["compaction_format"], "plaintext-summary-v1")
+        self.assertEqual(
+            post.await_args.args[0],
+            "http://127.0.0.1:4001/v1/chat/completions",
+        )
+        settings.gateway_api_key = original_key
+
+    def test_gateway_counts_responses_input_tokens_through_litellm(self) -> None:
+        original_key = settings.gateway_api_key
+        settings.gateway_api_key = None
+        model = {
+            "engine": "llama.cpp", "model_ref": "internal", "model_alias": "public-model",
+            "port": 18080, "task": "chat", "api_protocol": "openai",
+        }
+        upstream = httpx.Response(
+            200,
+            json={
+                "total_tokens": 17,
+                "request_model": "public-model",
+                "model_used": "internal",
+                "tokenizer_type": "huggingface_tokenizer",
+            },
+            headers={"x-request-id": "req-count"},
+            request=httpx.Request("POST", "http://127.0.0.1:4001/utils/token_counter"),
+        )
+        with patch(
+            "backend.gateway.loaded_routes",
+            new=AsyncMock(return_value=({"id": "profile"}, {"public-model": model})),
+        ), patch.object(
+            litellm_adapter, "ensure", new=AsyncMock(return_value=True)
+        ), patch(
+            "httpx.AsyncClient.send", new=AsyncMock(return_value=upstream)
+        ) as send:
+            with TestClient(gateway_app) as gateway:
+                response = gateway.post(
+                    "/v1/responses/input_tokens",
+                    json={
+                        "model": "public-model",
+                        "instructions": "Responde brevemente",
+                        "input": "hola",
+                    },
+                )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"object": "response.input_tokens", "input_tokens": 17},
+        )
+        forwarded = json.loads(send.await_args.args[0].content)
+        self.assertEqual(
+            forwarded,
+            {
+                "model": "public-model",
+                "messages": [
+                    {"role": "system", "content": "Responde brevemente"},
+                    {"role": "user", "content": "hola"},
+                ],
+            },
+        )
+        self.assertEqual(
+            str(send.await_args.args[0].url),
+            "http://127.0.0.1:4001/utils/token_counter",
+        )
+        self.assertEqual(response.headers.get("x-request-id"), "req-count")
+        settings.gateway_api_key = original_key
+
+    def test_gateway_input_tokens_normalizes_responses_content_parts(self) -> None:
+        self.assertEqual(
+            chat_message_for_count({
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "hola"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,eA=="},
+                    {"type": "input_file", "file_id": "file_1"},
+                ],
+            }),
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hola"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}},
+                ],
+            },
+        )
+        call = {"type": "function_call_output", "call_id": "c1", "output": "42"}
+        self.assertEqual(chat_message_for_count(call), call)
+
+    def test_gateway_compact_does_not_fallback_for_unknown_models(self) -> None:
+        original_key = settings.gateway_api_key
+        settings.gateway_api_key = None
+        with patch(
+            "backend.gateway.loaded_routes",
+            new=AsyncMock(return_value=({"id": "profile"}, {})),
+        ), patch("httpx.AsyncClient.post", new=AsyncMock()) as post:
+            with TestClient(gateway_app) as gateway:
+                response = gateway.post(
+                    "/v1/responses/compact",
+                    json={"model": "no-existe", "input": "hola"},
+                )
+        settings.gateway_api_key = original_key
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["error"]["code"], "model_not_found")
+        post.assert_not_awaited()
+
+    def test_gateway_input_tokens_rejects_stored_conversations(self) -> None:
+        original_key = settings.gateway_api_key
+        settings.gateway_api_key = None
+        with TestClient(gateway_app) as gateway:
+            response = gateway.post(
+                "/v1/responses/input_tokens",
+                json={"model": "public-model", "conversation": "conv_123", "input": "hola"},
+            )
+        settings.gateway_api_key = original_key
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "conversation_not_supported")
+
+    def test_gateway_no_longer_routes_app_protocols_as_inference_backends(self) -> None:
+        original_key = settings.gateway_api_key
+        settings.gateway_api_key = None
+        model = {
+            "engine": "openai-compatible", "model_ref": "paramita", "model_alias": "ragkit-paramita",
+            "endpoint_url": "http://127.0.0.1:8077", "task": "chat", "api_protocol": "ragkit",
+        }
+        with patch(
+            "backend.gateway.loaded_routes",
+            new=AsyncMock(return_value=({"id": "profile"}, {"ragkit-paramita": model})),
+        ), patch("httpx.AsyncClient.send", new=AsyncMock()) as send:
+            with TestClient(gateway_app) as gateway:
+                for endpoint in ("/v1/chat/completions", "/v1/responses", "/v1/responses/input_tokens"):
+                    with self.subTest(endpoint=endpoint):
+                        response = gateway.post(endpoint, json={"model": "ragkit-paramita", "input": "hola"})
+                        self.assertEqual(response.status_code, 409)
+                        self.assertEqual(response.json()["error"]["code"], "protocol_adapter_required")
+        settings.gateway_api_key = original_key
+        send.assert_not_awaited()
+
+    def test_reasoning_controls_map_standard_parameters_to_llama_cpp_templates(self) -> None:
+        llama = {"engine": "llama.cpp"}
+        cases = [
+            ({"reasoning_effort": "high"}, {"enable_thinking": True, "thinking": True, "reasoning_effort": "high"}),
+            ({"reasoning_effort": "none"}, {"enable_thinking": False, "thinking": False, "reasoning_effort": "low"}),
+            ({"reasoning": {"effort": "medium"}}, {"enable_thinking": True, "thinking": True, "reasoning_effort": "medium"}),
+            ({"reasoning": {"enabled": False}}, {"enable_thinking": False, "thinking": False}),
+            ({"thinking": {"type": "enabled", "budget_tokens": 2048}}, {"enable_thinking": True, "thinking": True}),
+            ({"enable_thinking": True}, {"enable_thinking": True, "thinking": True}),
+            (
+                {"reasoning_effort": "high", "chat_template_kwargs": {"enable_thinking": False}},
+                {"enable_thinking": False, "thinking": True, "reasoning_effort": "high"},
+            ),
+        ]
+        for payload, expected in cases:
+            with self.subTest(payload=payload):
+                self.assertFalse(apply_reasoning_controls(llama, payload))
+                self.assertEqual(payload["chat_template_kwargs"], expected)
+        untouched: dict[str, Any] = {"messages": []}
+        self.assertFalse(apply_reasoning_controls(llama, untouched))
+        self.assertNotIn("chat_template_kwargs", untouched)
+        self.assertTrue(apply_reasoning_controls(llama, {"reasoning": {"effort": "low", "exclude": True}}))
+        external = {"thinking": {"type": "disabled"}}
+        apply_reasoning_controls({"engine": "vllm"}, external)
+        self.assertEqual(external["reasoning_effort"], "none")
+        self.assertNotIn("chat_template_kwargs", external)
+        capped = {"reasoning_effort": "max"}
+        apply_reasoning_controls(llama, capped)
+        self.assertEqual(capped["chat_template_kwargs"]["reasoning_effort"], "high")
+
+    def test_reasoning_controls_pass_native_effort_levels_to_inkling(self) -> None:
+        inkling = {"engine": "llama.cpp", "model_repo": "ggml-org/Inkling-2-Mini-GGUF", "model_alias": "inkling"}
+        for effort in ("none", "minimal", "xhigh", "max"):
+            with self.subTest(effort=effort):
+                payload: dict[str, Any] = {"reasoning_effort": effort}
+                apply_reasoning_controls(inkling, payload)
+                self.assertEqual(payload["chat_template_kwargs"]["reasoning_effort"], effort)
+        disabled: dict[str, Any] = {"thinking": {"type": "disabled"}}
+        apply_reasoning_controls(inkling, disabled)
+        self.assertEqual(disabled["chat_template_kwargs"]["reasoning_effort"], "none")
+        enabled: dict[str, Any] = {"thinking": {"type": "enabled", "budget_tokens": 4096}}
+        apply_reasoning_controls(inkling, enabled)
+        self.assertNotIn("reasoning_effort", enabled["chat_template_kwargs"])
+        self.assertTrue(model_reasoning_capability({"task": "chat", "model_alias": "inkling-2-mini"}))
+
+    def test_reasoning_stream_splits_inline_think_tags_across_chunks(self) -> None:
+        stream = ReasoningStream(exclude=False)
+        pieces = ["", "  <thi", "nk>Primero 17*2", "0=340.</th", "ink>\n\n39", "1", None]
+        reasoning = answer = ""
+        for index, piece in enumerate(pieces):
+            delta: dict[str, Any] = {} if piece is None else {"content": piece}
+            if index == 0:
+                delta["role"] = "assistant"
+            event = {"choices": [{"index": 0, "delta": delta, "finish_reason": "stop" if piece is None else None}]}
+            stream.event(event)
+            out = event["choices"][0]["delta"]
+            reasoning += out.get("reasoning_content") or ""
+            answer += out.get("content") or ""
+        self.assertEqual(reasoning, "Primero 17*20=340.")
+        self.assertEqual(answer, "391")
+
+        plain = ReasoningStream(exclude=False)
+        event = {"choices": [{"index": 0, "delta": {"content": "Hablo de <think> sin pensar"}}]}
+        plain.event(event)
+        self.assertEqual(event["choices"][0]["delta"], {"content": "Hablo de <think> sin pensar"})
+
+        ollama = {"choices": [{"index": 0, "delta": {"reasoning": "pienso"}}]}
+        ReasoningStream(exclude=False).event(ollama)
+        self.assertEqual(ollama["choices"][0]["delta"]["reasoning_content"], "pienso")
+
+        hidden = ReasoningStream(exclude=True)
+        self.assertFalse(hidden.event({"choices": [{"index": 0, "delta": {"reasoning_content": "x"}}]}))
+        self.assertTrue(hidden.event({"choices": [], "usage": {"total_tokens": 3}}))
+
+    def test_anthropic_adaptive_thinking_becomes_an_explicit_budget(self) -> None:
+        payload = {"thinking": {"type": "adaptive", "display": "omitted"}, "output_config": {"effort": "medium"}}
+        self.assertTrue(normalize_anthropic_thinking(payload))
+        self.assertEqual(payload["thinking"], {"type": "enabled", "budget_tokens": 5000})
+        default = {"thinking": {"type": "adaptive"}}
+        normalize_anthropic_thinking(default)
+        self.assertEqual(default["thinking"]["budget_tokens"], 10000)
+        explicit = {"thinking": {"type": "enabled", "budget_tokens": 1024}}
+        self.assertFalse(normalize_anthropic_thinking(explicit))
+        self.assertFalse(normalize_anthropic_thinking({}))
+
+    def test_replayed_thinking_parts_move_to_reasoning_content(self) -> None:
+        payload = {"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hola"}]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "pienso", "signature": ""},
+                {"type": "redacted_thinking", "data": "x"},
+                {"type": "text", "text": "leo"},
+            ], "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]},
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "solo"}],
+             "thinking_blocks": [{"type": "thinking", "thinking": "bloque"}], "tool_calls": [{"id": "c2"}]},
+        ]}
+        fold_thinking_history(payload)
+        user, first, second = payload["messages"]
+        self.assertEqual(user["content"], [{"type": "text", "text": "hola"}])
+        self.assertEqual(first["content"], [{"type": "text", "text": "leo"}])
+        self.assertEqual(first["reasoning_content"], "pienso")
+        self.assertIsNone(second["content"])
+        self.assertEqual(second["reasoning_content"], "bloque\nsolo")
+        self.assertNotIn("thinking_blocks", second)
+
+    def test_tool_arguments_are_repaired_only_when_broken(self) -> None:
+        self.assertIsNone(repair_tool_arguments('{"city": "Madrid"}'))
+        self.assertEqual(repair_tool_arguments(""), "{}")
+        self.assertEqual(repair_tool_arguments('{"city": "Madrid",}'), '{"city": "Madrid"}')
+        self.assertEqual(repair_tool_arguments('```json\n{"city": "Madrid"}\n```'), '{"city": "Madrid"}')
+        self.assertEqual(repair_tool_arguments('{"path": "a.py", "lines": [1, 2'), '{"path": "a.py", "lines": [1, 2]}')
+        self.assertEqual(repair_tool_arguments('{"city": "Madrid"}}'), '{"city": "Madrid"}')
+        self.assertEqual(repair_tool_arguments("{'flag': True, 'n': None}"), '{"flag": true, "n": null}')
+        self.assertIsNone(repair_tool_arguments("not json at all"))
+        self.assertIsNone(repair_tool_arguments("[1, 2]"))
+
+    def test_leaked_tool_calls_become_real_calls_without_streaming(self) -> None:
+        names = frozenset({"get_weather"})
+        body = json.dumps({"choices": [{"finish_reason": "stop", "message": {
+            "role": "assistant",
+            "content": '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Madrid",}}\n</tool_call>',
+        }}]})
+        choice = json.loads(normalize_chat_body(body.encode(), False, names))["choices"][0]
+        self.assertEqual(choice["finish_reason"], "tool_calls")
+        call = choice["message"]["tool_calls"][0]
+        self.assertEqual(call["function"], {"name": "get_weather", "arguments": '{"city": "Madrid"}'})
+        self.assertIsNone(choice["message"]["content"])
+        unknown = json.dumps({"choices": [{"message": {"content": '<tool_call>{"name": "rm_rf", "arguments": {}}</tool_call>'}}]})
+        self.assertNotIn("tool_calls", json.loads(normalize_chat_body(unknown.encode(), False, names))["choices"][0]["message"])
+        broken = json.dumps({"choices": [{"message": {"tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Madrid"'}},
+        ]}}]})
+        fixed = json.loads(normalize_chat_body(broken.encode(), False, names))
+        self.assertEqual(fixed["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"], '{"city": "Madrid"}')
+
+    def test_reasoning_stream_delivers_repaired_tool_calls_before_finishing(self) -> None:
+        stream = ReasoningStream(exclude=False, tool_names=frozenset({"read"}))
+        chunks = [
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "reasoning_content": "leo"}}]},
+            {"choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "call_1", "type": "function", "function": {"name": "read", "arguments": '{"path": '}},
+            ]}}]},
+            {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"calc.py",'}}]}}]},
+            {"id": "x", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        ]
+        sent = [event for chunk in chunks for event in stream.event(chunk)]
+        self.assertEqual(sent[0]["choices"][0]["delta"], {"role": "assistant", "reasoning_content": "leo"})
+        calls = sent[1]["choices"][0]["delta"]["tool_calls"]
+        self.assertEqual(sent[1]["id"], "x")
+        self.assertEqual(calls, [{"index": 0, "id": "call_1", "type": "function",
+                                  "function": {"name": "read", "arguments": '{"path": "calc.py"}'}}])
+        self.assertEqual(sent[2]["choices"][0]["finish_reason"], "tool_calls")
+        self.assertEqual(len(sent), 3)
+
+        leaked = ReasoningStream(exclude=False, tool_names=frozenset({"read"}))
+        pieces = ["<tool", '_call>{"name": "read", ', '"arguments": {"path": "a.py"}}</tool_call>']
+        out = [event for piece in pieces for event in leaked.event({"choices": [{"index": 0, "delta": {"content": piece}}]})]
+        self.assertEqual(out, [])
+        final = leaked.event({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+        self.assertEqual(final[0]["choices"][0]["delta"]["tool_calls"][0]["function"]["name"], "read")
+        self.assertEqual(final[1]["choices"][0]["finish_reason"], "tool_calls")
+        self.assertNotIn("content", final[1]["choices"][0]["delta"])
+
+        text = ReasoningStream(exclude=False, tool_names=frozenset({"read"}))
+        event = {"choices": [{"index": 0, "delta": {"content": "Hola"}}]}
+        self.assertEqual(text.event(event)[0]["choices"][0]["delta"], {"content": "Hola"})
+
+        untouched = ReasoningStream(exclude=False)
+        event = {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{"}}]}}]}
+        self.assertEqual(untouched.event(event)[0]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"], "{")
+
+    def test_reasoning_body_normalization(self) -> None:
+        body = json.dumps({"choices": [{"message": {"role": "assistant", "content": "<think>a</think>\n\nb"}}]})
+        message = json.loads(normalize_chat_body(body.encode(), False))["choices"][0]["message"]
+        self.assertEqual((message["reasoning_content"], message["content"]), ("a", "b"))
+        hidden = json.loads(normalize_chat_body(body.encode(), True))["choices"][0]["message"]
+        self.assertEqual(hidden, {"role": "assistant", "content": "b"})
+        self.assertEqual(normalize_chat_body(b"not json", False), b"not json")
+
+    def test_chat_completions_stream_reasoning_through_gateway(self) -> None:
+        original_key = settings.gateway_api_key
+        settings.gateway_api_key = None
+        model = {
+            "id": "primary", "name": "Qwen3", "engine": "llama.cpp", "model_ref": "qwen3",
+            "model_alias": "thinker", "port": 18080, "task": "chat", "api_protocol": "openai",
+        }
+        frames = [
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "<think>hmm"}}]},
+            {"choices": [{"index": 0, "delta": {"content": "</think>ok"}, "finish_reason": "stop"}]},
+        ]
+        sse = b"".join(b"data: " + json.dumps(frame).encode() + b"\n\n" for frame in frames) + b"data: [DONE]\n\n"
+        upstream = httpx.Response(
+            200, stream=httpx.ByteStream(sse), headers={"content-type": "text/event-stream"},
+            request=httpx.Request("POST", "http://127.0.0.1:18080/v1/chat/completions"),
+        )
+        with patch(
+            "backend.gateway.loaded_routes",
+            new=AsyncMock(return_value=({"id": "profile"}, {"thinker": model})),
+        ), patch("httpx.AsyncClient.send", new=AsyncMock(return_value=upstream)) as send:
+            with TestClient(gateway_app) as gateway:
+                response = gateway.post("/v1/chat/completions", json={
+                    "model": "thinker", "stream": True, "reasoning_effort": "high",
+                    "messages": [{"role": "user", "content": "hola"}],
+                })
+        settings.gateway_api_key = original_key
+        self.assertEqual(response.status_code, 200)
+        forwarded = json.loads(send.await_args.args[0].content)
+        self.assertTrue(forwarded["chat_template_kwargs"]["enable_thinking"])
+        events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: {")]
+        deltas = [event["choices"][0]["delta"] for event in events]
+        self.assertEqual("".join(d.get("reasoning_content", "") for d in deltas), "hmm")
+        self.assertEqual("".join(d.get("content", "") for d in deltas), "ok")
+        self.assertIn("data: [DONE]", response.text)
+
+    def test_internal_litellm_bridge_requires_process_token(self) -> None:
+        model = {
+            "id": "primary", "name": "Qwen3", "engine": "llama.cpp", "model_ref": "qwen3",
+            "model_alias": "thinker", "port": 18080, "task": "chat", "api_protocol": "openai",
+        }
+        upstream = httpx.Response(
+            200, json={"choices": [{"message": {"content": "<think>r</think>a"}}]},
+            request=httpx.Request("POST", "http://127.0.0.1:18080/v1/chat/completions"),
+        )
+        path = "/internal/litellm/thinker/v1/chat/completions"
+        body = {"model": "qwen3", "reasoning_effort": "low", "messages": []}
+        with patch(
+            "backend.gateway.active_routes", return_value=({"id": "profile"}, {"thinker": model}),
+        ), patch("httpx.AsyncClient.send", new=AsyncMock(return_value=upstream)) as send:
+            with TestClient(gateway_app, client=("127.0.0.1", 50000)) as gateway:
+                denied = gateway.post(path, json=body, headers={"Authorization": "Bearer wrong-placeholder"})
+                missing = gateway.post(
+                    "/internal/litellm/absent/v1/chat/completions", json=body,
+                    headers={"Authorization": f"Bearer {INTERNAL_UPSTREAM_TOKEN}"},
+                )
+                allowed = gateway.post(path, json=body, headers={"Authorization": f"Bearer {INTERNAL_UPSTREAM_TOKEN}"})
+                chat_forwarded = send.await_args.args[0]
+                gateway.post(
+                    "/internal/litellm/thinker/v1/responses",
+                    json={"model": "qwen3", "input": "hola", "reasoning": {"effort": "high"}},
+                    headers={"Authorization": f"Bearer {INTERNAL_UPSTREAM_TOKEN}"},
+                )
+                responses_forwarded = send.await_args.args[0]
+            with TestClient(gateway_app, client=("192.0.2.10", 50000)) as remote:
+                foreign = remote.post(path, json=body, headers={"Authorization": f"Bearer {INTERNAL_UPSTREAM_TOKEN}"})
+        self.assertEqual(denied.status_code, 401)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(foreign.status_code, 401)
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.json()["choices"][0]["message"]["reasoning_content"], "r")
+        self.assertEqual(str(chat_forwarded.url), "http://127.0.0.1:18080/v1/chat/completions")
+        self.assertNotIn("authorization", {key.lower() for key in chat_forwarded.headers})
+        self.assertTrue(json.loads(chat_forwarded.content)["chat_template_kwargs"]["enable_thinking"])
+        self.assertEqual(str(responses_forwarded.url), "http://127.0.0.1:18080/v1/responses")
+        self.assertEqual(
+            json.loads(responses_forwarded.content)["chat_template_kwargs"],
+            {"enable_thinking": True, "thinking": True, "reasoning_effort": "high"},
+        )
 
     def test_gateway_proxies_audio_multipart_by_capability(self) -> None:
         original_key = settings.gateway_api_key

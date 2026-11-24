@@ -11,19 +11,34 @@ perfil conversacional cargado.
 
 - OpenAI Chat Completions: `POST /v1/chat/completions`
 - OpenAI Responses: `POST /v1/responses`
+- Compactación de OpenAI Responses: `POST /v1/responses/compact`
+- Recuento de entrada de OpenAI Responses: `POST /v1/responses/input_tokens`
 - Anthropic Messages: `POST /v1/messages`
 - Conteo Anthropic: `POST /v1/messages/count_tokens`
 - Catálogo: `GET /v1/models`, con `context_length` y `capabilities`
   (`tools`, `reasoning`, `vision`) por alias. `tools` es `false` en modelos
   llama.cpp sin plantilla Jinja.
-- Completions, embeddings, imagen, audio, vídeo y reranking: rutas descritas en
+- Completions, embeddings, imagen (generación y edición), audio, vídeo y reranking: rutas descritas en
   el README, condicionadas por la tarea del modelo.
 - ComfyUI administrado: `POST /v1/images/generations`, `POST /v1/videos`,
   `GET /v1/videos/{id}` y `GET /v1/videos/{id}/content`.
 
-Los endpoints Anthropic y Responses pasan por LiteLLM. Chat Completions y las
-capacidades multimedia conservan el proxy nativo. El modelo solicitado siempre
-debe ser un alias saludable del perfil activo.
+Los endpoints Anthropic y Responses pasan por LiteLLM. El recuento de tokens de
+entrada usa el tokenizador seleccionado por LiteLLM y no ejecuta inferencia; no
+admite identificadores `conversation` almacenados. La disponibilidad de la
+compactación usa el endpoint nativo del proveedor cuando existe; en caso
+contrario, MyDGX genera un mensaje resumen reutilizable en texto marcado como
+`plaintext-summary-v1`. Chat Completions y las capacidades multimedia conservan
+el proxy nativo. El modelo solicitado siempre debe ser un alias saludable del
+perfil activo.
+
+Los modelos que saben pensar envían su razonamiento en todos los formatos:
+`reasoning_content` en Chat Completions, elementos `reasoning` en Responses y
+bloques `thinking` en Anthropic Messages. Los clientes lo piden con su parámetro
+habitual (`reasoning_effort`, `reasoning.effort` o `thinking`); ver
+[Razonamiento](api.md#razonamiento). En Open WebUI, pon **Reasoning Effort** en
+los parámetros avanzados del modelo (por ejemplo `high`) y el razonamiento
+aparece en un bloque plegable mientras el modelo trabaja.
 
 ## Open WebUI
 
@@ -92,6 +107,16 @@ Usa un modelo con tool calling fiable. La clave puede ser un valor no vacío
 cuando el acceso es exclusivamente localhost; para red debe coincidir con
 `GATEWAY_API_KEY`.
 
+Razonamiento: Claude Code envía `thinking: {"type": "adaptive"}` con
+`output_config.effort`; el gateway lo convierte en un presupuesto explícito y el
+modelo local piensa de verdad. La configuración generada sigue el valor por
+defecto del perfil (`alwaysThinkingEnabled`); Tab lo activa o desactiva y
+`/effort` (o `CLAUDE_CODE_EFFORT_LEVEL`) elige el nivel. Si el modelo no sabe
+razonar, se añade `CLAUDE_CODE_DISABLE_THINKING=1`. Si hay cargado un modelo con
+herramientas de, como mucho, el 60 % de los parámetros activos del principal, el
+nivel haiku (títulos, resúmenes, comprobaciones) lo usa; `MYDGX_SMALL_MODEL`
+fija uno concreto.
+
 Con la búsqueda web del gateway activada, Claude Code recibe el MCP `searxng`
 en los modos plan y activo. La herramienta llama a `POST /v1/search` y `WebSearch`
 y `WebFetch` nativos permanecen denegados. La clave se referencia como
@@ -133,6 +158,20 @@ Completions:
 No uses el proveedor `openai` contra un backend que solo admita Chat
 Completions; ese proveedor puede seleccionar Responses. MyDGX también expone
 Responses mediante LiteLLM cuando el cliente lo requiera.
+
+Razonamiento (OpenCode 1.x): los modelos que saben pensar reciben las variantes
+`none`, `low`, `medium` y `high`, que envían `reasoning_effort`. Elígelas con el
+atajo de variantes o con `opencode run --variant high`; sin variante manda el
+valor por defecto del perfil. `small_model` (títulos y resúmenes) usa un modelo
+más pequeño si hay uno cargado o, si no, la entrada `<alias>-fast`: el mismo
+modelo con `reasoning_effort: none`. `MYDGX_SMALL_MODEL` fija uno concreto.
+
+Herramientas: cuando la petición declara `tools`, el gateway entrega cada
+llamada completa justo antes del chunk final, con los argumentos JSON reparados
+si el modelo los dejó mal formados (comas finales, llaves sin cerrar, bloques de
+código). También convierte en llamadas reales los bloques
+`<tool_call>{"name": …, "arguments": …}</tool_call>` que el modelo deje en el
+texto, solo si la herramienta existe en la petición.
 
 Con la búsqueda web del gateway activada (el valor por defecto, en
 Configuración → Gateway), OpenCode recibe el MCP `searxng` en los modos plan y
@@ -202,5 +241,5 @@ curl http://127.0.0.1:4000/v1/models
 
 Si Anthropic o Responses devuelve `adapter_unavailable`, revisa
 `logs/litellm.log`, la instalación de LiteLLM y que exista un perfil activo con
-un modelo chat/visión saludable. RAGKit y Voice Agent requieren su adaptador
+un modelo chat/visión saludable. Los despliegues RAG AI y Voice Agent requieren su adaptador
 específico; ComfyUI administrado ya se traduce a imagen y vídeo compatibles.

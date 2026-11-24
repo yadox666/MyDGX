@@ -2,6 +2,7 @@ import {
   Activity,
   Bot,
   Boxes,
+  Brain,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -463,6 +464,7 @@ type Models = {
     memory_estimate?: MemoryEstimate | null;
     manual_settings?: boolean;
     vision?: boolean;
+    reasoning?: ReasoningMode;
     speculative?: { spec_type: string; draft_filename: string };
     health?: ModelHealth | null;
   }>;
@@ -2304,6 +2306,7 @@ type ProfileModel = ModelConfig & {
   spec_type?: string;
   draft_filename?: string;
   uncensored?: string;
+  reasoning?: ReasoningMode;
 };
 
 const GGUF_QUANT_SUFFIX = /[-_.]((?:UD-)?(?:I?Q\d(?:_[A-Z0-9]+)*|BF16|F16|F32|MXFP4(?:_[A-Z0-9]+)*))$/i;
@@ -2333,6 +2336,7 @@ type Profile = ModelConfig & {
   recipe_update?: number;
   recipe_modified?: boolean;
   memory_plan: {
+    models?: { model_id: string; weight_mb: number; estimated_memory_mb: number; source: string }[];
     required_mb: number;
     reserve_mb: number;
     capacity_mb: number;
@@ -2589,6 +2593,16 @@ function profileModelHasVision(model: ProfileModel): boolean {
 
 function VisionBadge() {
   return <span className="badge vision" title={t("Acepta imágenes: el proyector visual se carga al encender")}><Eye size={11} />{" "}{t("Visión")}</span>;
+}
+
+type ReasoningMode = "" | "on" | "optional";
+
+function ReasoningBadge({ mode }: { mode?: ReasoningMode }) {
+  if (!mode) return null;
+  const title = mode === "on"
+    ? t("Razona por defecto; el cliente puede bajarlo u ocultarlo con reasoning_effort o thinking")
+    : t("Razonamiento desactivado por defecto; el cliente lo activa por petición con reasoning_effort o thinking");
+  return <span className={`badge reasoning ${mode}`} title={title}><Brain size={11} />{" "}{t("Razonamiento")}</span>;
 }
 
 function profileCategories(models: ProfileModel[]): ModelCategoryKey[] {
@@ -4856,6 +4870,7 @@ function ModelsView({
                     {model.health && !(incomplete && model.health.status === "healthy") ? <ModelHealthBadge health={model.health} /> : incomplete && <span className="badge warning">{t("Incompleto")}</span>}
                     {cardOnly && <span className="badge warning" title={t("Solo está la ficha del modelo; no hay archivos de pesos")}>{t("Sin pesos")}</span>}
                     {model.vision && <VisionBadge />}
+                    <ReasoningBadge mode={model.reasoning} />
                     {model.speculative && <span className="badge" title={t("Decodificación especulativa con {value}", { value: model.speculative.draft_filename || t("el MTP integrado en el GGUF") })}><Zap size={11} /> {SPEC_LABELS[model.speculative.spec_type] ?? model.speculative.spec_type}</span>}
                     {model.manual_settings && <span className="badge" title={t("Tiene ajustes manuales que mandan sobre la ficha y la cabecera GGUF")}><SlidersHorizontal size={11} />{" "}{t("Manual")}</span>}
                   </>}
@@ -6026,9 +6041,11 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
               model.model_alias && model.model_alias !== model.name ? t("alias {alias}", { alias: model.model_alias }) : "",
             ].filter(Boolean);
             const kvCache = model.cache_type_k && model.cache_type_k === model.cache_type_v ? model.cache_type_k : [model.cache_type_k, model.cache_type_v].filter(Boolean).join("/");
+            const plannedMemory = profile.memory_plan.models?.find((item) => item.model_id === model.id);
+            const memoryMb = model.estimated_memory_mb || plannedMemory?.estimated_memory_mb || plannedMemory?.weight_mb || 0;
             const details = [
               identity.quant,
-              model.estimated_memory_mb > 0 ? `≈${(model.estimated_memory_mb / 1024).toFixed(1)} GB` : "",
+              memoryMb > 0 ? `≈${(memoryMb / 1024).toFixed(1)} GB` : "",
               ["chat", "vision", "embeddings"].includes(model.task) ? `${(effectiveContext / 1024).toLocaleString(locale)}K ctx${effectiveContext !== model.context_size ? ` ${t("(ajustado)")}` : ""}` : "",
               kvCache ? `KV ${kvCache}` : "",
               model.spec_type ? SPEC_LABELS[model.spec_type] ?? model.spec_type : "",
@@ -6044,6 +6061,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
                   <strong title={[identity.file || model.model_repo || model.model_ref, model.spec_type ? `${SPEC_LABELS[model.spec_type] ?? model.spec_type}: ${model.draft_filename || t("MTP integrado en el GGUF")}` : ""].filter(Boolean).join("\n")}>{identity.name}</strong>
                   <UncensoredBadge name={`${model.uncensored ?? ""} ${identity.name}`} flagged={Boolean(model.uncensored)} showKind />
                   {profileModelHasVision(model) && <VisionBadge />}
+                  <ReasoningBadge mode={model.reasoning} />
                 </span>
                 {aliases.length > 0 && <small>{aliases.join(" · ")}</small>}
               </span>
@@ -6222,7 +6240,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
                 <label>{t("KV cache V")}<select value={form.cache_type_v} onChange={(event) => setField("cache_type_v", event.target.value as Profile["cache_type_v"])}><option value="">{t("Predeterminado (F16)")}</option><option value="f16">F16</option><option value="q8_0">Q8_0</option><option value="q4_0">Q4_0</option></select></label>
                 <label>{t("Memoria libre mínima (MiB)")}<input type="number" value={form.min_free_memory_mb} min={0} onChange={(event) => setField("min_free_memory_mb", Number(event.target.value))} /></label>
                 <label>{t("Reasoning effort")}<select value={form.reasoning_effort} onChange={(event) => setField("reasoning_effort", event.target.value as Profile["reasoning_effort"])}><option value="">{t("Sin especificar")}</option><option value="low">{t("Low")}</option><option value="medium">{t("Medium")}</option><option value="high">{t("High")}</option></select></label>
-                <label>{t("Runtime requerido")}<input value={form.runtime_requirement} onChange={(event) => setField("runtime_requirement", event.target.value)} placeholder={t("llama.cpp v1.0.0 · CUDA 13 · sm_121")} /></label>
+                <label>{t("Runtime requerido")}<input value={form.runtime_requirement} onChange={(event) => setField("runtime_requirement", event.target.value)} placeholder={t("llama.cpp b12669 · CUDA 13 · sm_121")} /></label>
                 <div className="advanced-checks">
                   <label className="checkbox"><input type="checkbox" checked={Boolean(form.flash_attention)} onChange={(event) => setField("flash_attention", Number(event.target.checked))} /><span>{t("Flash Attention")}</span></label>
                   <label className="checkbox"><input type="checkbox" checked={Boolean(form.jinja)} onChange={(event) => setField("jinja", Number(event.target.checked))} /><span>{t("Plantillas Jinja")}</span></label>

@@ -205,7 +205,8 @@ enum SSHBootstrap {
             "MYDGX_DASHBOARD_PASSWORD",
             pattern: #"^[\x21-\x7E]{1,256}$"#,
             profile: profile,
-            remoteDirectory: remoteDirectory
+            remoteDirectory: remoteDirectory,
+            unlessExists: "data/.dashboard-password-claimed"
         )
     }
 
@@ -213,7 +214,8 @@ enum SSHBootstrap {
         _ name: String,
         pattern: String,
         profile: ConnectionProfile,
-        remoteDirectory: String
+        remoteDirectory: String,
+        unlessExists marker: String = ""
     ) async throws -> String? {
         try profile.validate()
         let privateKey = NSString(string: profile.ssh.identityFile).expandingTildeInPath
@@ -225,10 +227,12 @@ enum SSHBootstrap {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         let envPath = "\(remoteDirectory)/.env"
         let remoteCommand = """
-        python3 - \(shellQuote(envPath)) \(shellQuote(name)) <<'PY'
+        python3 - \(shellQuote(envPath)) \(shellQuote(name)) \(shellQuote(marker)) <<'PY'
         import pathlib
         import sys
         path = pathlib.Path(sys.argv[1]).expanduser()
+        if sys.argv[3] and (path.parent / sys.argv[3]).exists():
+            sys.exit(3)
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.startswith(sys.argv[2] + "="):
                 print(line.split("=", 1)[1].strip().strip("'\\\""), end="")

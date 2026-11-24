@@ -104,7 +104,7 @@ ejecuta al arrancar y después aproximadamente cada hora.
 |---|---|---|
 | `LLAMA_CPP_SERVER_PATH` | `llama-server` | Ejecutable principal. |
 | `LLAMA_CPP_B10679_PATH` | vacío | Build b10679 anterior, usada por los modelos que la requieren. Al actualizar a v1.0.0 se conserva en `/usr/local/lib/mydgx/llama-b10679/llama-server`. |
-| `LLAMA_CPP_B11429_PATH` | vacío | Build fijada b11429 (ARTIFEX), usada por los modelos que la requieren. |
+| `LLAMA_CPP_B11429_PATH` | vacío | Build fijada b11429 (Cyber Harness), usada por los modelos que la requieren. |
 
 ## Perfiles y apps
 
@@ -116,7 +116,7 @@ ejecuta al arrancar y después aproximadamente cada hora.
 | `PROFILE_START_TIMEOUT_SECONDS` | `180` | Espera máxima a que un modelo responda al arrancar. |
 | `PROFILE_RESTORE_RETRY_SECONDS` | `300` | Reintento de restauración del perfil predeterminado tras un fallo. |
 | `PROFILE_APPS_ROOT` | home del usuario | Directorio cuyos subdirectorios con `start.sh` pueden ser apps de perfil. |
-| `PROFILE_APPS` | vacío | Lista blanca opcional de apps (`ragkit,otra`). Vacío: todas las válidas. |
+| `PROFILE_APPS` | vacío | Lista blanca opcional de apps (`rag-ai,otra`). Vacío: todas las válidas. |
 | `MYDGX_RECIPES_URL` | `config/recipes.json` de `main` en GitHub | Catálogo de *Buscar recetas*. Solo se acepta `https://raw.githubusercontent.com/…`; si falla, se usa la copia local. |
 
 ## Gateway

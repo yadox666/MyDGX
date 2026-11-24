@@ -104,7 +104,7 @@ runs at boot and then roughly every hour.
 |---|---|---|
 | `LLAMA_CPP_SERVER_PATH` | `llama-server` | Main executable. |
 | `LLAMA_CPP_B10679_PATH` | empty | Older b10679 build, used by the models that require it. When upgrading to v1.0.0 it is kept at `/usr/local/lib/mydgx/llama-b10679/llama-server`. |
-| `LLAMA_CPP_B11429_PATH` | empty | Pinned b11429 build (ARTIFEX), used by the models that require it. |
+| `LLAMA_CPP_B11429_PATH` | empty | Pinned b11429 build (Cyber Harness), used by the models that require it. |
 
 ## Profiles and apps
 
@@ -116,7 +116,7 @@ runs at boot and then roughly every hour.
 | `PROFILE_START_TIMEOUT_SECONDS` | `180` | Maximum wait for a model to respond on startup. |
 | `PROFILE_RESTORE_RETRY_SECONDS` | `300` | Retry interval for restoring the default profile after a failure. |
 | `PROFILE_APPS_ROOT` | user's home | Directory whose subdirectories with a `start.sh` can be profile apps. |
-| `PROFILE_APPS` | empty | Optional allowlist of apps (`ragkit,otra`). Empty: all valid ones. |
+| `PROFILE_APPS` | empty | Optional allowlist of apps (`rag-ai,otra`). Empty: all valid ones. |
 | `MYDGX_RECIPES_URL` | `config/recipes.json` on GitHub `main` | *Find recipes* catalog. Only `https://raw.githubusercontent.com/…` is accepted; on failure the local copy is used. |
 
 ## Gateway

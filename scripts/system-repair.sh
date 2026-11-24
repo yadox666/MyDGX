@@ -9,7 +9,7 @@ configured_ref=""
 if [[ -r "$CONFIG_FILE" ]]; then
   configured_ref="$(sed -nE 's/^MYDGX_LLAMA_CPP_REF=([A-Za-z0-9._\/-]+)$/\1/p' "$CONFIG_FILE")"
 fi
-LLAMA_REF="${MYDGX_LLAMA_CPP_REF:-${configured_ref:-v1.0.0}}"
+LLAMA_REF="${MYDGX_LLAMA_CPP_REF:-${configured_ref:-b12669}}"
 FORCE_LLAMA_BUILD="${MYDGX_FORCE_LLAMA_CPP_BUILD:-0}"
 CUDA_ARCH="${MYDGX_CUDA_ARCH:-121}"
 STATE_DIR="/var/lib/mydgx"
@@ -170,6 +170,7 @@ if [[ "$MODE" != "--check" &&
   [[ -f "$LLAMA_REF_STATE" ]] && installed_ref="$(cat "$LLAMA_REF_STATE")"
   if [[ "$installed_ref" != "$LLAMA_REF" ]]; then
     case "$LLAMA_REF" in
+      b12669) expected_commit="30ec35ae2e27f1eca486af02b9d3d53fa7a26950" ;;
       v1.0.0) expected_commit="b1b770d90d94cad9e9ea5b993bdbc383a522fb28" ;;
       b10679) expected_commit="50f068ffffc3e0e4c9c2e4139281c6075224f429" ;;
       *) expected_commit="" ;;

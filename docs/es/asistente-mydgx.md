@@ -227,7 +227,7 @@ Una acción propuesta aparece en `pending_actions`:
 - “¿Cómo arranco un perfil desde un script con curl?”
 - “¿Qué endpoint uso para transcribir audio con el gateway?”
 - “¿Por qué falló el último arranque?” Consulta logs de error y trabajos.
-- “Reinicia la app ragkit.”
+- “Reinicia la app de RAG AI.”
 - “Desactiva ComfyUI, no lo uso.”
 - “Reinicia Ollama.” La acción solo estará disponible si el control de servicios
   está habilitado y `ollama` pertenece a la lista permitida.

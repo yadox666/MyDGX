@@ -8,7 +8,7 @@ ARTIFEX_ROOT="${ARTIFEX_ROOT:-$(dirname "$ROOT")/ARTIFEX}"
 CONNECTION_HELPER="$ARTIFEX_ROOT/gpu/scripts/gpu_connection.py"
 AXFORGE_ENV="${MYDGX_AXFORGE_ENV:-$ARTIFEX_ROOT/.env}"
 REMOTE_DIR="${MYDGX_REMOTE_DIR:-MyDGX-Dashboard}"
-LLAMA_CPP_REF="${MYDGX_LLAMA_CPP_REF:-v1.0.0}"
+LLAMA_CPP_REF="${MYDGX_LLAMA_CPP_REF:-b12669}"
 FORCE_LLAMA_BUILD="${MYDGX_FORCE_LLAMA_CPP_BUILD:-0}"
 INSTALL_OLLAMA="${MYDGX_INSTALL_OLLAMA:-1}"
 OLLAMA_VERSION="${MYDGX_OLLAMA_VERSION:-}"
@@ -1388,8 +1388,9 @@ print("generated")
 PY
 )"
 if [[ "$dashboard_password_status" == "generated" ]]; then
-  log "Contraseña del dashboard generada; cópiala desde el menú de MyDGXTray (Copiar contraseña del dashboard)" \
-    "Dashboard password generated; copy it from the MyDGXTray menu (Copy dashboard password)"
+  rm -f "$app_root/data/.dashboard-password-claimed"
+  log "Contraseña del dashboard generada; cópiala desde el menú de MyDGXTray (Copiar contraseña del dashboard) antes del primer inicio de sesión" \
+    "Dashboard password generated; copy it from the MyDGXTray menu (Copy dashboard password) before the first login"
 else
   log "Contraseña del dashboard ya configurada; se conserva" "Dashboard password already configured; keeping it"
 fi

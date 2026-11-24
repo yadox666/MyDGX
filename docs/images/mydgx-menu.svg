@@ -16,7 +16,7 @@
     <text x="168" y="216" font-size="17">[ ]  Detener conexion y tunel</text>
     <text x="168" y="260" font-size="17">[ ]  Apagar equipo...</text>
     <line x1="155" y1="286" x2="605" y2="286" stroke="#dedfe2"/>
-    <text x="168" y="326" font-size="17" font-weight="600">Perfil: ARTIFEX - en ejecucion</text>
+    <text x="168" y="326" font-size="17" font-weight="600">Perfil: Cyber Harness - en ejecucion</text>
     <text x="168" y="370" font-size="17">[ ]  Detener perfil</text>
     <text x="168" y="414" font-size="17">[ ]  Seleccionar y arrancar perfil</text>
     <text x="580" y="414" font-size="17">&gt;</text>

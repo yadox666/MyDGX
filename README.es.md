@@ -132,7 +132,7 @@ del Spark (`GPU 4% · RAM 29%`); un clic abre el menú.
    no abre puertos en el router y se reconecta solo.
 3. **Perfiles de IA.** Muestra los perfiles cargados, cuántos modelos tienen y
    cuánta memoria ocupan. Detén uno o arranca otro sin entrar en el dashboard.
-4. **Tus apps, a un clic.** Dashboard, Open WebUI, ComfyUI, RAGKit, las apps de
+4. **Tus apps, a un clic.** Dashboard, Open WebUI, ComfyUI, tus despliegues RAG AI, las apps de
    tus perfiles y una Terminal SSH ya configurada. Se abren en una dirección
    local del Mac (`http://127.0.0.1:…`) a través del túnel.
 5. **Agentes de código.** Lanza Claude Code u OpenCode contra tus modelos
@@ -469,8 +469,8 @@ Detalle en [Benchmarks](docs/es/benchmarks.md).
 
 > **¿Qué modelo uso?** Consulta el
 > **[ranking de modelos soportados y probados en DGX Spark](docs/es/modelos-probados.md#ranking-de-modelos-de-texto)**:
-> 32 modelos de texto, voz, imagen y visión medidos en un Spark real, con
-> velocidad, tamaño, parámetros y enlace a Hugging Face u Ollama.
+> 47 resultados de texto, voz, imagen y visión medidos en un Spark real, con
+> velocidad, tamaño, parámetros, si el modelo razona y enlace a Hugging Face u Ollama.
 
 ### Almacenamiento
 
@@ -573,7 +573,7 @@ existen dos perfiles de solo lectura que se gestionan desde *Modelos*:
 ### App del perfil
 
 Un perfil puede tener una **app** asociada: un directorio del home del usuario
-del servicio (por ejemplo `/home/nvidia/ragkit`) con su propio `start.sh` que
+del servicio (por ejemplo `/home/nvidia/rag-ai`) con su propio `start.sh` que
 acepta `start`, `stop`, `restart` y `status` (código 0 si está en marcha).
 
 - Al cargar el perfil, cuando la inferencia ya responde, MyDGX ejecuta

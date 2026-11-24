@@ -250,12 +250,15 @@ Detalle en [Asistente MyDGX](asistente-mydgx.md).
 | POST | `/v1/chat/completions` | Chat OpenAI (streaming incluido). |
 | POST | `/v1/completions` | Completado de texto clásico. |
 | POST | `/v1/responses` | API Responses de OpenAI. |
+| POST | `/v1/responses/compact` | Compacta una entrada Responses mediante el proveedor seleccionado. Si el proveedor no tiene compactación nativa, MyDGX devuelve un mensaje resumen reutilizable en texto y lo marca como `mydgx.compaction_format=plaintext-summary-v1`; nunca etiqueta texto plano como contenido cifrado. |
+| POST | `/v1/responses/input_tokens` | Cuenta los tokens de entrada de Responses localmente mediante LiteLLM, sin inferencia. No admite identificadores `conversation` almacenados. |
 | POST | `/v1/messages` | API Messages de Anthropic (para Claude Code). |
 | POST | `/v1/messages/count_tokens` | Recuento de tokens estilo Anthropic. |
 | POST | `/v1/embeddings` | Embeddings. |
 | POST | `/v1/rerank` | Reranking de documentos. |
 | POST | `/v1/redact` | Redacción de datos personales con un perfil de Privacy Filter. |
 | POST | `/v1/images/generations` | Generación de imagen (ComfyUI). |
+| POST | `/v1/images/edits` | Edición img2img o inpainting mediante ComfyUI. Acepta JSON con data URLs o multipart; no descarga imágenes remotas. |
 | POST | `/v1/audio/transcriptions` | Transcripción (Whisper). |
 | POST | `/v1/audio/translations` | Traducción de audio al inglés (Whisper). |
 | POST | `/v1/audio/speech` | Síntesis de voz (TTS). |
@@ -264,6 +267,8 @@ Detalle en [Asistente MyDGX](asistente-mydgx.md).
 | GET | `/v1/videos/{video_id}` | Estado de un vídeo. |
 | GET | `/v1/videos/{video_id}/content` | Descarga el vídeo terminado. |
 | DELETE | `/v1/videos/{video_id}` | Borra el vídeo y su trabajo. |
+| POST | `/internal/litellm/{alias}/v1/chat/completions` | Tramo interno que usa el LiteLLM integrado para Anthropic Messages. Solo acepta el token que se genera en cada arranque, desde el propio host del gateway. No es para clientes. |
+| POST | `/internal/litellm/{alias}/v1/responses` | El mismo tramo interno para la API Responses: reenvía al endpoint Responses nativo del runtime con el interruptor de razonamiento aplicado. No es para clientes. |
 
 ```bash
 curl -s http://127.0.0.1:4000/v1/chat/completions \
@@ -271,6 +276,20 @@ curl -s http://127.0.0.1:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"ALIAS_DEL_PERFIL","messages":[{"role":"user","content":"Hola"}]}'
 ```
+
+### Razonamiento
+
+Los modelos que saben pensar muestran su razonamiento en todos los formatos de API:
+
+| API | Cómo pedirlo | Qué devuelve |
+|---|---|---|
+| Chat Completions | `reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`), `reasoning: {"effort", "enabled", "exclude"}`, `thinking: {"type": "enabled"}` o `enable_thinking` | `message.reasoning_content`; en streaming, `delta.reasoning_content` mientras el modelo piensa. |
+| Responses | `reasoning: {"effort": "high"}` | Un elemento de salida `reasoning` y eventos `response.reasoning_*` en streaming. |
+| Anthropic Messages | `thinking: {"type": "enabled", "budget_tokens": N}` | Bloques de contenido `thinking`. |
+
+En llama.cpp, MyDGX convierte la petición en el interruptor de la plantilla de chat (`enable_thinking`, `thinking`, `reasoning_effort`). Si la petición no trae ninguno de estos parámetros, manda el ajuste **Razonamiento desactivado** del perfil. Si un modelo escribe `<think>…</think>` dentro del texto, MyDGX lo pasa a `reasoning_content`. El campo `reasoning` de Ollama también se copia a `reasoning_content`. `reasoning.exclude: true` quita el razonamiento de la respuesta. `budget_tokens` y `reasoning.max_tokens` solo activan el razonamiento; llama.cpp no tiene presupuesto por petición.
+
+`/v1/models` indica `capabilities.reasoning` (el modelo sabe pensar) y `capabilities.reasoning_default` (piensa sin pedírselo).
 
 Configuración de clientes (OpenCode, Claude Code, Open WebUI, SDK de OpenAI) en
 [Clientes del gateway](gateway-clientes.md).

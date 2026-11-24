@@ -1633,6 +1633,16 @@ def dashboard_password() -> str:
     return (settings.mydgx_dashboard_password or "").strip()
 
 
+# deploy.sh and the tray use this fixed path: the tray copies the password only until the first login.
+DASHBOARD_PASSWORD_CLAIMED = ROOT / "data" / ".dashboard-password-claimed"
+
+
+def mark_dashboard_password_claimed() -> None:
+    with suppress(OSError):
+        DASHBOARD_PASSWORD_CLAIMED.parent.mkdir(parents=True, exist_ok=True)
+        DASHBOARD_PASSWORD_CLAIMED.touch(mode=0o600, exist_ok=True)
+
+
 def dashboard_session_ttl_seconds() -> int:
     """Inactivity timeout: the dashboard renews the session while the user is active."""
     return max(60, min(24 * 60 * 60, int(settings.mydgx_session_ttl_minutes) * 60))
@@ -3260,9 +3270,9 @@ def persist_model_metrics(samples: list[dict[str, Any]]) -> None:
         connection.commit()
 
 
-LLAMA_CPP_RUNTIME = "llama.cpp v1.0.0 · CUDA 13 · sm_121"
+LLAMA_CPP_RUNTIME = "llama.cpp b12669 · CUDA 13 · sm_121"
 # Labels written by earlier releases, when profiles were tied to a specific build.
-LEGACY_LLAMA_CPP_LABELS = ("llama.cpp b10679", "llama.cpp b11429")
+LEGACY_LLAMA_CPP_LABELS = ("llama.cpp b10679", "llama.cpp b11429", "llama.cpp v1.0.0")
 
 SEED_DISMISSED_KEY = "profiles.seed_dismissed"
 
@@ -3329,7 +3339,7 @@ def migrate_legacy_runtime_labels() -> None:
         db.execute(
             "UPDATE profiles SET runtime_requirement=replace(runtime_requirement, ?, ?), updated_at=? "
             "WHERE runtime_requirement LIKE ?",
-            (legacy, "llama.cpp v1.0.0", now, f"{legacy}%"),
+            (legacy, "llama.cpp b12669", now, f"{legacy}%"),
         )
 
 
@@ -3841,7 +3851,9 @@ def profile_memory_plan(profile: dict[str, Any]) -> dict[str, Any]:
     memory = psutil.virtual_memory()
     reserve = int(profile.get("memory_reserve_mb") or 4096)
     capacity = max(0, memory.total // (1024 * 1024) - reserve)
-    required = sum(item["estimated_memory_mb"] for item in estimates)
+    required = sum(grouped_memory_mb([
+        (planned_model_signature(model), item["estimated_memory_mb"]) for model, item in zip(models, estimates)
+    ]).values())
     ports = [int(model["port"]) for model in models if model["engine"] == "llama.cpp"]
     duplicate_ports = sorted({port for port in ports if ports.count(port) > 1})
     return {
@@ -4327,6 +4339,25 @@ def planned_model_signature(model: dict[str, Any]) -> str:
         )
 
 
+def signature_memory_group(signature: str) -> str:
+    """External services (mydgx-tts, Whisper) hold one model per endpoint, so their aliases share one budget."""
+    with suppress(ValueError, TypeError):
+        data = json.loads(signature)
+        endpoint = urlparse(str(data.get("endpoint_url") or "")) if isinstance(data, dict) and "args" not in data else None
+        if endpoint and endpoint.hostname:
+            return f"external:{endpoint.hostname}:{endpoint.port}"
+    return signature
+
+
+def grouped_memory_mb(items: list[tuple[str, int]]) -> dict[str, int]:
+    """Largest estimate per memory group, from (signature, estimated_mb) pairs."""
+    groups: dict[str, int] = {}
+    for signature, estimate in items:
+        group = signature_memory_group(signature)
+        groups[group] = max(groups.get(group, 0), estimate)
+    return groups
+
+
 def local_port_available(port: int) -> bool:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -4510,13 +4541,11 @@ def profiles_runtime_plan(profiles: list[dict[str, Any]]) -> dict[str, Any]:
                 "signature": signature,
                 "estimated_memory_mb": estimate["estimated_memory_mb"],
             })
-    required_mb = sum(item["estimated_memory_mb"] for item in unique.values())
+    groups = grouped_memory_mb([(signature, item["estimated_memory_mb"]) for signature, item in unique.items()])
+    required_mb = sum(groups.values())
     current_signatures = set(_runtime_model_signatures.values())
-    incremental_mb = sum(
-        item["estimated_memory_mb"]
-        for signature, item in unique.items()
-        if signature not in current_signatures
-    )
+    current_groups = {signature_memory_group(signature) for signature in current_signatures}
+    incremental_mb = sum(mb for group, mb in groups.items() if group not in current_groups)
     available_mb = memory.available // (1024 * 1024)
     fits_total = required_mb <= capacity_mb
     fits_available = (
@@ -4878,6 +4907,35 @@ async def ensure_profile_app(profile_id: str, name: str) -> None:
                 f"{name} no arrancó con el perfil; la inferencia sigue cargada. Revisa logs/apps/{name}.log",
                 target=name, log=profile_app_log_tail(name, 4000),
             )
+
+
+PROFILE_APP_ENDPOINT_WAIT_SECONDS = 60
+
+
+async def prestart_profile_app_for_endpoints(profile: dict[str, Any], models: list[dict[str, Any]]) -> bool:
+    """Start the profile's app before probing endpoints when it is the server behind them.
+
+    Apps such as tts-lab expose the endpoint of the profile's external models, so they must be
+    running before the reachability check. Apps that consume inference still start afterwards.
+    """
+    name = str(profile.get("app") or "").strip()
+    if not name:
+        return False
+    external = [
+        model for model in models
+        if model["engine"] not in {"llama.cpp", "privacy-filter"} and str(model.get("endpoint_url") or "").strip()
+    ]
+    pending = [model for model in external if not await external_endpoint_reachable(model, timeout=2)]
+    if not pending:
+        return False
+    _runtime_profile_apps[profile["id"]] = name
+    await ensure_profile_app(profile["id"], name)
+    deadline = time.monotonic() + PROFILE_APP_ENDPOINT_WAIT_SECONDS
+    while True:
+        pending = [model for model in pending if not await external_endpoint_reachable(model, timeout=2)]
+        if not pending or time.monotonic() >= deadline:
+            return True
+        await asyncio.sleep(1)
 
 
 def schedule_profile_app(profile: dict[str, Any]) -> str:
@@ -5317,6 +5375,53 @@ async def external_endpoint_reachable(model: dict[str, Any], timeout: float = 2)
     return False
 
 
+_tts_warmups: dict[str, asyncio.Task[None]] = {}
+
+
+def is_managed_tts_model(model: dict[str, Any]) -> bool:
+    if str(model.get("task") or "") != "tts":
+        return False
+    if model.get("api_protocol") == "mydgx-tts":
+        return True
+    endpoint, managed = urlparse(str(model.get("endpoint_url") or "")), urlparse(settings.tts_url)
+    return bool(endpoint.hostname) and (endpoint.hostname, endpoint.port) == (managed.hostname, managed.port)
+
+
+async def warm_managed_tts(model: dict[str, Any]) -> None:
+    """Load the profile's TTS model in the shared CUDA worker so the first request is not a cold load."""
+    endpoint = str(model.get("endpoint_url") or "").rstrip("/")
+    repo = str(model.get("model_ref") or "").strip()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            loaded = (await client.get(f"{endpoint}/health")).json().get("loaded")
+        # One worker serves every profile: never evict a model that is already loaded.
+        if loaded or not repo:
+            return
+        started = time.monotonic()
+        await load_managed_tts_model(repo)
+        db.log(
+            "info", "profile", "profile.tts.warmed",
+            f"{model['name']}: modelo TTS precargado en {round(time.monotonic() - started, 1)} s",
+            detail={"model_ref": repo},
+        )
+    except (httpx.HTTPError, ValueError, AttributeError, RuntimeError) as exc:
+        db.log(
+            "warning", "profile", "profile.tts.warmup_failed",
+            f"{model['name']}: no se pudo precargar el modelo TTS",
+            detail={"model_ref": repo, "error": redact_log_text(str(exc), 300)},
+        )
+
+
+def schedule_tts_warmup(model: dict[str, Any]) -> None:
+    endpoint = str(model.get("endpoint_url") or "").rstrip("/")
+    current = _tts_warmups.get(endpoint)
+    if current and not current.done():
+        return
+    task = asyncio.create_task(warm_managed_tts(model))
+    _tts_warmups[endpoint] = task
+    task.add_done_callback(lambda done: _tts_warmups.pop(endpoint, None) if _tts_warmups.get(endpoint) is done else None)
+
+
 async def launch_profile_model(
     profile: dict[str, Any],
     model: dict[str, Any],
@@ -5354,6 +5459,8 @@ async def launch_profile_model(
             raise ExternalRuntimeUnavailable(
                 f"El endpoint de {model['name']} no está disponible"
             )
+        if is_managed_tts_model(model):
+            schedule_tts_warmup(model)
         _external_model_ids.add(model_id)
         _runtime_effective_contexts[model_id] = context
         _runtime_model_signatures[model_id] = model_runtime_signature(model, context)
@@ -5508,6 +5615,9 @@ async def start_profile_process(
             _runtime_profile_id = profile["id"]
             if persist_desired:
                 save_desired_profile_ids(_runtime_profile_ids)
+            for model in models:
+                if is_managed_tts_model(model):
+                    schedule_tts_warmup(model)
             runtime = profile_runtime_status()
             runtime["app"] = schedule_profile_app(profile)
             runtime["reused_models"] = len(models)
@@ -5525,11 +5635,13 @@ async def start_profile_process(
     reused_model_ids: set[str] = set()
     stop_marker = runtime_stop_marker(profile["id"])
     _runtime_profile_id = profile["id"]
+    prestarted_app = False
     try:
         estimates = {
             item["model_id"]: item
             for item in profile_memory_plan(profile)["models"]
         }
+        prestarted_app = await prestart_profile_app_for_endpoints(profile, models)
         for model in models:
             estimate = estimates[model["id"]]
             configured_context = int(model.get("context_size") or 8192)
@@ -5549,6 +5661,8 @@ async def start_profile_process(
             if reusable_key:
                 mapping[model["id"]] = reusable_key
                 reused_model_ids.add(model["id"])
+                if is_managed_tts_model(model):
+                    schedule_tts_warmup(model)
                 context = _runtime_effective_contexts.get(reusable_key, configured_context)
                 record_model_run(
                     profile["id"],
@@ -5656,6 +5770,8 @@ async def start_profile_process(
                 _runtime_profile_ids.remove(profile["id"])
         _runtime_profile_id = _runtime_profile_ids[-1] if _runtime_profile_ids else None
         publish_runtime_snapshot()
+        if prestarted_app and profile["id"] not in _runtime_profile_ids:
+            await release_profile_app(profile["id"])
         raise
 
 
@@ -6059,6 +6175,7 @@ async def dashboard_auth_login(
         register_dashboard_login_failure(client)
         raise HTTPException(status_code=401, detail="Contraseña incorrecta")
     _dashboard_login_failures.pop(client, None)
+    mark_dashboard_password_claimed()
     token, expires_at = create_dashboard_session()
     return dashboard_session_response(request, token, expires_at)
 
@@ -6498,6 +6615,7 @@ async def overview() -> dict[str, Any]:
             for profile in running_profiles()
         ],
         "web_apps": await profile_web_apps(),
+        "dashboard_password_claimed": DASHBOARD_PASSWORD_CLAIMED.exists(),
     }
 
 
@@ -8028,6 +8146,7 @@ async def models() -> dict[str, Any]:
             model["memory_estimate"] = memory_summary(effective)
             model["manual_settings"] = bool(model_overrides(f"huggingface:{model['repo_id']}"))
             model["vision"] = bool(effective and effective.get("mmproj_filename"))
+            model["reasoning"] = model_reasoning_state(effective) if effective else ""
             if effective and effective.get("spec_type"):
                 model["speculative"] = {
                     "spec_type": effective["spec_type"],
@@ -9009,6 +9128,9 @@ QUICK_MIN_CONTEXT = {"chat": 32_768, "vision": 8192}
 _GGUF_SCALAR_FORMATS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
 
 
+GGUF_CHAT_TEMPLATE_MAX = 262_144
+
+
 def parse_gguf_header(handle: Any, partial: bool = False) -> dict[str, Any]:
     """GGUF header scalars, short strings and numeric arrays (≤4096 items); skips the tokenizer and never reads tensors.
 
@@ -9052,13 +9174,13 @@ def parse_gguf_header(handle: Any, partial: bool = False) -> dict[str, Any]:
             offset = end
         handle.seek(base + offset)
 
-    def value(kind: int, keep: bool) -> Any:
+    def value(kind: int, keep: bool, max_string: int = 256) -> Any:
         if kind in _GGUF_SCALAR_FORMATS:
             fmt = _GGUF_SCALAR_FORMATS[kind]
             return struct.unpack(fmt, read(struct.calcsize(fmt)))[0]
         if kind == 8:
             size = struct.unpack("<Q", read(8))[0]
-            if keep and size <= 256:
+            if keep and size <= max_string:
                 return read(size).decode("utf-8", errors="replace")
             skip(size)
             return None
@@ -9091,7 +9213,10 @@ def parse_gguf_header(handle: Any, partial: bool = False) -> dict[str, Any]:
             key = read(struct.unpack("<Q", read(8))[0]).decode("utf-8", errors="replace")
             kind = struct.unpack("<I", read(4))[0]
             string_arrays[-1] = 0
-            item = value(kind, not key.startswith("tokenizer."))
+            if key == "tokenizer.chat_template":
+                item = value(kind, True, GGUF_CHAT_TEMPLATE_MAX)
+            else:
+                item = value(kind, not key.startswith("tokenizer."))
             if item is not None:
                 metadata[key] = item
             if key == "tokenizer.ggml.tokens" and string_arrays[-1]:
@@ -9156,6 +9281,48 @@ def gguf_arch_value(metadata: dict[str, Any], name: str) -> Any:
 def gguf_context_length(path: Path) -> int | None:
     value = gguf_arch_value(gguf_metadata(path), "context_length")
     return int(value) if isinstance(value, int) and value > 0 else None
+
+
+REASONING_FAMILIES = (
+    "qwen3", "qwq", "deepseek-r1", "deepseek-v3.1", "deepseek-v3.2", "gpt-oss",
+    "glm-4.5", "glm-4.6", "glm-4.7", "glm-5", "magistral", "phi-4-reasoning",
+    "nemotron", "seed-oss", "kimi-k2", "minimax-m", "olmo-3", "inkling", "thinking",
+)
+NON_REASONING_MARKERS = ("instruct-2507", "coder", "-vl-instruct")
+REASONING_TEMPLATE_MARKERS = ("enable_thinking", "reasoning_effort", "<think>")
+
+
+def model_chat_template(model: dict[str, Any]) -> str:
+    path = model_gguf_path(model)
+    return str(gguf_metadata(path).get("tokenizer.chat_template") or "") if path else ""
+
+
+def model_reasoning_capability(model: dict[str, Any]) -> bool:
+    if str(model.get("task") or "chat") not in {"chat", "vision"}:
+        return False
+    llama = model.get("engine", "llama.cpp") == "llama.cpp"
+    if llama:
+        if not bool(model.get("jinja", True)):
+            return False
+        # The GGUF's own template is authoritative; names only cover GGUFs without one.
+        if template := model_chat_template(model):
+            return any(marker in template for marker in REASONING_TEMPLATE_MARKERS)
+    elif not bool(model.get("reasoning_off", True)):
+        return True
+    names = " ".join(
+        str(model.get(key) or "")
+        for key in ("model_ref", "model_repo", "name", "model_alias", "_runtime_model_alias")
+    ).casefold()
+    if any(marker in names for marker in NON_REASONING_MARKERS):
+        return False
+    return any(family in names for family in REASONING_FAMILIES)
+
+
+def model_reasoning_state(model: dict[str, Any]) -> str:
+    """'on' when it reasons by default, 'optional' when a client has to ask, '' when it can't."""
+    if not model_reasoning_capability(model):
+        return ""
+    return "optional" if bool(model.get("reasoning_off", True)) else "on"
 
 
 KV_CACHE_BYTES_PER_ELEMENT = {
@@ -12868,6 +13035,7 @@ async def profiles() -> dict[str, Any]:
                 else profile_model_is_downloaded(model)
             )
             model["uncensored"] = profile_model_uncensored(model)
+            model["reasoning"] = model_reasoning_state(model)
             model.pop("additional_models_json", None)
             model.pop("model_files_json", None)
         profile["downloaded"] = all(model["downloaded"] for model in models if model.get("enabled", True))
@@ -14765,7 +14933,7 @@ def delete_managed_comfyui_output(output_file: dict[str, Any]) -> None:
     filename = str(output_file.get("filename") or "")
     subfolder = str(output_file.get("subfolder") or "")
     output_type = str(output_file.get("type") or "output")
-    directory = "temp" if output_type == "temp" else "output"
+    directory = output_type if output_type in {"temp", "input"} else "output"
     root = (managed_comfyui_source() / directory).resolve()
     candidate = (root / subfolder / filename).resolve()
     if candidate != root and root not in candidate.parents:
@@ -14920,6 +15088,169 @@ async def execute_managed_comfyui(
         "artifact_id": artifact_id,
         "artifact_url": f"/api/artifacts/{artifact_id}",
         "size_bytes": len(content),
+    }
+
+
+def comfyui_image_edit_workflow(
+    prompt: str,
+    image_name: str,
+    *,
+    mask_name: str = "",
+    denoise: float = 0.75,
+) -> dict[str, Any]:
+    """Build the managed Flux img2img/inpaint graph from validated upload names."""
+    for name in (image_name, mask_name):
+        if name and (
+            Path(name).is_absolute()
+            or ".." in Path(name).parts
+            or not re.fullmatch(r"[A-Za-z0-9._/-]+", name)
+        ):
+            raise ValueError("Nombre de entrada ComfyUI inválido")
+    workflow = comfyui_workflow(
+        "image-generation",
+        prompt,
+        persist_output=False,
+    )
+    workflow["10"] = {
+        "inputs": {"image": image_name},
+        "class_type": "LoadImage",
+    }
+    if mask_name:
+        workflow["11"] = {
+            # OpenAI masks mark editable pixels as transparent; ComfyUI's alpha mask is 1 - alpha.
+            "inputs": {"image": mask_name, "channel": "alpha"},
+            "class_type": "LoadImageMask",
+        }
+        workflow["5"] = {
+            "inputs": {
+                "pixels": ["10", 0],
+                "vae": ["4", 2],
+                "mask": ["11", 0],
+                "grow_mask_by": 6,
+            },
+            "class_type": "VAEEncodeForInpaint",
+        }
+    else:
+        workflow["5"] = {
+            "inputs": {"pixels": ["10", 0], "vae": ["4", 2]},
+            "class_type": "VAEEncode",
+        }
+    workflow["3"]["inputs"]["latent_image"] = ["5", 0]
+    workflow["3"]["inputs"]["denoise"] = max(0.05, min(float(denoise), 1.0))
+    return workflow
+
+
+async def execute_managed_comfyui_edit(
+    prompt: str,
+    image: bytes,
+    image_mime: str,
+    timeout: float,
+    base_url: str,
+    *,
+    mask: bytes | None = None,
+    mask_mime: str = "image/png",
+    denoise: float = 0.75,
+) -> dict[str, Any]:
+    """Upload image inputs and run the managed ComfyUI img2img/inpaint workflow."""
+    suffixes = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+    if image_mime not in suffixes or not image:
+        raise HTTPException(status_code=415, detail="Formato de imagen no permitido")
+    if mask is not None and (mask_mime not in suffixes or not mask):
+        raise HTTPException(status_code=415, detail="Formato de máscara no permitido")
+    maximum = settings.multimodal_max_upload_mb * 1024 * 1024
+    if len(image) > maximum or (mask is not None and len(mask) > maximum):
+        raise HTTPException(status_code=413, detail="Imagen demasiado grande")
+
+    base_url = base_url.rstrip("/")
+    client_id = str(uuid.uuid4())
+    uploaded: list[dict[str, Any]] = []
+    output_file: dict[str, Any] | None = None
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0)) as client:
+            async def upload(content: bytes, mime: str, stem: str) -> str:
+                response = await client.post(
+                    f"{base_url}/upload/image",
+                    files={"image": (f"{stem}-{uuid.uuid4().hex}{suffixes[mime]}", content, mime)},
+                    data={"type": "input", "overwrite": "false"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                name = str(payload.get("name") or "")
+                subfolder = str(payload.get("subfolder") or "")
+                combined = f"{subfolder}/{name}" if subfolder else name
+                if (
+                    not name
+                    or Path(combined).is_absolute()
+                    or ".." in Path(combined).parts
+                    or not re.fullmatch(r"[A-Za-z0-9._/-]+", combined)
+                ):
+                    raise ValueError("Nombre de upload ComfyUI inválido")
+                uploaded.append({"filename": name, "subfolder": subfolder, "type": "input"})
+                return combined
+
+            image_name = await upload(image, image_mime, "mydgx-edit")
+            mask_name = await upload(mask, mask_mime, "mydgx-mask") if mask is not None else ""
+            workflow = comfyui_image_edit_workflow(
+                prompt,
+                image_name,
+                mask_name=mask_name,
+                denoise=denoise,
+            )
+            queued = await client.post(
+                f"{base_url}/prompt",
+                json={"prompt": workflow, "client_id": client_id},
+            )
+            queued.raise_for_status()
+            prompt_id = str(queued.json().get("prompt_id") or "")
+            if not re.fullmatch(r"[A-Za-z0-9-]{8,}", prompt_id):
+                raise ValueError("prompt_id inválido")
+            deadline = time.monotonic() + timeout
+            history: dict[str, Any] | None = None
+            while time.monotonic() < deadline:
+                response = await client.get(f"{base_url}/history/{prompt_id}")
+                response.raise_for_status()
+                payload = response.json()
+                if isinstance(payload, dict) and isinstance(payload.get(prompt_id), dict):
+                    history = payload[prompt_id]
+                    break
+                await asyncio.sleep(1)
+            if not history:
+                raise httpx.TimeoutException("ComfyUI agotó el tiempo")
+            output_file = next(
+                (
+                    item
+                    for output in (history.get("outputs") or {}).values()
+                    if isinstance(output, dict)
+                    for item in (output.get("images") or [])
+                    if isinstance(item, dict) and item.get("filename")
+                ),
+                None,
+            )
+            if not output_file:
+                raise ValueError("ComfyUI no devolvió una imagen editada")
+            content, upstream_content_type = await fetch_comfyui_view(
+                client,
+                base_url,
+                output_file,
+                maximum,
+            )
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="ComfyUI no completó la edición") from exc
+    finally:
+        # User images must not linger in ComfyUI's input/ or temp/ folders.
+        for item in [*uploaded, *([output_file] if output_file else [])]:
+            with suppress(ValueError):
+                delete_managed_comfyui_output(item)
+    suffix = Path(str(output_file["filename"])).suffix.lower()
+    content_type = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }.get(suffix, upstream_content_type)
+    return {
+        "content_type": content_type,
+        "data_base64": base64.b64encode(content).decode("ascii"),
     }
 
 

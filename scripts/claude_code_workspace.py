@@ -27,6 +27,7 @@ from opencode_workspace import (
     discover,
     max_output_tokens,
     select_model,
+    select_small_model,
     with_secrets,
 )
 
@@ -125,7 +126,14 @@ def write_mcp(workspace: Path, base_url: str, active: bool, web_search: bool) ->
     return path
 
 
-def write_config(workspace: Path, base_url: str, selected: dict, active: bool, web_search: bool = True) -> Path:
+def write_config(
+    workspace: Path,
+    base_url: str,
+    selected: dict,
+    active: bool,
+    web_search: bool = True,
+    small: dict | None = None,
+) -> Path:
     config_dir = workspace / ".claude"
     config_dir.mkdir(parents=True, exist_ok=True)
     model = selected["id"]
@@ -149,6 +157,11 @@ def write_config(workspace: Path, base_url: str, selected: dict, active: bool, w
         "DISABLE_COST_WARNINGS": "1",
     }
     env.update({f"ANTHROPIC_DEFAULT_{tier}_MODEL": model for tier in MODEL_TIERS})
+    if small:
+        # Claude Code sends titles, summaries and checks to the haiku tier.
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = small["id"]
+    if not selected.get("reasoning"):
+        env["CLAUDE_CODE_DISABLE_THINKING"] = "1"
 
     deny = ["WebFetch", "WebSearch", "Task", "Agent", "Workflow", "EnterWorktree", *SECRET_READS]
     search_tools = ["mcp__searxng", "mcp__searxng__web_search"] if web_search else []
@@ -175,6 +188,9 @@ def write_config(workspace: Path, base_url: str, selected: dict, active: bool, w
         "autoMemoryEnabled": False,
         "enableAllProjectMcpServers": False,
     }
+    if selected.get("reasoning"):
+        # Follow the profile default; Tab toggles thinking, /effort sets its level.
+        config["alwaysThinkingEnabled"] = bool(selected.get("reasoning_default"))
     # Fuera de settings.json: Claude Code ignora los allow de proyecto hasta
     # aceptar el diálogo de confianza; --settings los aplica siempre.
     path = config_dir / "mydgx-settings.json"
@@ -232,7 +248,9 @@ def main() -> int:
             file=sys.stderr,
         )
     selected = select_model(models, args.model)
-    settings = write_config(workspace, args.base_url, selected, args.active, web_search)
+    settings = write_config(
+        workspace, args.base_url, selected, args.active, web_search, select_small_model(models, selected)
+    )
     mcp = write_mcp(workspace, args.base_url, args.active, web_search) or ""
     print(f"{selected['id']}\t{settings}\t{mcp}")
     return 0

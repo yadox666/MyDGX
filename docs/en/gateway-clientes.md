@@ -11,19 +11,33 @@ conversational profile is loaded.
 
 - OpenAI Chat Completions: `POST /v1/chat/completions`
 - OpenAI Responses: `POST /v1/responses`
+- OpenAI Responses compaction: `POST /v1/responses/compact`
+- OpenAI Responses input token count: `POST /v1/responses/input_tokens`
 - Anthropic Messages: `POST /v1/messages`
 - Anthropic token count: `POST /v1/messages/count_tokens`
 - Catalog: `GET /v1/models`, with `context_length` and `capabilities`
   (`tools`, `reasoning`, `vision`) per alias. `tools` is `false` for
   llama.cpp models without a Jinja template.
-- Completions, embeddings, image, audio, video and reranking: routes described in
+- Completions, embeddings, image generation and editing, audio, video and reranking: routes described in
   the README, depending on the model's task.
 - Managed ComfyUI: `POST /v1/images/generations`, `POST /v1/videos`,
   `GET /v1/videos/{id}` and `GET /v1/videos/{id}/content`.
 
-The Anthropic and Responses endpoints go through LiteLLM. Chat Completions and the
-multimedia capabilities keep the native proxy. The requested model must always
-be a healthy alias of the active profile.
+The Anthropic and Responses endpoints go through LiteLLM. Input token counting
+uses the tokenizer selected by LiteLLM and does not run inference; stored
+`conversation` IDs are not supported. Compaction uses the provider's native
+endpoint when available; otherwise MyDGX generates a reusable plaintext summary
+message marked as `plaintext-summary-v1`. Chat Completions and the multimedia
+capabilities keep the native proxy. The requested model must always be a
+healthy alias of the active profile.
+
+Models that can think stream their reasoning in every format: `reasoning_content`
+in Chat Completions, `reasoning` items in Responses and `thinking` blocks in
+Anthropic Messages. Clients ask for it with their usual parameter
+(`reasoning_effort`, `reasoning.effort` or `thinking`); see
+[Reasoning](api.md#reasoning). In Open WebUI, set **Reasoning Effort** in the
+model's advanced parameters (for example `high`) and the thinking appears in a
+collapsible block while the model works.
 
 ## Open WebUI
 
@@ -92,6 +106,15 @@ Use a model with reliable tool calling. The key can be any non-empty value
 when access is localhost only; over the network it must match
 `GATEWAY_API_KEY`.
 
+Reasoning: Claude Code sends `thinking: {"type": "adaptive"}` with
+`output_config.effort`; the gateway turns it into an explicit budget, so the
+local model really thinks. The generated settings follow the profile default
+(`alwaysThinkingEnabled`); Tab toggles thinking and `/effort` (or
+`CLAUDE_CODE_EFFORT_LEVEL`) sets its level. Models that cannot reason get
+`CLAUDE_CODE_DISABLE_THINKING=1`. If a loaded tool-capable model has at most 60%
+of the main model's active parameters, the haiku tier (titles, summaries,
+checks) uses it; `MYDGX_SMALL_MODEL` pins a specific one.
+
 With the gateway's web search enabled, Claude Code receives the `searxng` MCP
 in plan and active modes. The tool calls `POST /v1/search`, and the native `WebSearch`
 and `WebFetch` remain denied. The key is referenced as
@@ -133,6 +156,19 @@ Completions:
 Do not use the `openai` provider against a backend that only supports Chat
 Completions; that provider may select Responses. MyDGX also exposes
 Responses through LiteLLM when the client requires it.
+
+Reasoning (OpenCode 1.x): models that can think get the `none`, `low`,
+`medium` and `high` variants, which send `reasoning_effort`. Pick one with the
+variant shortcut or `opencode run --variant high`; without a variant the
+profile default applies. `small_model` (titles and summaries) uses a smaller
+loaded model if there is one, or else the `<alias>-fast` entry: the same model
+with `reasoning_effort: none`. `MYDGX_SMALL_MODEL` pins a specific one.
+
+Tools: when the request declares `tools`, the gateway delivers each call
+complete right before the final chunk, with its JSON arguments repaired if the
+model malformed them (trailing commas, unclosed braces, code fences). It also
+turns `<tool_call>{"name": …, "arguments": …}</tool_call>` blocks left in the
+text into real calls, but only for tools declared in the request.
 
 With the gateway's web search enabled (the default, in
 Settings → Gateway), OpenCode receives the `searxng` MCP in plan and
@@ -202,5 +238,5 @@ curl http://127.0.0.1:4000/v1/models
 
 If Anthropic or Responses returns `adapter_unavailable`, check
 `logs/litellm.log`, the LiteLLM installation, and that there is an active profile with
-a healthy chat/vision model. RAGKit and Voice Agent require their own specific
+a healthy chat/vision model. RAG AI deployments and Voice Agent require their own specific
 adapter; managed ComfyUI is already translated to compatible image and video.

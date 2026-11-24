@@ -188,7 +188,6 @@
 "El alias del equipo no es válido." = "The device alias isn’t valid.";
 "El certificado CA configurado no es válido." = "The configured CA certificate is invalid.";
 "El despliegue falló (código %d). Revisa ~/.MyDGX/logs." = "The deployment failed (code %d). Check ~/.MyDGX/logs.";
-"El DGX no tiene contraseña del dashboard o no se pudo leer por SSH. Vuelve a desplegar para generarla." = "The DGX has no dashboard password or it could not be read over SSH. Deploy again to generate it.";
 "El directorio remoto de despliegue no es válido." = "The remote deployment directory is invalid.";
 "El equipo remoto necesita permisos sudo no interactivos para los comandos de instalación autorizados." = "The remote device needs non-interactive sudo permissions for the authorized install commands.";
 "El equipo remoto no tiene espacio suficiente para completar el despliegue." = "The remote device doesn’t have enough space to complete the deployment.";
@@ -392,6 +391,7 @@
 "No se pudo restaurar la conexión" = "Couldn’t restore the connection";
 "No se puede arrancar el perfil" = "Can't start the profile";
 "No se puede arrancar el perfil: %@" = "Can’t start the profile: %@";
+"No se puede copiar la contraseña del dashboard: solo está disponible hasta el primer inicio de sesión, o no se pudo leer por SSH." = "Cannot copy the dashboard password: it is only available until the first login, or it could not be read over SSH.";
 "No se puede escribir en %@. Mueve MyDGXTray a Aplicaciones y vuelve a intentarlo." = "Can’t write to %@. Move MyDGXTray to Applications and try again.";
 "No se sobrescribirá %@ porque no es un archivo regular seguro." = "%@ won't be overwritten because it isn't a safe regular file.";
 "Nombre" = "Name";

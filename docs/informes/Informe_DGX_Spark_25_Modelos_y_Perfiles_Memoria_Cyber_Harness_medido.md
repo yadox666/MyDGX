@@ -3,7 +3,7 @@ INFORME TÉCNICO / SISTEMAS LOCALES DE IA
 Modelos locales de IA  
 para DGX Spark
 
-Evaluación técnica de 25 modelos GGUF: ciberseguridad, programación, razonamiento, visión y uso general; perfiles para ARTIFEX, OpenCode y RAGKit.
+Evaluación técnica de 25 modelos GGUF: ciberseguridad, programación, razonamiento, visión y uso general; perfiles para Cyber Harness, OpenCode y despliegues RAG AI.
 
 **DGX SPARK · NVIDIA GB10 · 128 GB DE MEMORIA UNIFICADA**
 
@@ -27,7 +27,7 @@ Tu colección reúne ocho modelos especializados en ciberseguridad, con 112 GB a
 
 La selección es heterogénea: modelos orientados a programación, investigación de vulnerabilidades, defensa, visión y uso de herramientas. Por eso es más útil asignar roles que escoger un ganador absoluto.
 
-> **RECOMENDACIÓN PARA ARTIFEX (MEDIDA)**
+> **RECOMENDACIÓN PARA CYBER HARNESS (MEDIDA)**
 > BugHunter v8 y Cyber-Tiel Q5 ya están descargados y probados. Para velocidad, Cyber-Tiel Q5 con su drafter MTP (75–90 tok/s) supera a Q6 (~61 tok/s; 58–74 con MTP) con 4,8 GiB menos de memoria; Q6 queda como referencia de calidad. BugHunter v8 escribe a ~78–80 tok/s frente a ~13 de v7 (~31 con su MTP integrado). OrcaCyber Nano entra mejor sin visión y con MTP; Bimo queda fuera de los perfiles simultáneos: solo llega a 32K de contexto y es el más lento (~31 tok/s).
 
 
@@ -62,7 +62,7 @@ Ubicación declarada de los archivos: ~/.cache/huggingface/hub. Los tamaños son
 | Huihui Qwen3.5 0.8B · azminawwar | Huihui-Qwen3.5-0.8B-abliterated.Q8_0.gguf | 0,8 | mmproj 0,2 GB |
 
 
-**Descargados después del inventario.** BugHunter v8 Q4_K_M (21,2 GB), Cyber-Tiel UD-Q5_K_XL (26,6 GB), el drafter MTP de Cyber-Tiel `mtp-Cyber-Tiel-Coder-35B-A3B.gguf` (1,48 GB, sirve para Q5 y Q6) y Qwen3-Coder-Next abliterated Q4_K_M (48,6 GB). El perfil «ARTIFEX · Cyber-Tiel Q6» usa ya el drafter, en el puerto 18081 que espera ARTIFEX.
+**Descargados después del inventario.** BugHunter v8 Q4_K_M (21,2 GB), Cyber-Tiel UD-Q5_K_XL (26,6 GB), el drafter MTP de Cyber-Tiel `mtp-Cyber-Tiel-Coder-35B-A3B.gguf` (1,48 GB, sirve para Q5 y Q6) y Qwen3-Coder-Next abliterated Q4_K_M (48,6 GB). El perfil «Cyber Harness · Cyber-Tiel Q6» usa ya el drafter, en el puerto 18081 que espera Cyber Harness.
 
 **Fuera del alcance del inventario.** Los modelos generalistas uncensored/abliterated, como Dolphin, Heretic o GPT-OSS Derestricted, se han excluido de esta clasificación específica de ciberseguridad.
 
@@ -95,7 +95,7 @@ Modelo Mixture of Experts basado en Ornith-1.5 mediante una versión abliterated
 
 **Limitaciones.** Parte de la orientación “Cyber” se consigue mediante abliteration, calibración de cuantización y prompting, no mediante un nuevo entrenamiento exhaustivo. El autor declara sacrificios en conocimiento general. No tienes instalado su proyector de visión.
 
-**Papel propuesto.** Analista principal de código, motor de programación y agente técnico supervisado de ARTIFEX.
+**Papel propuesto.** Analista principal de código, motor de programación y agente técnico supervisado de Cyber Harness.
 
 ## 3.2 BugHunter v7 Qwen3.8 27B Q4 · Bug bounty y seguridad web
 
@@ -133,7 +133,7 @@ Ajuste de Qwen2.5-Coder-7B-Instruct: cuatro etapas QLoRA declaradas para conocim
 
 **Limitaciones.** La especialización parece reducir razonamiento general; puede inventar CVEs o versiones. El contexto YaRN debe medirse y las llamadas a herramientas validarse antes de ejecutarse.
 
-**Papel propuesto.** Agente auxiliar de ARTIFEX con permisos acotados, preferentemente solo lectura y JSON validado por esquema.
+**Papel propuesto.** Agente auxiliar de Cyber Harness con permisos acotados, preferentemente solo lectura y JSON validado por esquema.
 
 ## 3.5 Qwen3.8 27B Uncensored Cyber Q6 · Revisor generalista
 
@@ -253,7 +253,7 @@ Tres reglas confirmadas: un drafter MTP solo sirve para el modelo con el que se 
 
 ## 6.3 Seguridad de los agentes
 
-Un modelo uncensored no es necesariamente más fiable ni exacto. Cuando ARTIFEX u OpenCode tienen acceso a shell, archivos o red, conviene aplicar límites a las herramientas independientemente del modelo: permisos de solo lectura por defecto, entornos aislados para ensayos, validación de parámetros, confirmación antes de cambios destructivos y registro de acciones.
+Un modelo uncensored no es necesariamente más fiable ni exacto. Cuando Cyber Harness u OpenCode tienen acceso a shell, archivos o red, conviene aplicar límites a las herramientas independientemente del modelo: permisos de solo lectura por defecto, entornos aislados para ensayos, validación de parámetros, confirmación antes de cambios destructivos y registro de acciones.
 
 La ejecución de pruebas debe limitarse a laboratorios o sistemas con autorización explícita. Para casos reales, los hallazgos deberían confirmarse mediante pruebas reproducibles, evidencia técnica y revisión humana, en lugar de confiar en una respuesta aislada del LLM.
 
@@ -283,11 +283,11 @@ Una batería común es la forma más fiable de decidir qué modelo se convierte 
 
 - Revisar manualmente discrepancias importantes, errores de hechos y referencias inexistentes antes de sacar conclusiones.
 
-# 8. Arquitectura funcional recomendada para ARTIFEX
+# 8. Arquitectura funcional recomendada para Cyber Harness
 
 | **Rol propuesto**                | **Modelo**            | **Estado / siguiente acción**              |
 |----------------------------------|-----------------------|--------------------------------------------|
-| Motor técnico general            | Cyber-Tiel Q5 + MTP (rápido) o Q6 + MTP (calidad) | Activo: Q6 + MTP en 18081 para ARTIFEX; Q5 + MTP en las recetas RECIPE · … |
+| Motor técnico general            | Cyber-Tiel Q5 + MTP (rápido) o Q6 + MTP (calidad) | Activo: Q6 + MTP en 18081 para Cyber Harness; Q5 + MTP en las recetas RECIPE · … |
 | Investigador de vulnerabilidades | BugHunter v8 (rápido) o v7 + MTP | v8 ya instalado; validar calidad frente a v7 con casos reales |
 | Defensa / multimodal             | OrcaCyber Nano        | Sin visión: MTP (73 % aceptación). Con visión: `mmproj` y sin MTP |
 | Agente de herramientas           | Bimo CyberAgent       | Bajo demanda: 32K máximo y ~31 tok/s       |
@@ -308,7 +308,7 @@ Las fichas comunitarias pueden contener información incompleta, benchmarks no r
 
 **Pendiente 2.** Determinar con qué runtime y plantilla se sirven cada modelo y proyector, especialmente en ARM64/GB10.
 
-**Pendiente 3.** Cuantificar velocidad, uso de memoria y calidad con la batería de pruebas real de ARTIFEX.
+**Pendiente 3.** Cuantificar velocidad, uso de memoria y calidad con la batería de pruebas real de Cyber Harness.
 
 **Pendiente 4.** Confirmar licencias efectivas, condiciones de uso y procedencia de los datos antes de un despliegue comercial.
 
@@ -316,10 +316,10 @@ Las fichas comunitarias pueden contener información incompleta, benchmarks no r
 
 La colección cubre adecuadamente cuatro necesidades diferentes: código y agentes técnicos (Cyber-Tiel), investigación de vulnerabilidades web/API (BugHunter v7), defensa y material visual (OrcaCyber Nano), y herramientas automatizadas ligeras (Bimo). El resto de modelos contribuye como segunda opinión, conocimiento temático o soporte experimental.
 
-No priorizaría descargar más modelos antes de medir el rendimiento y la calidad de los presentes. El mayor retorno inmediato está en ampliar los perfiles de ARTIFEX a OrcaCyber y Bimo, poner límites operativos adecuados y ejecutar una evaluación de 100 casos para validar o corregir la clasificación.
+No priorizaría descargar más modelos antes de medir el rendimiento y la calidad de los presentes. El mayor retorno inmediato está en ampliar los perfiles de Cyber Harness a OrcaCyber y Bimo, poner límites operativos adecuados y ejecutar una evaluación de 100 casos para validar o corregir la clasificación.
 
 > **DECISIÓN OPERATIVA (MEDIDA)**
-> Núcleo: Cyber-Tiel con su drafter MTP (Q6 para ARTIFEX por calidad, Q5 donde importe la velocidad o la memoria) y BugHunter v8 como especialista web/API rápido, con v7 + MTP como referencia hasta comparar calidad. OrcaCyber Nano entra sin visión y con MTP; con capturas, en un perfil aparte con `mmproj`. Bimo, bajo demanda. Usar Qwen Cyber como revisor, reservar BaronLLM para documentación y relegar Huihui a experimentación.
+> Núcleo: Cyber-Tiel con su drafter MTP (Q6 para Cyber Harness por calidad, Q5 donde importe la velocidad o la memoria) y BugHunter v8 como especialista web/API rápido, con v7 + MTP como referencia hasta comparar calidad. OrcaCyber Nano entra sin visión y con MTP; con capturas, en un perfil aparte con `mmproj`. Bimo, bajo demanda. Usar Qwen Cyber como revisor, reservar BaronLLM para documentación y relegar Huihui a experimentación.
 
 
 # Fuentes y repositorios
@@ -348,7 +348,7 @@ AMPLIACIÓN DEL INFORME / PARTE II
 
 # 11. Modelos generales, programación y otras especialidades
 
-Evaluación de 17 modelos de chat adicionales descargados en el DGX Spark. Esta segunda parte complementa la evaluación previa de los ocho modelos de ciberseguridad y permite diseñar un catálogo operativo de 25 modelos conversacionales para ARTIFEX, OpenCode y RAGKit · Paramita.
+Evaluación de 17 modelos de chat adicionales descargados en el DGX Spark. Esta segunda parte complementa la evaluación previa de los ocho modelos de ciberseguridad y permite diseñar un catálogo operativo de 25 modelos conversacionales para Cyber Harness, OpenCode y RAG AI · Paramita.
 
 Fecha de análisis: 21 de noviembre de 2026. Equipo: NVIDIA DGX Spark, GB10, 128 GB de memoria unificada. Las cifras de espacio se refieren a ficheros descargados, no a memoria residente ni a rendimiento medido en el equipo.
 
@@ -361,7 +361,7 @@ Fecha de análisis: 21 de noviembre de 2026. Equipo: NVIDIA DGX Spark, GB10, 128
 
 Las recomendaciones combinan fichas de los publicadores, objetivos de entrenamiento, características de arquitectura y el formato efectivamente descargado. Ninguna puntuación de ranking de esta adenda es un benchmark realizado en este Spark. Una variante “abliterated”, “uncensored”, “heretic” o “derestricted” modifica sobre todo el comportamiento de rechazo; no demuestra por sí misma más conocimientos, mejor programación ni más fiabilidad.
 
-Se valoran seis dimensiones: adecuación de las tareas, calidad de evidencias, facilidad de ejecución en GB10, compatibilidad del motor de inferencia, riesgos de cuantización y utilidad para una arquitectura con varios modelos. Nueve entradas tienen mmproj descargado; ello habilita potencialmente imágenes si el runtime admite la arquitectura exacta. No implica que la visión funcione ya en ARTIFEX ni que el modelo acepte salida de imagen.
+Se valoran seis dimensiones: adecuación de las tareas, calidad de evidencias, facilidad de ejecución en GB10, compatibilidad del motor de inferencia, riesgos de cuantización y utilidad para una arquitectura con varios modelos. Nueve entradas tienen mmproj descargado; ello habilita potencialmente imágenes si el runtime admite la arquitectura exacta. No implica que la visión funcione ya en Cyber Harness ni que el modelo acepte salida de imagen.
 
 # 12. Inventario técnico de los 17 modelos
 
@@ -375,7 +375,7 @@ Se valoran seis dimensiones: adecuación de las tareas, calidad de evidencias, f
 | Qwen3.8 Flash Next · Unsloth             | UD-IQ3_XXS · cuatro partes | 83,6 GB           | MTP 2,8 · mmproj 0,9 GB      |
 | Qwen3.8 Flash Next GSQ-RCO abliterated   | IQ3_XXS · dos partes       | 76,1 GB           | mmproj 0,9 GB                |
 | Gemma 4 31B heretic · llmfan46           | Q6_K                       | 25,2 GB           | mmproj 1,2 GB                |
-| Qwen3.8 27B original · Unsloth           | UD-Q6_K                    | 22,0 GB           | mmproj 0,9 GB · RAGKit       |
+| Qwen3.8 27B original · Unsloth           | UD-Q6_K                    | 22,0 GB           | mmproj 0,9 GB · RAG AI       |
 | Qwen3.8 27B abliterated · Blackfrost     | Q6_K                       | 22,4 GB           | mmproj 0,6 GB                |
 | DeepSeek V4 Pro / Qwen3.5 9B heretic     | Q8_0                       | 9,8 GB            | mmproj 0,9 GB                |
 
@@ -482,7 +482,7 @@ Arquitectura: 31B, arquitectura densa \| Instalación: Q6_K, 25,2 GB; mmproj 1,2
 
 *Valoración: PRIORIDAD ALTA para chat profundo y análisis con imágenes. · Fuente: \[G06\]*
 
-## 13.7 Qwen3.8 27B original · Unsloth (RAGKit · Paramita)
+## 13.7 Qwen3.8 27B original · Unsloth (RAG AI · Paramita)
 
 Arquitectura: 27B densos; contexto nativo 262K \| Instalación: UD-Q6_K, 22,0 GB; mmproj 0,9 GB
 
@@ -492,7 +492,7 @@ Arquitectura: 27B densos; contexto nativo 262K \| Instalación: UD-Q6_K, 22,0 GB
 
 **Ventajas y evidencia.** Base original no abliterada, cuantización de alta fidelidad y soporte multimodal. Ofrece un punto de control estable frente a los derivados con cambios de rechazo.
 
-**Limitaciones.** Las citas requieren verificación externa: un LLM puede inventar referencias si el recuperador no impone fuentes. RAGKit debe pasar fragmentos identificados y limitar respuestas al contexto cuando proceda.
+**Limitaciones.** Las citas requieren verificación externa: un LLM puede inventar referencias si el recuperador no impone fuentes. El despliegue RAG debe pasar fragmentos identificados y limitar respuestas al contexto cuando proceda.
 
 *Valoración: MANTENER como perfil RAG/productividad por defecto. · Fuente: \[G07\]*
 
@@ -646,7 +646,7 @@ Las siguientes asignaciones constituyen una estrategia inicial de routing. “Pr
 | Corrección de incidencias verificadas por tests  | Kimi-Dev 72B              | Qwen3-Coder-Next               |
 | Revisión de código y seguridad preventiva        | Cyber-Tiel Q6             | Qwen3-Coder-Next               |
 | Chat general y productividad                     | Qwen3.8 27B original      | Gemma 4 31B                    |
-| RAG documental / RAGKit · Paramita               | Qwen3.8 27B original      | Gemma 4 31B                    |
+| RAG documental / RAG AI · Paramita               | Qwen3.8 27B original      | Gemma 4 31B                    |
 | Documentos escaneados, gráficos, capturas        | Gemma 4 31B + mmproj      | Qwen3.8 27B + mmproj           |
 | Planificación y proyectos de alta complejidad    | Gemma 4 31B               | GPT-OSS 120B / Qwen Flash Next |
 | Documentación extensa / persistencia de contexto | Kimi Linear 48B           | Qwen3.8 Flash Next             |
@@ -728,7 +728,7 @@ Los cálculos son a partir de tamaños redondeados aportados y no sustituyen “
 | DavidAU 40B NEO             | Muchos modos y afirmaciones “50x/AGI” del autor                         | No hay prueba independiente reproducible de esas mejoras                        |
 | Blackfrost / SC117 / gghfez | Documentación de abliteration y conversión/quant                        | Menos rechazos no significa más aciertos ni seguridad                           |
 
-# 19. Plan de adopción y evaluación en ARTIFEX / OpenCode / RAGKit
+# 19. Plan de adopción y evaluación en Cyber Harness / OpenCode / RAG AI
 
 ## 19.1 Secuencia aconsejada
 
@@ -811,13 +811,13 @@ PARTE III / AMPLIACIÓN OPERATIVA / 21 NOV 2026
 
 # 21. Modelos pendientes y perfiles optimizados para 128 GB
 
-Esta sección complementa el inventario de 25 modelos de chat ya descargados. Evalúa dos ficheros ausentes de ARTIFEX (BugHunter v8 y Cyber-Tiel Q5), propone un modelo generalista ligero y cuantizaciones alternativas, y diseña configuraciones simultáneas para ciberseguridad, desarrollo avanzado y cargas mixtas.
+Esta sección complementa el inventario de 25 modelos de chat ya descargados. Evalúa dos ficheros ausentes de Cyber Harness (BugHunter v8 y Cyber-Tiel Q5), propone un modelo generalista ligero y cuantizaciones alternativas, y diseña configuraciones simultáneas para ciberseguridad, desarrollo avanzado y cargas mixtas.
 
 **Criterio de decisión.** Los 128 GB de memoria unificada del GB10 son compartidos por Linux, GPU, cachés KV, buffers del motor de inferencia y otros servicios. Todas las cifras siguientes son tamaños publicados de ficheros en GB decimales; no son mediciones reales de memoria del DGX.
 
 Estado actualizado: BugHunter v8, Cyber-Tiel Q5 (con drafter MTP) y Qwen3-Coder-Next Q4_K_M ya están descargados y medidos. Siguen pendientes Qwen3.5-9B original y Qwen3.5-35B-A3B original. Las secciones 24 a 26 incluyen la memoria real medida.
 
-# 22. Dos modelos que faltan en ARTIFEX
+# 22. Dos modelos que faltan en Cyber Harness
 
 ## 22.1 BugHunter v8: Qwen3.5-35B-A3B Uncensored (MoE)
 
@@ -828,7 +828,7 @@ Estado actualizado: BugHunter v8, Cyber-Tiel Q5 (con drafter MTP) y Qwen3-Coder-
 | **Fichero LLM**      | Qwen3.5-35B-A3B-uncensored-bughunter-v8.Q4_K_M.gguf — 21,2 GB según árbol de ficheros.              |
 | **Visión opcional**  | mmproj-BF16.gguf — 0,903 GB. El ajuste de entrenamiento utilizó solo texto.                         |
 | **Contexto**         | 262.144 admitidos según autor; iniciar el servicio con 16K y probar 32K antes de ampliar.           |
-| **Punto importante** | GGUF sin cabeza MTP (`nextn_predict_layers=0`). MyDGX y ARTIFEX no la activan; no hay nada que desactivar. El drafter de Cyber-Tiel no sirve para v8. |
+| **Punto importante** | GGUF sin cabeza MTP (`nextn_predict_layers=0`). MyDGX y Cyber Harness no la activan; no hay nada que desactivar. El drafter de Cyber-Tiel no sirve para v8. |
 
 Qué aporta frente a BugHunter v7. El autor reutiliza el corpus y los hiperparámetros de v7, pero adapta una base Mixture of Experts mucho menos costosa por token activo que una red densa de 27B. Mantiene el objetivo principal: bug bounty, seguridad web/API, pruebas en alcance autorizado y elaboración de informes. La comunicación está orientada al español con terminología y artefactos técnicos en inglés.
 
@@ -868,7 +868,7 @@ No es un modelo distinto de Cyber-Tiel Q6, sino otra cuantización del mismo der
 
 **Ajuste MTP (medido).** El drafter separado del repositorio de Cyber-Tiel (`--spec-type draft-mtp --spec-draft-model mtp-….gguf`) acelera Q5 y Q6 sin descargar la edición con MTP integrado. No usar el drafter y el `mmproj` a la vez: llama.cpp no combina especulativa y visión.
 
-Valor operativo: Q5 + MTP es la opción por defecto para velocidad y perfiles con varios modelos. Q6 + MTP queda para ARTIFEX y como referencia de calidad hasta medir la diferencia en auditorías difíciles. Fuentes: \[A03\] y \[A04\].
+Valor operativo: Q5 + MTP es la opción por defecto para velocidad y perfiles con varios modelos. Q6 + MTP queda para Cyber Harness y como referencia de calidad hasta medir la diferencia en auditorías difíciles. Fuentes: \[A03\] y \[A04\].
 
 # 23. Qué añadiría para cubrir cyber, coding y propósito general
 
@@ -898,7 +898,7 @@ Si la prioridad es robustez comercial, merece además comparar con el Qwen3-Code
 
 ## 23.3 Qué NO añadiría de momento
 
-No añadiría otro 70B generalista, más modelos Heretic redundantes ni un antiguo modelo de seguridad sin evidencia superior a tu colección. RAGKit ya dispone de Qwen3.8 27B original y Gemma 4 31B para visión; Qwen3.5-35B-A3B original queda como control opcional, no residente.
+No añadiría otro 70B generalista, más modelos Heretic redundantes ni un antiguo modelo de seguridad sin evidencia superior a tu colección. El despliegue RAG ya dispone de Qwen3.8 27B original y Gemma 4 31B para visión; Qwen3.5-35B-A3B original queda como control opcional, no residente.
 
 # 24. Política de memoria en un solo DGX Spark
 
@@ -922,9 +922,9 @@ Las tablas dan estimaciones para pesos y, cuando se indica, proyectores concreto
 
 ## 25.0 PERFILES MEDIDOS EN EL DGX SPARK (prevalecen sobre 25.1–25.4)
 
-Creados en MyDGX como «RECIPE · …». Cargados a la vez sobre RAGKit · Paramita, con 128K de contexto, KV q8_0 y un slot por modelo. La memoria es el incremento real sobre RAGKit; la velocidad es de escritura con el perfil completo cargado.
+Creados en MyDGX como «RECIPE · …». Cargados a la vez sobre RAG AI · Paramita, con 128K de contexto, KV q8_0 y un slot por modelo. La memoria es el incremento real sobre el despliegue RAG; la velocidad es de escritura con el perfil completo cargado.
 
-| **Perfil** | **Modelos** | **Memoria sobre RAGKit** | **Escritura** |
+| **Perfil** | **Modelos** | **Memoria sobre RAG AI** | **Escritura** |
 |---|---|---|---|
 | **RECIPE · Cybersecurity** | Cyber-Tiel Q5 + MTP · BugHunter v8 · OrcaCyber + MTP (sin visión) | 70,7 GiB | 63 · 55 · 23 tok/s (aceptación MTP 72 % y 73 %) |
 | **RECIPE · Cybersecurity · Coding** | Cyber-Tiel Q5 + MTP · BugHunter v8 · 9B Heretic + MTP | 58,1 GiB | 62 · 60 · 30 tok/s |
@@ -933,9 +933,9 @@ Creados en MyDGX como «RECIPE · …». Cargados a la vez sobre RAGKit · Param
 
 Equivalencias con el informe original: RECIPE · Cybersecurity sustituye a CY-E (Bimo queda bajo demanda); RECIPE · Cybersecurity · Coding sustituye a MIX-L; RECIPE · Advanced Coding es DEV-E sin Cyber-Tiel; RECIPE · Coding · Cyber es MIX-E sin OrcaCyber.
 
-**DEV-E y MIX-E no caben con RAGKit cargado.** Con los datos medidos, DEV-E necesitaría unos 90 GiB sobre RAGKit (Advanced Coding 60,4 + Tiel Q5 30,2) y MIX-E unos 87 GiB (Coding · Cyber 68,9 + OrcaCyber ~18). Solo son viables parando RAGKit.
+**DEV-E y MIX-E no caben con el despliegue RAG cargado.** Con los datos medidos, DEV-E necesitaría unos 90 GiB sobre el despliegue RAG (Advanced Coding 60,4 + Tiel Q5 30,2) y MIX-E unos 87 GiB (Coding · Cyber 68,9 + OrcaCyber ~18). Solo son viables parando el despliegue RAG.
 
-Un perfil se arranca cuando el anterior ha liberado la memoria: en las pruebas, arrancar 10 s después de parar ARTIFEX falló; esperando 40 s, funcionó.
+Un perfil se arranca cuando el anterior ha liberado la memoria: en las pruebas, arrancar 10 s después de parar Cyber Harness falló; esperando 40 s, funcionó.
 
 ## 25.1 SOLO CIBERSEGURIDAD
 
@@ -958,7 +958,7 @@ Los 2 mmproj del escenario CY-E/CY-Q se refieren a BugHunter v8 (~0,9 GB) y Orca
 | **Perfil**                            | **Modelos simultáneos**                                                       | **Pesos** | **Resto nominal** |
 |---------------------------------------|-------------------------------------------------------------------------------|-----------|-------------------|
 | **DEV-L / ágil**                      | Cyber-Tiel Q5 (26,6) + Qwen3.5-9B Q6 (7,46)                                   | 34,1 GB   | 93,9 GB           |
-| **DEV-E / equilibrado • no cabe con RAGKit (ver 25.0)** | Qwen3-Coder-Next Q4_K_M (48,56) + Cyber-Tiel Q5 (26,6) + Qwen3.5-9B Q6 (7,46) | 82,6 GB   | 45,4 GB           |
+| **DEV-E / equilibrado • no cabe con RAG AI (ver 25.0)** | Qwen3-Coder-Next Q4_K_M (48,56) + Cyber-Tiel Q5 (26,6) + Qwen3.5-9B Q6 (7,46) | 82,6 GB   | 45,4 GB           |
 | **DEV-Q / alta fidelidad**            | Qwen3-Coder-Next Q6 actual (65,7) + Cyber-Tiel Q5 (26,6)                      | 92,3 GB   | 35,7 GB           |
 
 **DEV-L.** Para proyectos pequeños, revisión de diffs, corrección de pruebas y desarrollo con muchos ciclos. Cyber-Tiel realiza programación y el Qwen9 controla preguntas de propósito general, documentación y clasificación.
@@ -974,7 +974,7 @@ DEV-L y DEV-E omiten el mmproj opcional de Qwen3.5-9B (~0,92 GB): si se activa p
 | **Perfil**                            | **Modelos simultáneos**                                                               | **Pesos + extras** | **Resto nominal** |
 |---------------------------------------|---------------------------------------------------------------------------------------|--------------------|-------------------|
 | **MIX-L / bajo consumo**              | Cyber-Tiel Q5 (26,6) + BugHunter v8 (21,2) + Qwen3.5-9B Q6 (7,46)                     | 55,3 GB            | 72,7 GB           |
-| **MIX-E / equilibrado • no cabe con RAGKit (ver 25.0)** | Qwen3-Coder-Next Q4 (48,56) + BugHunter v8 (21,2) + OrcaCyber (15,7) + 2 mmproj (1,8) | 87,3 GB            | 40,7 GB           |
+| **MIX-E / equilibrado • no cabe con RAG AI (ver 25.0)** | Qwen3-Coder-Next Q4 (48,56) + BugHunter v8 (21,2) + OrcaCyber (15,7) + 2 mmproj (1,8) | 87,3 GB            | 40,7 GB           |
 | **MIX-Q / máxima programación**       | Qwen3-Coder-Next Q6 actual (65,7) + BugHunter v8 (21,2)                               | 86,9 GB            | 41,1 GB           |
 
 **MIX-L.** Muy buena combinación si el propósito es auditar el código que se está programando: Tiel programa y revisa; BugHunter investiga seguridad web/API; Qwen9 clasifica, resume y sirve consultas generales.
@@ -1012,12 +1012,12 @@ La clave no es emplear toda la memoria disponible, sino conservar margen para el
 
 | **Entrada / servicio**                        | **Destino recomendado**                      | **Verificación necesaria**                                               |
 |-----------------------------------------------|----------------------------------------------|--------------------------------------------------------------------------|
-| **ARTIFEX: código y CTF de laboratorio**      | Cyber-Tiel Q5/Q6                             | Ejecutar tests; comparar con repositorio y estado real.                  |
-| **ARTIFEX: bug bounty web/API**               | BugHunter v8, o v7 mientras no esté validado | Confirmar el alcance y reproducibilidad; revisar CL.TE y datos externos. |
+| **Cyber Harness: código y CTF de laboratorio**      | Cyber-Tiel Q5/Q6                             | Ejecutar tests; comparar con repositorio y estado real.                  |
+| **Cyber Harness: bug bounty web/API**               | BugHunter v8, o v7 mientras no esté validado | Confirmar el alcance y reproducibilidad; revisar CL.TE y datos externos. |
 | **SOC / incidentes / imágenes**               | OrcaCyber Nano: con MTP para texto; con mmproj (sin MTP) para capturas | Validar artefactos de origen y extraer evidencia trazable.               |
 | **OpenCode: cambios complejos**               | Qwen3-Coder-Next Q4 o Q6                     | Tests automáticos, git diff y revisión humana antes de fusionar.         |
 | **OpenCode: segundo revisor**                 | Cyber-Tiel Q5                                | Contrastar diseño y seguridad sin ejecutar cambios autónomos.            |
-| **RAGKit / Paramita: respuestas con fuentes** | Qwen3.8 27B original                         | Citas recuperadas y comprobación de alucinaciones.                       |
+| **RAG AI / Paramita: respuestas con fuentes** | Qwen3.8 27B original                         | Citas recuperadas y comprobación de alucinaciones.                       |
 | **Clasificación y consultas frecuentes**      | Qwen3.5-9B original Q6                       | Medir latencia, extracción a JSON y tasa de errores.                     |
 | **Tool calling ligero**                       | Bimo CyberAgent Q8                           | Permisos mínimos, esquemas JSON validados y lista de funciones.          |
 
@@ -1062,9 +1062,9 @@ Estas órdenes no modifican el servidor. Los dos primeros indicadores distinguen
 
 # 29. Recomendación final de ampliación
 
-**Recomendación medida.** Con RAGKit siempre activo, usar los cuatro perfiles de la sección 25.0. Para ciberseguridad, RECIPE · Cybersecurity (70,7 GiB). Para mezclar ciberseguridad y programación con margen, RECIPE · Cybersecurity · Coding (58,1 GiB). Para programación con un agente fuerte, RECIPE · Advanced Coding (60,4 GiB), o RECIPE · Coding · Cyber (68,9 GiB) si también hace falta revisión de seguridad web. DEV-E y MIX-E solo funcionan sin RAGKit.
+**Recomendación medida.** Con el despliegue RAG siempre activo, usar los cuatro perfiles de la sección 25.0. Para ciberseguridad, RECIPE · Cybersecurity (70,7 GiB). Para mezclar ciberseguridad y programación con margen, RECIPE · Cybersecurity · Coding (58,1 GiB). Para programación con un agente fuerte, RECIPE · Advanced Coding (60,4 GiB), o RECIPE · Coding · Cyber (68,9 GiB) si también hace falta revisión de seguridad web. DEV-E y MIX-E solo funcionan sin el despliegue RAG.
 
-**ARTIFEX.** Mantener Cyber-Tiel Q6 + MTP en 18081 como motor de calidad y BugHunter v8 como especialista rápido; pasar a Q5 + MTP si hace falta memoria o velocidad. BugHunter v7 + MTP queda como referencia hasta terminar la comparación v7/v8.
+**Cyber Harness.** Mantener Cyber-Tiel Q6 + MTP en 18081 como motor de calidad y BugHunter v8 como especialista rápido; pasar a Q5 + MTP si hace falta memoria o velocidad. BugHunter v7 + MTP queda como referencia hasta terminar la comparación v7/v8.
 
 **Pendiente de medir:** calidad (la batería de 100 casos), v7 con 32K de contexto frente a los 256K usados, KV F16 en v8 y DFlash2 de OrcaCyber.
 
@@ -1114,6 +1114,51 @@ Dos extras opcionales:
 - Los grandes modelos publicados este otoño (Kimi K3.1, DeepSeek V4.1 Pro, Muse Spark Open, Mistral Large 4) no caben en un único Spark con una cuantización utilizable.
 
 Aparte, los dos modelos de Ollama (deepseek-coder 6.7B y llama3.2 3B) quedan muy por detrás de todo lo anterior; no se ha borrado nada. Siguiente paso propuesto: instalar los cuatro primeros desde la pestaña Modelos o crear recetas para ellos.
+
+# 31. Papeles en un equipo de pentesting
+
+Reparto de los modelos instalados entre los papeles de un flujo de pentesting con agentes. La memoria y la velocidad son las medidas en el GB10 (secciones 6.2 y 25.0); la calidad de cada papel no está medida y depende de la batería de 100 casos pendiente. El reparto se basa en la especialización declarada y en las limitaciones de cada ficha.
+
+## 31.1 Papel, modelo principal y respaldo
+
+| **Papel** | **Principal** | **Respaldo** | **Por qué** | **Cuidado con** |
+|---|---|---|---|---|
+| **Orquestador** | Cyber-Tiel Q5 + MTP | Qwen3-Coder-Next Q4 | Plantilla pensada para herramientas, 262K de contexto y el más rápido medido (75–90 tok/s). Coder-Next está entrenado para agentes y recuperación de fallos. | Planifica y delega, no ejecuta. Permisos de solo lectura por defecto. |
+| **Oráculo del orquestador** (juez, condición de parada) | Qwen3.8 27B original (el del despliegue RAG) | GPT-OSS 120B, en solitario | Familia distinta del orquestador y sin abliterar: aprueba el siguiente paso, valida el JSON del plan y decide cuándo parar. Ya está cargado para el despliegue RAG. | Un juez de la misma familia comparte los errores del orquestador. GPT-OSS ocupa 63,4 GB y no convive con otro modelo grande. |
+| **Reversing de código y binarios** | OrcaCyber Nano | Cyber-Tiel Q6 | Orientado a ingeniería inversa y desensamblado. Con `mmproj` lee capturas de Ghidra o IDA; sin visión usa MTP (73 % de aceptación, 23–33 tok/s). | Visión o MTP, no ambos. Para decompilados muy largos, Kimi Linear 48B bajo demanda. |
+| **Evaluador de findings** (triaje, falsos positivos, severidad) | BugHunter v8 | Qwen3.8 27B Cyber Q6 | Especialista web/API, autenticación, SSRF, lógica de negocio e informes; 78–80 tok/s. Qwen Cyber es la verificación cruzada de la sección 4. | Calidad v7 frente a v8 sin medir. Un finding se acepta con prueba reproducible, no por consenso de dos LLM. |
+| **Creador de código para los tests** (PoC, harness, plantillas, fuzzers) | Cyber-Tiel Q5/Q6 | Qwen3-Coder-Next (multiarchivo) · Kimi-Dev 72B (tests de reproducción) | Parches, tests y CTF. Kimi-Dev está entrenado con recompensa de tests en Docker. | Kimi-Dev es denso de 72B (64,3 GB): lento y en solitario. |
+| **Lanzador de tests** | Bimo 7B CyberAgent | Cyber-Tiel Q5 | Ajustado para invocaciones JSON y para continuar tras el resultado; interpreta salidas de escáneres. 8,1 GB. | 32K de contexto, ~31 tok/s y puede inventar CVEs. Esquema JSON validado y lista cerrada de funciones. |
+| **Revisor de tests** (¿el resultado prueba el finding?) | BugHunter v8 | OrcaCyber Nano (logs, DFIR) | Separa quien lanza de quien juzga: Bimo ejecuta y BugHunter decide si la evidencia confirma o descarta. | Revisión humana antes de dar un finding por bueno. |
+| **Manejador de MCPs** (Playwright, navegador) | Qwen3-Coder-Next Q4 | Gemma 4 31B (cuando haya que mirar capturas) | Los snapshots de Playwright son largos: hacen falta contexto amplio y llamadas a herramientas fiables. Gemma 4 tiene tool calling y visión nativa. | No usar BugHunter (su autor avisa de que el tool calling es débil) ni Bimo (32K se queda corto para un snapshot). |
+| **Ingeniero OSINT** | Qwen3.8 27B original + RAG AI + SearXNG | Kimi Linear 48B (documentos largos) · Gemma 4 31B (imágenes) | Respuestas con fuentes recuperadas y citas, con el buscador que instala MyDGX. | Las citas se verifican fuera del modelo. Solo objetivos autorizados. |
+| **Redactor del informe final** | BugHunter v8 | Qwen3.8 27B original | Informes técnicos en español con la terminología en inglés. | Revisar severidades y reproducibilidad antes de entregar. |
+| **Mapeo a ATT&CK, CWE y normativa** | BaronLLM v2 14B | OrcaCyber Nano | Ajuste declarado en normas, marcos ATT&CK y categorización de hallazgos. | 8K de contexto: pasarle el finding ya resumido. |
+| **Router y clasificador rápido** | Qwen3.5 9B Heretic + MTP | Gemma 4 12B | 30–49 tok/s con MTP y unos 10 GiB: decide qué especialista recibe cada tarea. | No decide acciones sensibles por sí solo. |
+
+## 31.2 Qué cabe a la vez en memoria
+
+Las tres primeras combinaciones son los perfiles medidos de la sección 25.0: despliegue RAG cargado, 128K de contexto, KV q8_0 y un slot por modelo. El reparto por modelo se deduce restando esos perfiles entre sí y es aproximado; el total es la cifra medida.
+
+| **Combinación** | **Perfil** | **Modelos (GiB aprox.)** | **Memoria** | **Reparto de papeles** |
+|---|---|---|---|---|
+| **Pentest web/API con reversing** | RECIPE · Cybersecurity | Cyber-Tiel Q5 + MTP (30,2) · BugHunter v8 (18,2) · OrcaCyber + MTP (22,3) | 70,7 GiB sobre RAG AI | Cyber-Tiel orquesta y escribe el código de los tests; BugHunter evalúa, revisa e informa; OrcaCyber hace reversing y logs; el despliegue RAG hace de oráculo y OSINT. |
+| **Navegador y MCPs** | RECIPE · Coding · Cyber | Qwen3-Coder-Next Q4 (50,7) · BugHunter v8 (18,2) | 68,9 GiB sobre RAG AI | Coder-Next orquesta, maneja Playwright y escribe código; BugHunter evalúa y revisa; el despliegue RAG hace de oráculo y OSINT. |
+| **Ligero, con router** | RECIPE · Cybersecurity · Coding | Cyber-Tiel Q5 + MTP (30,2) · BugHunter v8 (18,2) · Qwen3.5 9B + MTP (9,7) | 58,1 GiB sobre RAG AI | El 9B enruta y lanza tareas sencillas; Cyber-Tiel orquesta y programa; BugHunter evalúa e informa. Deja sitio para cargar Bimo bajo demanda. |
+| **Cobertura completa sin RAG AI** | MIX-E (estimado) | Qwen3-Coder-Next Q4 (50,7) · BugHunter v8 (18,2) · OrcaCyber (~18) | ≈87 GiB, parando el despliegue RAG | Coder-Next orquesta y maneja MCPs; BugHunter evalúa; OrcaCyber hace reversing. Sin oráculo independiente cargado. |
+
+## 31.3 Quedan fuera del equipo de pentesting
+
+| **Modelo** | **Motivo** |
+|---|---|
+| **Assistant Pepe 70B, Dolphin 24B, DavidAU 40B** | Creativos; no aportan nada técnico que no cubran otros. |
+| **GLM-5.3 Flash (original y uncensored)** | 97–102 GB: no deja sitio para un segundo modelo. |
+| **DeepSeek V4.1 GSQ-RCO Coder** | 182,7 GB con Engram en SSD; piloto, no parte de un equipo. |
+| **Qwen3.8 Flash Next (original y SC117)** | 76–84 GB; piloto de agentes por medir. |
+| **Huihui 0.8B** | Sin evaluación; solo experimentos de clasificación. |
+| **BugHunter v7** | Referencia frente a v8; no tenerlos cargados a la vez. |
+
+**Controles del flujo.** Los papeles de orquestador, lanzador y manejador de MCPs tienen acceso a shell, red o navegador, y varios modelos son uncensored o abliterados. Aplicar en todos: solo objetivos con autorización explícita, permisos de solo lectura por defecto, lista cerrada de herramientas con esquema JSON validado, confirmación humana antes de cualquier acción activa y registro de cada acción. Un finding solo se da por bueno con prueba reproducible y revisión humana, aunque dos modelos coincidan.
 
 # Fuentes nuevas y ficheros recomendados
 

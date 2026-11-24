@@ -47,6 +47,9 @@ class SpeechRequest(BaseModel):
     reference_audio: str = Field(default="", max_length=14_000_000)
     reference_text: str = Field(default="", max_length=2000)
     temperature: float | None = Field(default=None, ge=0.05, le=1.5)
+    # Engine-specific sampling knobs (temperature, top_p, cfg_weight, num_steps...);
+    # the worker keeps the ones its engine reads and clamps them.
+    extras: dict[str, float] = Field(default_factory=dict, max_length=16)
 
 
 class Worker:
@@ -211,6 +214,8 @@ async def speech(payload: SpeechRequest) -> Response:
                     body["reference_text"] = payload.reference_text
                 if payload.temperature is not None:
                     body["temperature"] = payload.temperature
+                if payload.extras:
+                    body["extras"] = payload.extras
                 response = await client.post(f"http://127.0.0.1:{port}/synthesize", json=body)
         except httpx.HTTPError as exc:
             detail = "El worker TTS no respondió"

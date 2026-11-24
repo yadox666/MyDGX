@@ -188,7 +188,6 @@
 "El alias del equipo no es válido." = "El alias del equipo no es válido.";
 "El certificado CA configurado no es válido." = "El certificado CA configurado no es válido.";
 "El despliegue falló (código %d). Revisa ~/.MyDGX/logs." = "El despliegue falló (código %d). Revisa ~/.MyDGX/logs.";
-"El DGX no tiene contraseña del dashboard o no se pudo leer por SSH. Vuelve a desplegar para generarla." = "El DGX no tiene contraseña del dashboard o no se pudo leer por SSH. Vuelve a desplegar para generarla.";
 "El directorio remoto de despliegue no es válido." = "El directorio remoto de despliegue no es válido.";
 "El equipo remoto necesita permisos sudo no interactivos para los comandos de instalación autorizados." = "El equipo remoto necesita permisos sudo no interactivos para los comandos de instalación autorizados.";
 "El equipo remoto no tiene espacio suficiente para completar el despliegue." = "El equipo remoto no tiene espacio suficiente para completar el despliegue.";
@@ -392,6 +391,7 @@
 "No se pudo restaurar la conexión" = "No se pudo restaurar la conexión";
 "No se puede arrancar el perfil" = "No se puede arrancar el perfil";
 "No se puede arrancar el perfil: %@" = "No se puede arrancar el perfil: %@";
+"No se puede copiar la contraseña del dashboard: solo está disponible hasta el primer inicio de sesión, o no se pudo leer por SSH." = "No se puede copiar la contraseña del dashboard: solo está disponible hasta el primer inicio de sesión, o no se pudo leer por SSH.";
 "No se puede escribir en %@. Mueve MyDGXTray a Aplicaciones y vuelve a intentarlo." = "No se puede escribir en %@. Mueve MyDGXTray a Aplicaciones y vuelve a intentarlo.";
 "No se sobrescribirá %@ porque no es un archivo regular seguro." = "No se sobrescribirá %@ porque no es un archivo regular seguro.";
 "Nombre" = "Nombre";

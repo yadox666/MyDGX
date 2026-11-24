@@ -250,12 +250,15 @@ Details in [MyDGX Assistant](asistente-mydgx.md).
 | POST | `/v1/chat/completions` | OpenAI chat (streaming included). |
 | POST | `/v1/completions` | Classic text completion. |
 | POST | `/v1/responses` | OpenAI Responses API. |
+| POST | `/v1/responses/compact` | Compacts Responses input through the selected provider. If the provider lacks native compaction, MyDGX returns a reusable plaintext summary message and marks it as `mydgx.compaction_format=plaintext-summary-v1`; it never labels plaintext as encrypted content. |
+| POST | `/v1/responses/input_tokens` | Counts Responses input tokens locally through LiteLLM, without inference. Stored `conversation` IDs are not supported. |
 | POST | `/v1/messages` | Anthropic Messages API (for Claude Code). |
 | POST | `/v1/messages/count_tokens` | Anthropic-style token counting. |
 | POST | `/v1/embeddings` | Embeddings. |
 | POST | `/v1/rerank` | Document reranking. |
 | POST | `/v1/redact` | Personal data redaction with a Privacy Filter profile. |
 | POST | `/v1/images/generations` | Image generation (ComfyUI). |
+| POST | `/v1/images/edits` | ComfyUI img2img or inpainting. Accepts JSON data URLs or multipart; remote images are not fetched. |
 | POST | `/v1/audio/transcriptions` | Transcription (Whisper). |
 | POST | `/v1/audio/translations` | Audio translation into English (Whisper). |
 | POST | `/v1/audio/speech` | Speech synthesis (TTS). |
@@ -264,6 +267,8 @@ Details in [MyDGX Assistant](asistente-mydgx.md).
 | GET | `/v1/videos/{video_id}` | Status of a video. |
 | GET | `/v1/videos/{video_id}/content` | Downloads the finished video. |
 | DELETE | `/v1/videos/{video_id}` | Deletes the video and its job. |
+| POST | `/internal/litellm/{alias}/v1/chat/completions` | Internal leg used by the bundled LiteLLM for Anthropic Messages. Accepts only the per-process token generated at startup, from the gateway's own host. Not for clients. |
+| POST | `/internal/litellm/{alias}/v1/responses` | Same internal leg for the Responses API, forwarded to the runtime's native Responses endpoint with the reasoning switch applied. Not for clients. |
 
 ```bash
 curl -s http://127.0.0.1:4000/v1/chat/completions \
@@ -271,6 +276,20 @@ curl -s http://127.0.0.1:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"ALIAS_DEL_PERFIL","messages":[{"role":"user","content":"Hello"}]}'
 ```
+
+### Reasoning
+
+Models that can think show their reasoning with every API format:
+
+| API | How to ask | What comes back |
+|---|---|---|
+| Chat Completions | `reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`), `reasoning: {"effort", "enabled", "exclude"}`, `thinking: {"type": "enabled"}` or `enable_thinking` | `message.reasoning_content`; in streaming, `delta.reasoning_content` while the model thinks. |
+| Responses | `reasoning: {"effort": "high"}` | A `reasoning` output item and `response.reasoning_*` streaming events. |
+| Anthropic Messages | `thinking: {"type": "enabled", "budget_tokens": N}` | `thinking` content blocks. |
+
+For llama.cpp, MyDGX turns the request into the chat template switch (`enable_thinking`, `thinking`, `reasoning_effort`). Without any of these parameters, the profile's **Reasoning off** setting is the default. If a model writes `<think>…</think>` inside the text, MyDGX moves it to `reasoning_content`. Ollama's `reasoning` field is also copied to `reasoning_content`. `reasoning.exclude: true` removes the reasoning from the answer. `budget_tokens` and `reasoning.max_tokens` only turn thinking on; llama.cpp has no per-request budget.
+
+`/v1/models` reports `capabilities.reasoning` (the model can think) and `capabilities.reasoning_default` (it thinks without being asked).
 
 Client configuration (OpenCode, Claude Code, Open WebUI, OpenAI SDK) in
 [Gateway clients](gateway-clientes.md).

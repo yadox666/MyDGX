@@ -10,7 +10,7 @@ The full endpoint reference is in [API](api.md).
 | **Model** | Weights downloaded to the Hugging Face cache (`HF_HOME`) or to Ollama. Downloading does not mean loading into memory. |
 | **Profile** | Inference recipe: one or more models with their engine (llama.cpp, Ollama, vLLM, SGLang, TensorRT-LLM, ComfyUI, Whisper...), port, context, and parameters. **Up to two profiles or Quick models** can be loaded at the same time if they fit in memory. |
 | **Default profile** | Profile that MyDGX loads again on startup (`ENABLE_PROFILE_AUTOSTART`). It is set with *Default only*. |
-| **Profile app** | Your own application (for example `~/ragkit`) that starts and stops with the profile through its `start.sh`. |
+| **Profile app** | Your own application (for example `~/rag-ai`) that starts and stops with the profile through its `start.sh`. |
 | **Default profile (read-only)** | Read-only profile with the models marked as *Default* in *Models* (for example an embeddings model that must always be available). It always starts when MyDGX starts and does not count toward the two-profile limit. |
 | **Quick profile** | Read-only profile created when you press *Start* on a model in *Models*. It loads immediately if it fits and is emptied with *Stop*. It is kept if only MyDGX restarts (for example with a normal `deploy`), but it is emptied when the machine reboots or with `deploy --repair`. It does not count toward the two-profile limit. |
 | **Gateway** | Single OpenAI/Anthropic endpoint (`http://127.0.0.1:4000/v1`) that routes by model alias to the loaded profiles. |
@@ -269,7 +269,7 @@ A recipe is a profile measured on a DGX Spark and published on GitHub, in
 
 An installed recipe is edited like any profile: you can change its
 parameters, add models or choose the app that starts with it (for example,
-ARTIFEX). Once saved, the card shows *Recipe · vN · edited* and the recipe stops
+Cyber Harness). Once saved, the card shows *Recipe · vN · edited* and the recipe stops
 updating itself, so your changes are kept. It can keep its `RECIPE · …` name,
 but other names starting with `RECIPE` are reserved for recipes. If you prefer
 a profile with no link to the recipe, use *Duplicate*.
@@ -365,15 +365,20 @@ and `status`, the last one returning exit code `0` if it is running. MyDGX
 starts it when the profile is ready and stops it when the profile stops. If two loaded
 profiles use the same app, it only stops when the last one stops.
 
+If the app is what serves the profile's external endpoints (for example,
+tts-lab with `tts-lab` protocol profiles) and those endpoints do not answer yet,
+MyDGX runs `start.sh start` first and waits up to 60 s for them. This way the
+profile also restores itself after a DGX reboot.
+
 To add an app:
 
 1. Copy the app to the DGX as a direct subdirectory of `PROFILE_APPS_ROOT`
-   (by default the MyDGX user's home), for example `/home/nvidia/ragkit`.
+   (by default the MyDGX user's home), for example `/home/nvidia/rag-ai`.
 2. Its `start.sh` must belong to the MyDGX user and not be writable by
    group or others: `chmod 755 start.sh`. Symbolic links are not accepted.
 3. Create its `.env` directly on the DGX. Deployment never copies `.env`
    files.
-4. Optional: limit the allowed apps with `PROFILE_APPS=ragkit,otra`.
+4. Optional: limit the allowed apps with `PROFILE_APPS=rag-ai,otra`.
 5. In *Profiles → Edit*, the **Profile app** dropdown lists the valid
    apps. Choose one and save.
 

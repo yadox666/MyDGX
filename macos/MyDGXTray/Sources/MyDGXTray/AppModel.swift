@@ -1111,7 +1111,13 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    /// The password can be copied only until the first dashboard login.
+    var canCopyDashboardPassword: Bool {
+        canOpenDashboard && overview?.dashboardPasswordClaimed != true
+    }
+
     func copyDashboardPassword() {
+        guard canCopyDashboardPassword else { return }
         let profile = configuration.activeConnection
         Task {
             let password = try? await SSHBootstrap.fetchDashboardPassword(
@@ -1119,7 +1125,7 @@ final class AppModel: ObservableObject {
                 remoteDirectory: profile.deployment.remoteDirectory
             )
             guard let password else {
-                lastError = String(localized: "El DGX no tiene contraseña del dashboard o no se pudo leer por SSH. Vuelve a desplegar para generarla.")
+                lastError = String(localized: "No se puede copiar la contraseña del dashboard: solo está disponible hasta el primer inicio de sesión, o no se pudo leer por SSH.")
                 return
             }
             let pasteboard = NSPasteboard.general

@@ -40,6 +40,7 @@ import {
   Search,
   Server,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
   KeyRound,
@@ -65,6 +66,10 @@ import {
 import { CSSProperties, FocusEvent, FormEvent, ReactNode, createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import MarkdownMessage from "./MarkdownMessage";
+import DgxOfflineNotice from "./DgxOfflineNotice";
+import DialogHost from "./DialogHost";
+import { confirmDialog, promptDialog } from "./dialogs";
+import { DgxOfflineError, fetchDgx, useDgxConnection } from "./connection";
 import { language, languageHeader, locale, setLanguagePreference, storedLanguagePreference, t, type LanguagePreference } from "./i18n";
 import {
   Area,
@@ -756,6 +761,15 @@ type PreflightReport = {
   other_files: string[];
   suggested_draft: string[];
   warnings: string[];
+  security_warnings?: string[];
+};
+
+type SnapshotCheck = {
+  revision: string;
+  files: string[];
+  total_files: number;
+  gguf_only: boolean;
+  security_warnings: string[];
 };
 
 type PendingDownload = {
@@ -764,9 +778,19 @@ type PendingDownload = {
   files: string[];
   label: string;
   report?: PreflightReport;
+  snapshot?: SnapshotCheck;
   error?: string;
   onDone?: () => void;
 };
+
+function SecurityWarnings({ warnings }: { warnings?: string[] }) {
+  if (!warnings?.length) return null;
+  return <div className="security-warnings" role="alert">
+    <strong><ShieldAlert size={15} />{" "}{t("Señales de riesgo en el repositorio")}</strong>
+    <ul>{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+    <small>{t("Es un aviso, no un bloqueo: puedes descargarlo igualmente si confías en el autor.")}</small>
+  </div>;
+}
 
 function DownloadPreflightDialog({ pending, onCancel, onConfirm }: {
   pending: PendingDownload;
@@ -779,7 +803,18 @@ function DownloadPreflightDialog({ pending, onCancel, onConfirm }: {
     <Card className="model-help-dialog preflight-dialog">
       <SectionHeading eyebrow={t("COMPROBACIÓN PREVIA")} title={pending.repoId} action={<button className="icon-button" onClick={onCancel} aria-label={t("Cerrar comprobación")}><X size={16} /></button>} />
       {pending.error && <div className="profile-warning"><TriangleAlert size={15} />{t("No se pudieron leer las cabeceras: {error}. Puedes descargar igualmente; MyDGX lo verificará después en Benchmarks.", { error: pending.error })}</div>}
+      {pending.snapshot && <>
+        <p className="preflight-intro">
+          {pending.snapshot.gguf_only
+            ? t("Repositorio GGUF: se descargarán {count} de {total} archivos (los GGUF, la ficha, la licencia y la configuración). El código y los pesos PyTorch no hacen falta para llama.cpp.", { count: pending.snapshot.files.length, total: pending.snapshot.total_files })
+            : t("Se descargarán los {total} archivos del repositorio.", { total: pending.snapshot.total_files })}
+        </p>
+        <SecurityWarnings warnings={pending.snapshot.security_warnings} />
+        {!pending.snapshot.security_warnings.length && <div className="preflight-ok"><CheckCircle2 size={15} />{" "}{t("Sin señales de riesgo detectadas.")}</div>}
+        <small className="preflight-note">{t("Se fija la versión {revision}: las reparaciones y reinstalaciones usarán esa misma versión.", { revision: pending.snapshot.revision.slice(0, 12) })}</small>
+      </>}
       {report && <>
+        <SecurityWarnings warnings={report.security_warnings} />
         <p className="preflight-intro">
           {t("{size} en {count} archivo(s). Los datos de abajo salen de la cabecera GGUF de cada archivo, leída sin descargar los pesos.", { size: bytes(report.total_bytes), count: pending.files.length })}
         </p>
@@ -814,7 +849,7 @@ function DownloadPreflightDialog({ pending, onCancel, onConfirm }: {
       <div className="preflight-actions">
         <button className="button secondary" onClick={onCancel}>{t("Cancelar")}</button>
         {report?.suggested_draft.length ? <button className="button secondary" onClick={() => onConfirm(report.suggested_draft)}><Plus size={14} />{" "}{t("Añadir drafter y descargar")}</button> : null}
-        <button className="button primary" onClick={() => onConfirm([])}><Download size={14} />{" "}{t("Descargar")}</button>
+        <button className="button primary" onClick={() => onConfirm([])}><Download size={14} />{" "}{(report?.security_warnings?.length || pending.snapshot?.security_warnings.length) ? t("Descargar igualmente") : t("Descargar")}</button>
       </div>
     </Card>
   </div>;
@@ -1021,7 +1056,7 @@ function ModelSettingsDialog({ modelId, notify, onClose, onSaved }: {
 function StopAllModelsButton({ notify, onDone }: { notify: (message: string, error?: boolean) => void; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   async function stopAll() {
-    if (!window.confirm(t("¿Parar todos los modelos? Se apagan todos los perfiles cargados (también Quick) y los modelos que Ollama tenga en memoria. Se mantienen el modelo del chat, el perfil Default y los servicios ComfyUI, TTS y Whisper."))) return;
+    if (!await confirmDialog(t("¿Parar todos los modelos? Se apagan todos los perfiles cargados (también Quick) y los modelos que Ollama tenga en memoria. Se mantienen el modelo del chat, el perfil Default y los servicios ComfyUI, TTS y Whisper."), { tone: "danger", confirmLabel: t("Parar todo") })) return;
     setBusy(true);
     try {
       const result = await api<{ stopped_profiles: string[]; released_ollama: string[]; kept_profiles: string[] }>("/api/models/stop-all", { method: "POST" });
@@ -2167,6 +2202,7 @@ type HfInspection = {
     download_supported: boolean;
     download_block_reason: string;
     files: HfRemoteFile[];
+    security_warnings?: string[];
   } | null;
   local?: {
     refs: Record<string, string>;
@@ -2474,7 +2510,7 @@ function getApiKey() {
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const key = getApiKey();
-  const response = await fetch(path, {
+  const response = await fetchDgx(path, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -2495,7 +2531,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 async function apiBlob(path: string): Promise<Blob> {
   const key = getApiKey();
-  const response = await fetch(path, {
+  const response = await fetchDgx(path, {
     headers: { ...languageHeader, ...(key ? { "X-MyDGX-Key": key } : {}) },
   });
   if (!response.ok) {
@@ -4292,10 +4328,15 @@ function ModelsView({
     downloads.track(pending.repoId);
     const files = [...pending.files, ...extraFiles.filter((name) => !pending.files.includes(name))];
     try {
-      const result = await api<{ job_id: string; deduplicated?: boolean }>("/api/models/huggingface/files/download", {
-        method: "POST",
-        body: JSON.stringify({ repo_id: pending.repoId, revision: pending.revision, files }),
-      });
+      const result = pending.snapshot
+        ? await api<{ job_id: string; deduplicated?: boolean }>("/api/models/huggingface/download", {
+          method: "POST",
+          body: JSON.stringify({ repo_id: pending.repoId, revision: pending.snapshot.revision }),
+        })
+        : await api<{ job_id: string; deduplicated?: boolean }>("/api/models/huggingface/files/download", {
+          method: "POST",
+          body: JSON.stringify({ repo_id: pending.repoId, revision: pending.revision, files }),
+        });
       downloads.track(pending.repoId, result.job_id);
       notify(result.deduplicated
         ? t("La descarga de {repoId} ya estaba en curso; no se ha duplicado", { repoId: pending.repoId })
@@ -4355,19 +4396,19 @@ function ModelsView({
       return;
     }
     setDownloadBusy(model.id);
-    downloads.track(model.id);
     try {
-      const result = await api<{ job_id: string; deduplicated?: boolean }>("/api/models/huggingface/download", {
+      const snapshot = await api<SnapshotCheck>("/api/models/huggingface/security", {
         method: "POST",
         body: JSON.stringify({ repo_id: model.id, revision: "main" }),
       });
-      downloads.track(model.id, result.job_id);
-      notify(result.deduplicated
-        ? t("La descarga de {id} ya estaba en curso; no se ha duplicado", { id: model.id })
-        : t("Descarga completa iniciada: {id}", { id: model.id }));
-      refresh();
+      setPendingDownload({
+        repoId: model.id,
+        revision: snapshot.revision,
+        files: [],
+        label: t("Descarga completa iniciada: {id}", { id: model.id }),
+        snapshot,
+      });
     } catch (error) {
-      downloads.untrack(model.id);
       notify((error as Error).message, true);
     } finally {
       setDownloadBusy(null);
@@ -4493,7 +4534,7 @@ function ModelsView({
   }
 
   async function remove(kind: "ollama" | "huggingface", name: string) {
-    if (!window.confirm(t("¿Eliminar {name}? Esta acción libera sus archivos locales.", { name: name }))) return;
+    if (!await confirmDialog(t("¿Eliminar {name}? Esta acción libera sus archivos locales.", { name: name }), { tone: "danger", confirmLabel: t("Eliminar") })) return;
     try {
       await api(`/api/models/${kind}/${encodeURIComponent(name)}?confirm=${encodeURIComponent(name)}`, { method: "DELETE" });
       notify(t("{name} eliminado", { name }));
@@ -5246,6 +5287,7 @@ function ModelsView({
           {inspection.remote && !inspection.remote.download_supported && <div className="profile-warning">
             <TriangleAlert size={15} />{inspection.remote.download_block_reason}
           </div>}
+          <SecurityWarnings warnings={inspection.remote?.security_warnings} />
           {inspection.local && <div className="hf-local-detail">
             <small>{t("Cuantizaciones:")}{" "}{inspection.local.quantizations.join(", ") || t("no detectadas")}{" "}{t("· Snapshots:")}{" "}{inspection.local.snapshots.length}{" "}{t("· Parciales:")}{" "}{inspection.local.partials.length}</small>
             {inspection.local.shards.map((shard) => <span className={`badge ${shard.complete ? "completed" : "failed"}`} key={`${shard.name}-${shard.expected}`}>{shard.name}: {shard.present.length}/{shard.expected}</span>)}
@@ -5805,10 +5847,10 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
 
   async function duplicate(profile: Profile) {
     const suggestion = t("{name} copia", { name: profile.name.replace(RECIPE_PREFIX, "") }).replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ·._-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
-    const name = window.prompt(
+    const name = (await promptDialog(
       t("Nombre del nuevo perfil (copia de {name}).\nLetras, números, espacios y · . _ - ; de 2 a 80 caracteres.", { name: profile.name }),
-      suggestion,
-    )?.trim();
+      { title: t("Duplicar perfil"), confirmLabel: t("Crear copia"), defaultValue: suggestion, maxLength: 80 },
+    ))?.trim();
     if (!name) return;
     try {
       await api(`/api/profiles/${encodeURIComponent(profile.id)}/duplicate`, { method: "POST", body: JSON.stringify({ name }) });
@@ -5896,7 +5938,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
   }
 
   async function remove(profile: Profile) {
-    if (!window.confirm(t("¿Eliminar el perfil {name}?", { name: profile.name }))) return;
+    if (!await confirmDialog(t("¿Eliminar el perfil {name}?", { name: profile.name }), { tone: "danger", confirmLabel: t("Eliminar perfil") })) return;
     try {
       await api(`/api/profiles/${profile.id}?confirm=${encodeURIComponent(profile.name)}`, { method: "DELETE" });
       notify(t("Perfil eliminado"));
@@ -6094,10 +6136,10 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             className={noFitReason && !preparing ? "no-fit" : undefined}
             title={preparing ? undefined : noFitReason || undefined}
             disabled={preparing || (!running && (anyPreparing || Boolean(noFitReason)))}
-            onClick={() => {
+            onClick={async () => {
               if (!running) {
                 void selectAndStart(profile);
-              } else if (window.confirm(t("¿Detener {name}? Sus modelos dejarán de responder en el chat y el gateway.", { name: profile.name }))) {
+              } else if (await confirmDialog(t("¿Detener {name}? Sus modelos dejarán de responder en el chat y el gateway.", { name: profile.name }), { tone: "danger", confirmLabel: t("Detener") })) {
                 void action(`/api/profiles/${profile.id}/stop`, t("Perfil detenido"));
               }
             }}
@@ -6117,8 +6159,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
           </button>
           {startJob && ["queued", "running"].includes(startJob.status) && <button
             className="danger"
-            onClick={() => {
-              if (window.confirm(t("¿Cancelar la preparación de {name}? Lo ya descargado se queda en la caché.", { name: profile.name }))) {
+            onClick={async () => {
+              if (await confirmDialog(t("¿Cancelar la preparación de {name}? Lo ya descargado se queda en la caché.", { name: profile.name }), { tone: "danger", confirmLabel: t("Cancelar preparación"), cancelLabel: t("Seguir preparando") })) {
                 void action(`/api/jobs/${startJob.id}/cancel`, t("Cancelación solicitada"));
               }
             }}
@@ -6128,8 +6170,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             className="primary"
             disabled={running}
             title={running ? t("Detén el perfil antes de actualizar la receta") : undefined}
-            onClick={() => {
-              if (profile.recipe_modified && !window.confirm(t("Actualizar {name} a v{version} sustituye tus cambios locales de modelos y parámetros; la app de arranque se conserva si la receta no define otra. ¿Continuar?", { name: profile.name.replace(RECIPE_PREFIX, ""), version: profile.recipe_update ?? 0 }))) return;
+            onClick={async () => {
+              if (profile.recipe_modified && !await confirmDialog(t("Actualizar {name} a v{version} sustituye tus cambios locales de modelos y parámetros; la app de arranque se conserva si la receta no define otra. ¿Continuar?", { name: profile.name.replace(RECIPE_PREFIX, ""), version: profile.recipe_update ?? 0 }), { tone: "danger", confirmLabel: t("Actualizar receta") })) return;
               void action(`/api/profiles/recipes/${encodeURIComponent(profile.recipe_id || "")}/update`, t("{name} actualizada a v{version}", { name: profile.name.replace(RECIPE_PREFIX, ""), version: profile.recipe_update }));
             }}
           ><RefreshCw size={14} />{" "}{t("Actualizar a v{version}", { version: profile.recipe_update })}</button> : null}
@@ -6414,12 +6456,12 @@ function MemoryModePanel({ notify, onChange }: { notify: (message: string, error
     if (next.has(id)) next.delete(id); else next.add(id);
     setSelected(next);
   }
-  function releaseAll() {
+  async function releaseAll() {
     const names = [
       ...(stopProfiles ? profiles.map((profile) => t("perfil {name}", { name: profile.name })) : []),
       ...active.filter((service) => chosen.has(service.id)).map((service) => service.name),
     ];
-    if (!window.confirm(t("Se detendrán: {value} y se descargarán los modelos de Ollama. Podrás devolverlo todo con «Restaurar». ¿Continuar?", { value: names.join(", ") || t("ningún servicio") }))) return;
+    if (!await confirmDialog(t("Se detendrán: {value} y se descargarán los modelos de Ollama. Podrás devolverlo todo con «Restaurar». ¿Continuar?", { value: names.join(", ") || t("ningún servicio") }), { tone: "danger", confirmLabel: t("Liberar memoria") })) return;
     void run("release", "/api/memory-mode/release", {
       services: [...chosen].filter((id) => active.some((service) => service.id === id)),
       release_ollama: true,
@@ -6428,9 +6470,9 @@ function MemoryModePanel({ notify, onChange }: { notify: (message: string, error
     },
       (result) => t("Memoria liberada · {value} libres", { value: bytes(result.memory.free ?? 0) }));
   }
-  function toggleService(service: OptionalService) {
+  async function toggleService(service: OptionalService) {
     const action = service.active ? "stop" : "start";
-    if (action === "stop" && !window.confirm(t("¿Detener {name}? {impact}", { name: service.name, impact: service.impact }))) return;
+    if (action === "stop" && !await confirmDialog(t("¿Detener {name}? {impact}", { name: service.name, impact: service.impact }), { tone: "danger", confirmLabel: t("Detener") })) return;
     void run(service.id, `/api/memory-mode/services/${encodeURIComponent(service.id)}`, { action, confirm: `${action} ${service.id}` },
       () => (action === "stop" ? t("{name} detenido", { name: service.name }) : t("{name} arrancado", { name: service.name })));
   }
@@ -6481,8 +6523,8 @@ function MemoryModePanel({ notify, onChange }: { notify: (message: string, error
     <small className="memory-mode-note"><Info size={12} />{" "}{t("Después levanta el modelo grande desde Perfiles: si no cabe en la memoria libre, MyDGX vacía la caché de disco antes de cargarlo. Para restaurar los perfiles anteriores, detén antes el modelo grande.")}</small>
     <div className="memory-mode-actions">
       <button className="danger" disabled={busy !== null} onClick={releaseAll}><Zap size={14} />{busy === "release" ? t("Liberando…") : t("Liberar seleccionados (~{chosenBytes} + caché)", { chosenBytes: bytes(chosenBytes) })}</button>
-      {stoppedNames.length > 0 && <button className="primary-action" disabled={busy !== null} onClick={() => {
-        if (window.confirm(t("¿Volver a arrancar {join}?", { join: stoppedNames.join(", ") }))) void run("restore", "/api/memory-mode/restore", { confirm: "restaurar servicios" }, () => t("Servicios restaurados"));
+      {stoppedNames.length > 0 && <button className="primary-action" disabled={busy !== null} onClick={async () => {
+        if (await confirmDialog(t("¿Volver a arrancar {join}?", { join: stoppedNames.join(", ") }), { confirmLabel: t("Restaurar") })) void run("restore", "/api/memory-mode/restore", { confirm: "restaurar servicios" }, () => t("Servicios restaurados"));
       }}><RefreshCw size={14} />{busy === "restore" ? t("Restaurando…") : t("Restaurar ({join})", { join: stoppedNames.join(", ") })}</button>}
     </div>
   </Card>;
@@ -6508,7 +6550,7 @@ function EnginesView({ notify }: { notify: (message: string, error?: boolean) =>
     return () => window.clearTimeout(timer);
   }, [load]);
   async function action(engine: ServingEngine, operation: "start" | "stop") {
-    if (operation === "stop" && !window.confirm(t("¿Detener {name}? Los modelos que dependen de este motor dejarán de estar disponibles.", { name: engine.name }))) return;
+    if (operation === "stop" && !await confirmDialog(t("¿Detener {name}? Los modelos que dependen de este motor dejarán de estar disponibles.", { name: engine.name }), { tone: "danger", confirmLabel: t("Detener") })) return;
     setBusy(engine.id);
     try {
       await api(`/api/engines/${encodeURIComponent(engine.id)}/action`, {
@@ -6578,7 +6620,7 @@ function ProfileAppsPanel({ notify }: { notify: (message: string, error?: boolea
     return () => window.clearTimeout(timer);
   }, [load]);
   async function action(name: string, operation: "start" | "stop" | "restart") {
-    if (operation === "stop" && !window.confirm(t("¿Detener {name}? Se ejecutará su start.sh stop y dejará de estar disponible hasta que lo arranques.", { name }))) return;
+    if (operation === "stop" && !await confirmDialog(t("¿Detener {name}? Se ejecutará su start.sh stop y dejará de estar disponible hasta que lo arranques.", { name }), { tone: "danger", confirmLabel: t("Detener") })) return;
     setBusy(name);
     try {
       const result = await api<ProfileAppState & { exit_code: number }>(`/api/profile-apps/${encodeURIComponent(name)}/${operation}`, { method: "POST" });
@@ -6917,8 +6959,8 @@ function ChatView({ models, config, notify, onClose }: { models: Models | null; 
     }
   }
 
-  function clearChat() {
-    if (!window.confirm(t("¿Borrar todo el historial de este chat en este navegador?"))) return;
+  async function clearChat() {
+    if (!await confirmDialog(t("¿Borrar todo el historial de este chat en este navegador?"), { tone: "danger", confirmLabel: t("Borrar historial") })) return;
     setMessages([]);
     try {
       localStorage.removeItem(historyStorageKey);
@@ -7769,9 +7811,10 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
   }, [detail]);
 
   async function rerunBenchmark(run: BenchmarkRun) {
-    if (!window.confirm(
+    if (!await confirmDialog(
       t("Se volverá a ejecutar el benchmark de {source_id}. El resultado anterior se conservará ", { source_id: run.source_id })
       + t("en el histórico y la inferencia quedará pausada durante la medición. ¿Continuar?"),
+      { confirmLabel: t("Repetir benchmark") },
     )) return;
     setRerunningArtifact(run.artifact_hash);
     try {
@@ -7803,11 +7846,12 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
       (total, item) => total + Number(item.artifact_size || 0),
       0,
     );
-    const confirmed = window.confirm(
+    const confirmed = await confirmDialog(
       t("La suite medirá {length} modelo(s) ({totalSize} en disco). ", { length: selectedCandidates.length, totalSize: bytes(totalSize) })
       + t("Puede tardar muchas horas. Durante todo el proceso el chat, el gateway y los perfiles ")
       + t("no estarán disponibles. MyDGX descargará todos los modelos de memoria, medirá uno por ")
       + t("uno y restaurará el estado actual al terminar o al detener la suite. ¿Continuar?"),
+      { confirmLabel: t("Iniciar suite") },
     );
     if (!confirmed) return;
     setSuiteAction("starting");
@@ -7830,9 +7874,10 @@ function BenchmarksView({ jobs, notify }: { jobs: Job[]; notify: (message: strin
 
   async function stopSuite() {
     if (!data?.suite) return;
-    if (!window.confirm(
+    if (!await confirmDialog(
       t("Se detendrá la muestra actual y MyDGX restaurará los perfiles y modelos que estaban ")
       + t("cargados antes de empezar. La restauración puede tardar unos minutos. ¿Detener la suite?"),
+      { tone: "danger", confirmLabel: t("Detener suite") },
     )) return;
     setSuiteAction("stopping");
     try {
@@ -8632,7 +8677,7 @@ function BackupsPanel({ notify }: { notify: (message: string, error?: boolean) =
   }
 
   async function remove(name: string) {
-    if (!window.confirm(t("¿Borrar la copia {name} del DGX? Si no la has descargado, se perderá.", { name }))) return;
+    if (!await confirmDialog(t("¿Borrar la copia {name} del DGX? Si no la has descargado, se perderá.", { name }), { tone: "danger", confirmLabel: t("Borrar copia") })) return;
     try {
       await api(`/api/system/backups/${encodeURIComponent(name)}`, { method: "DELETE" });
       notify(t("Copia de seguridad borrada"));
@@ -8972,7 +9017,7 @@ function SystemView({ config, jobs, overview, notify, onOpenLab, initialTab = "o
       t("Se instalará el firmware pendiente con fwupd. No apagues ni desconectes el equipo durante la instalación."),
       reboot ? t("Hará falta reiniciar el DGX para aplicarlo; MyDGX no reiniciará por su cuenta.") : "",
     ].filter(Boolean).join("\n\n");
-    if (!window.confirm(message)) return;
+    if (!await confirmDialog(message, { tone: "danger", confirmLabel: t("Instalar firmware") })) return;
     try {
       await api("/api/updates/firmware/apply", { method: "POST", body: JSON.stringify({ confirm: "ACTUALIZAR FIRMWARE" }) });
       notify(t("Instalación de firmware iniciada"));
@@ -8982,7 +9027,7 @@ function SystemView({ config, jobs, overview, notify, onOpenLab, initialTab = "o
   }
 
   async function applyUpdates() {
-    if (!window.confirm(t("Se actualizarán los paquetes del sistema. Guarda todo tu trabajo antes de continuar."))) return;
+    if (!await confirmDialog(t("Se actualizarán los paquetes del sistema. Guarda todo tu trabajo antes de continuar."), { confirmLabel: t("Actualizar") })) return;
     try {
       await api("/api/updates/apply", { method: "POST", body: JSON.stringify({ confirm: "ACTUALIZAR MYDGX" }) });
       notify(t("Actualización iniciada; al terminar se verificarán kernel, driver, CUDA, DKMS y llama.cpp"));
@@ -8992,7 +9037,7 @@ function SystemView({ config, jobs, overview, notify, onOpenLab, initialTab = "o
   }
 
   async function repairSystem() {
-    if (!window.confirm(t("Se comprobarán paquetes, DKMS, driver NVIDIA, CUDA y llama.cpp. La reparación puede tardar varios minutos."))) return;
+    if (!await confirmDialog(t("Se comprobarán paquetes, DKMS, driver NVIDIA, CUDA y llama.cpp. La reparación puede tardar varios minutos."), { confirmLabel: t("Reparar") })) return;
     try {
       await api("/api/system/repair", { method: "POST", body: JSON.stringify({ confirm: "REPARAR MYDGX" }) });
       notify(t("Comprobación y reparación iniciada"));
@@ -9002,7 +9047,8 @@ function SystemView({ config, jobs, overview, notify, onOpenLab, initialTab = "o
   }
 
   async function control(name: string, action: "start" | "stop" | "restart") {
-    if (!window.confirm(t("¿{action} el servicio {name}?", { action: action === "start" ? t("Iniciar") : action === "stop" ? t("Detener") : t("Reiniciar"), name: name }))) return;
+    const actionLabel = action === "start" ? t("Iniciar") : action === "stop" ? t("Detener") : t("Reiniciar");
+    if (!await confirmDialog(t("¿{action} el servicio {name}?", { action: actionLabel, name: name }), { tone: action === "start" ? "default" : "danger", confirmLabel: actionLabel })) return;
     try {
       await api("/api/services/action", { method: "POST", body: JSON.stringify({ name, action, confirm: `${action} ${name}` }) });
       notify(t("Servicio {name}: {action}", { name: name, action: action === "start" ? t("Iniciar") : action === "stop" ? t("Detener") : t("Reiniciar") }));
@@ -9562,7 +9608,7 @@ function ServerSettingsCard({ notify }: { notify: (message: string, error?: bool
   }
 
   async function clearToken() {
-    if (!window.confirm(t("¿Quitar el token de Hugging Face? Los repositorios restringidos dejarán de poder descargarse."))) return;
+    if (!await confirmDialog(t("¿Quitar el token de Hugging Face? Los repositorios restringidos dejarán de poder descargarse."), { tone: "danger", confirmLabel: t("Quitar token") })) return;
     const result = await submit({ clear_hf_token: true }, "clear");
     if (!result) return;
     setTokenStatus("");
@@ -9825,7 +9871,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   const [models, setModels] = useState<Models | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const error = Object.values(errors).find(Boolean) ?? "";
+  const error = Object.values(errors).find((message) => message && message !== new DgxOfflineError().message) ?? "";
   const reportError = useCallback((source: string, message: string) => {
     setErrors((current) => (current[source] ?? "") === message ? current : { ...current, [source]: message });
   }, []);
@@ -9833,7 +9879,9 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
   const jobsRequest = useRef(0);
   const [toast, setToast] = useState<{ message: string; error: boolean } | null>(null);
 
+  const connection = useDgxConnection();
   const notify = useCallback((message: string, isError = false) => {
+    if (isError && message === new DgxOfflineError().message) return;
     setToast({ message, error: isError });
     window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 4200);
@@ -10086,7 +10134,7 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
         <div className="sidebar-bottom">
           <div className="device-mini">
             <div className="device-image"><Cpu /></div>
-            <div><strong>{overview ? (overview.host.is_dgx_spark ? overview.host.device_model : overview.host.hostname) : t("Detectando equipo")}</strong><span><StatusDot online={Boolean(overview)} /> {overview ? `${overview.host.is_dgx_spark ? "DGX Spark / GB10" : t("No DGX Spark")} · ${overview.host.is_dgx_os ? "DGX OS" : overview.host.os_family}` : t("Conectando")}</span></div>
+            <div><strong>{overview ? (overview.host.is_dgx_spark ? overview.host.device_model : overview.host.hostname) : t("Detectando equipo")}</strong><span><StatusDot online={Boolean(overview) && connection.online} /> {!connection.online ? t("DGX desconectado") : overview ? `${overview.host.is_dgx_spark ? "DGX Spark / GB10" : t("No DGX Spark")} · ${overview.host.is_dgx_os ? "DGX OS" : overview.host.os_family}` : t("Conectando")}</span></div>
             {overview?.running_profiles?.length ? (
               <button className="device-profiles" onClick={() => { setView("profiles"); setMenuOpen(false); }} title={t("Ver perfiles")}>
                 <small>{overview.running_profiles.length === 1 ? t("Perfil activo") : t("Perfiles activos")}</small>
@@ -10143,12 +10191,14 @@ export default function App({ onLogout }: { onLogout?: () => void }) {
             {onLogout && <button className="header-icon-button session-logout" onClick={onLogout} title={t("Cerrar sesión")} aria-label={t("Cerrar sesión")}><LogOut size={16} /></button>}
           </div>
         </header>
-        {error && <div className="error-banner"><ShieldCheck size={18} /><span>{error}</span><button onClick={() => { void refreshOverview(); void refreshCore(); void refreshModels(); }}>{t("Reintentar")}</button></div>}
+        {!connection.online && <DgxOfflineNotice since={connection.since} onRetry={() => { void refreshOverview(); void refreshCore(); void refreshModels(); }} />}
+        {connection.online && error && <div className="error-banner"><ShieldCheck size={18} /><span>{error}</span><button onClick={() => { void refreshOverview(); void refreshCore(); void refreshModels(); }}>{t("Reintentar")}</button></div>}
         <div className="content">{content}</div>
       </main>
       {chatMounted && <div id="chat-dock" className="chat-dock" role="dialog" aria-label={t("MyDGX Copilot")} hidden={!chatOpen}>
         <ChatView models={models} config={config} notify={notify} onClose={() => setChatOpen(false)} />
       </div>}
+      <DialogHost />
       {toast && <div className={`toast ${toast.error ? "error" : ""}`}>{toast.error ? <ShieldCheck /> : <Sparkles />}<span>{toast.message}</span></div>}
     </div>
   );

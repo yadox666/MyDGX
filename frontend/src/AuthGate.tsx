@@ -1,6 +1,8 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Cpu, Eye, EyeOff, LockKeyhole, RefreshCw } from "lucide-react";
 import App from "./App";
+import DgxOfflineNotice from "./DgxOfflineNotice";
+import { fetchDgx, isDgxOfflineError, useDgxConnection } from "./connection";
 import { languageHeader, t } from "./i18n";
 
 type AuthStatus = {
@@ -24,7 +26,7 @@ export default function AuthGate() {
 
   const refreshStatus = useCallback(async () => {
     try {
-      const response = await fetch("/api/auth/status", {
+      const response = await fetchDgx("/api/auth/status", {
         cache: "no-store",
         headers: languageHeader,
         credentials: "same-origin",
@@ -33,9 +35,16 @@ export default function AuthGate() {
       setStatus(await response.json() as AuthStatus);
       setError("");
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : t("Dashboard no disponible"));
+      setError(isDgxOfflineError(requestError) ? "" : requestError instanceof Error ? requestError.message : t("Dashboard no disponible"));
     }
   }, []);
+
+  const connection = useDgxConnection();
+  useEffect(() => {
+    if (connection.online || status) return;
+    const timer = window.setInterval(() => void refreshStatus(), 5000);
+    return () => window.clearInterval(timer);
+  }, [connection.online, refreshStatus, status]);
 
   useEffect(() => {
     const systemTheme = matchMedia("(prefers-color-scheme: dark)");
@@ -98,7 +107,7 @@ export default function AuthGate() {
       if (lastActivity.current <= lastRenewal.current) return;
       lastRenewal.current = Date.now();
       try {
-        const response = await fetch("/api/auth/refresh", { method: "POST", credentials: "same-origin", headers: languageHeader });
+        const response = await fetchDgx("/api/auth/refresh", { method: "POST", credentials: "same-origin", headers: languageHeader });
         if (response.ok) setStatus(await response.json() as AuthStatus);
         else if (response.status === 401) window.dispatchEvent(new Event("mydgx-auth-required"));
       } catch {
@@ -118,7 +127,7 @@ export default function AuthGate() {
     setSubmitting(true);
     setError("");
     try {
-      const response = await fetch("/api/auth/login", {
+      const response = await fetchDgx("/api/auth/login", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", ...languageHeader },
@@ -129,7 +138,7 @@ export default function AuthGate() {
       setPassword("");
       setStatus(body);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : t("No se pudo iniciar sesión"));
+      setError(isDgxOfflineError(requestError) ? "" : requestError instanceof Error ? requestError.message : t("No se pudo iniciar sesión"));
     } finally {
       setSubmitting(false);
     }
@@ -180,12 +189,13 @@ export default function AuthGate() {
             {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
           </button>
         </div>
+        {!connection.online && <DgxOfflineNotice since={connection.since} variant="card" />}
         {error && <div className="auth-error" role="alert">{error}</div>}
         <button className="auth-submit" disabled={!password || submitting} type="submit">
           {submitting ? <RefreshCw className="spin" size={17} /> : <LockKeyhole size={17} />}
           {submitting ? t("Comprobando…") : t("Entrar en MyDGX")}
         </button>
-      </form> : <div className="auth-loading">
+      </form> : !connection.online ? <DgxOfflineNotice since={connection.since} variant="card" onRetry={() => void refreshStatus()} /> : <div className="auth-loading">
         <RefreshCw className="spin" size={20} />
         {error && <><span role="alert">{error}</span><button onClick={() => void refreshStatus()}>{t("Reintentar")}</button></>}
       </div>}

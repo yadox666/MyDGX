@@ -37,7 +37,14 @@ Anthropic Messages. Clients ask for it with their usual parameter
 (`reasoning_effort`, `reasoning.effort` or `thinking`); see
 [Reasoning](api.md#reasoning). In Open WebUI, set **Reasoning Effort** in the
 model's advanced parameters (for example `high`) and the thinking appears in a
-collapsible block while the model works.
+collapsible block while the model works. A per-request `thinking: disabled`
+wins over a `reasoning_effort` set in the same request.
+
+Prompt cache: on Chat Completions, a session identifier in `prompt_cache_key`
+or in the `X-Session-Id` header sends each conversation back to the llama.cpp
+slot that already holds its prompt. This only applies to models with more than
+one parallel slot. When that slot is busy, the gateway does not pin the request
+and llama.cpp picks a free slot, so no request waits for its old slot.
 
 ## Open WebUI
 

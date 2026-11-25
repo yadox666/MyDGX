@@ -766,11 +766,12 @@ You can also run it directly without preparing the configuration:
 ./start.sh test root@192.168.1.100
 ./start.sh test root@192.168.1.100 -p22
 ./start.sh test root@192.168.1.100 -p 2222
+./start.sh test -i ~/.ssh/spark_key root@192.168.1.100 -p 2222
 ```
 
-The port is optional and defaults to `22`. In this format OpenSSH first tries
-the available keys; if none authenticates, it asks for the password
-directly in the terminal. MyDGX never receives or stores that password.
+The port is optional and defaults to `22`. `-i` selects a private key, as in
+OpenSSH. Without it, OpenSSH first tries the available keys; if none
+authenticates, it asks for the password directly in the terminal. MyDGX never receives or stores that password.
 
 On the local network, you can create or update the initial configuration through
 Bonjour/mDNS. It only selects SSH services whose name identifies a

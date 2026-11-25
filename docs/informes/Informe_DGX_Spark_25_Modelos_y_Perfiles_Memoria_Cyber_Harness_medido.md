@@ -7,7 +7,7 @@ Evaluación técnica de 25 modelos GGUF: ciberseguridad, programación, razonami
 
 **DGX SPARK · NVIDIA GB10 · 128 GB DE MEMORIA UNIFICADA**
 
-Edición: 21 de noviembre de 2026 · **revisada con mediciones en el DGX Spark**
+Edición: 21 de noviembre de 2026 · **revisada con mediciones en el DGX Spark** · ampliada el 24 de noviembre con diseño web, gráficos y presentaciones (sección 32)
 
 > **EDICIÓN MEDIDA**
 > Donde esta edición da velocidades, memoria o compatibilidad de MTP, son mediciones hechas en el propio DGX Spark el 21 de noviembre de 2026, con llama.cpp `v1.0.0` (y `b10679` donde se indica). Sustituyen a las estimaciones y recomendaciones del informe original. La calidad de las respuestas sigue sin medir: la batería de 100 casos continúa pendiente.
@@ -1160,6 +1160,82 @@ Las tres primeras combinaciones son los perfiles medidos de la sección 25.0: de
 
 **Controles del flujo.** Los papeles de orquestador, lanzador y manejador de MCPs tienen acceso a shell, red o navegador, y varios modelos son uncensored o abliterados. Aplicar en todos: solo objetivos con autorización explícita, permisos de solo lectura por defecto, lista cerrada de herramientas con esquema JSON validado, confirmación humana antes de cualquier acción activa y registro de cada acción. Un finding solo se da por bueno con prueba reproducible y revisión humana, aunque dos modelos coincidan.
 
+# 32. Diseño web, gráficos y presentaciones
+
+Investigación del 24 de noviembre de 2026 con los rankings públicos de Design Arena y Code Arena \[D01\]–\[D04\] y las fichas de cada modelo. Las velocidades y memorias de los modelos ya instalados son las medidas en el GB10; la calidad de diseño no se ha medido en el DGX.
+
+Diseñar una web o una presentación son en realidad tres trabajos distintos, y ningún modelo los hace todos bien:
+
+- **Código que se renderiza** (HTML/CSS, React, SVG, `python-pptx`): lo escribe un LLM. Aquí van los textos, las cifras, los gráficos de datos, las flechas y la maquetación.
+- **Imagen** (ilustraciones, fondos, iconos, carteles): la genera un modelo de difusión.
+- **Revisión visual**: un modelo con visión mira la captura renderizada y propone correcciones.
+
+**La regla práctica.** Los modelos de difusión todavía se equivocan con el texto y no saben qué cifra es la correcta. Todo lo que sea dato (títulos de diapositiva, números, ejes, nombres) debe salir del código, y la difusión solo debe aportar imágenes. Es el mismo reparto que usan los proyectos publicados sobre el Spark para carteles y figuras científicas \[D10\]\[D11\].
+
+## 32.1 Qué dicen los rankings públicos
+
+| **Ranking** (fecha) | **Mejor modelo abierto** | **¿Cabe en un Spark?** | **Mejor modelo que sí cabe** |
+|---|---|---|---|
+| Design Arena · websites (24 nov) \[D01\] | Kimi K3, 1388 | No (≈1T parámetros) | **Inkling 2 Mini, 1319** (#37 de 135), por delante de Claude Sonnet 5 y Qwen3.8 Max |
+| Design Arena · UI components \[D02\] | — | — | **Inkling 2 Mini, 1313** (#20 de 130) |
+| Code Arena · WebDev, solo abiertos (13 nov) \[D03\] | Kimi K3.1 Pro, 1686 | No | **Qwen3.8-Flash-Next, 1625** (#7 de 63 abiertos, preliminar) |
+| Design Arena · SVG (23 nov) \[D04\] | Kimi K3.1 Pro, 1372 | No | Ninguno en el top 15 |
+| Design Arena · diapositivas `python-pptx` (20 nov) \[D05\] | Kimi K3.1 Pro, 1287 | No | Ninguno en la tabla (15 modelos) |
+
+Los demás modelos abiertos que puntúan alto en diseño no caben en 128 GB con una cuantización utilizable: Muse Spark Open (816B-A42B), MiMo-V2.6-Flash (310B), Hy4 flash (220B) y DeepSeek V4.1 Flash, que en el DGX solo funciona como piloto con Engram en SSD (sección 31.3). Entre los que caben, GLM-5.3 Flash queda en 1305 (#51) y Muse Glimmer 30B en 1227 (#87).
+
+**Cómo leerlos.** Los votos premian el aspecto del primer borrador, no que el código sea mantenible. Las cifras son de los modelos servidos en precisión completa, no de las cuantizaciones del DGX, y dentro de unos 10 puntos dos modelos están empatados.
+
+## 32.2 Modelos de texto: webs, componentes y maquetas de diapositivas
+
+| **Papel** | **Modelo** | **En el DGX** | **Evidencia** | **Memoria y velocidad** | **Cuidado con** |
+|---|---|---|---|---|---|
+| **Diseñador principal** (webs, landing pages, diapositivas HTML, SVG) | Inkling 2 Mini Q8_0 | Sí: perfil propio, parado | El mejor de los que caben en las tablas de diseño (1319 webs, 1313 componentes). En la demo de Hugging Face hace una web completa con sus propios SVG en un solo HTML, y convierte un boceto a mano en una app que pasa 13 de 13 comprobaciones con Playwright \[D06\]. Lee imágenes: puede partir de un boceto o de una captura. | 27,8 GB, unos 30 GB en memoria; 23,7 tok/s en prueba manual | Sin benchmark de MyDGX todavía. Flojo en visualización de datos (1203, #61): los gráficos, mejor con una librería. |
+| **Agente frontend multiarchivo** (proyectos React/Vite, refactor de UI) | Qwen3.8-Flash-Next (original) | Sí | 1625 en Code Arena WebDev, séptimo entre los abiertos (preliminar) \[D03\] | 83,6 GB; 25,5 tok/s | Ocupa casi todo el equipo: en solitario y sin el despliegue RAG. |
+| **Segunda opinión** | GLM-5.3 Flash | Sí | 1305 en Design Arena websites (#51) | 101,8 GB; 16,1 tok/s | La versión del ranking va en precisión completa; la del DGX en IQ2_XXS. En solitario. |
+| **Lógica e integración** (formularios, estado, API, tests) | Cyber-Tiel Q5 + MTP · Qwen3-Coder-Next Q4 | Sí | No aparecen en las tablas de diseño | 26,6 GB y 59,5 tok/s · 48,6 GB y 52,0 tok/s | Estética sin medir: úsalos para que la web funcione, no para que luzca. |
+| **Revisor visual** (¿se ve bien la captura?) | Gemma-4-31B heretic | Sí | El único que reconoce todos los conceptos de la prueba de visión de MyDGX | 25,2 GB; 15,8 s por imagen | Lento para generar código (6,3 tok/s): solo revisa. Inkling también puede revisar su propia captura. |
+| Opcional | Muse Glimmer 30B (Meta) | No | 1227 en websites (#87); Apache 2.0, visión y drafter DFlash \[D07\] | Denso de 30B: previsiblemente lento sin drafter, como Gemma 31B | No mejora a Inkling en diseño. |
+| Opcional | UIGEN-FX-4B (Tesslate) | No | Ajustado para HTML/Tailwind y webs *mobile-first* \[D08\] | 4,3 GB en Q8_0 | *Research preview* sin ranking público. Su hermano UIGEN-T3 tiene licencia no comercial. |
+
+## 32.3 Imagen para presentaciones, carteles e infografías
+
+En el DGX ya están FLUX.1 Schnell, que está desfasado y escribe mal el texto, y Qwen-Image 2.1, que es el mejor modelo abierto en calidad (1047 en Artificial Analysis) pero tiene licencia de investigación sin uso comercial (sección 30.2). Para diapositivas y material que se vaya a entregar, el hueco es un modelo con buen texto y licencia permisiva.
+
+| **Modelo** | **Tamaño y licencia** | **Para qué destaca** | **Puntuación AA** \[D09\] | **En el Spark** |
+|---|---|---|---|---|
+| **Ming-Image-0.1-Design** (inclusionAI) | 6B · MIT | Hecho para UI, infografías y carteles con mucho texto. Genera RGBA con fondo transparente, listo para pegar en una diapositiva. Tiene una variante *Layer* que separa un diseño en capas editables \[D12\]. | 1001, el mejor permisivo | Plantilla oficial de ComfyUI; su mejorador de prompts usa Qwen3.8-27B, el modelo del despliegue RAG. Velocidad sin medir; configuración validada en GPU de 80 GiB. |
+| **ERNIE-Image-Turbo** (Baidu) | 8B · Apache 2.0 | Texto denso y largo, carteles, infografías, cómics y composiciones de varios paneles; 8 pasos \[D13\] | 915 | Plantilla de ComfyUI; unos 26 GB en FP16 o 15 GB en FP8. Sin medir. |
+| **Z-Image-Turbo** (Tongyi-MAI) | 6B · Apache 2.0 | Rápido y con buen texto en inglés y chino | 937 | Unos 7,5 s por imagen; fue el único que escribió bien el titular en la prueba en el Spark \[R07\] |
+| **Qwen-Image-2512** + Edit-2511 / Layered | 20B · Apache 2.0 | Texto complejo, maquetación tipo PPT e infografías; descomposición en capas | 908 | Sin medir; el más pesado de los permisivos |
+| FLUX 3 Image Klein | 5,6B · FLUX Kommunity | Control de posición por cajas y edición con hasta 10 referencias | 1041 | Uso comercial solo por debajo de 5 M$ de facturación |
+| Qwen-Image 2.1 (instalado) | 7B · Qwen Research | La mejor calidad abierta, capas y RGBA | 1047 | Sin uso comercial |
+
+## 32.4 Flujo recomendado en el DGX
+
+1. **Contenido y maquetación.** Inkling 2 Mini escribe la web o las diapositivas en HTML/CSS o SVG. Para un PowerPoint editable, genera páginas SVG y conviértelas a PPTX nativo; no pegues capturas de pantalla como diapositivas \[D11\].
+2. **Imágenes.** Ming-Image-0.1-Design para iconos, fondos e ilustraciones con transparencia; Z-Image-Turbo o ERNIE-Image-Turbo cuando haga falta rapidez.
+3. **Revisión.** Renderizar con Playwright, pasar la captura a Gemma-4-31B o a Inkling y corregir. Comprobar en el DOM los desbordes y los textos; la visión sola no los detecta siempre.
+4. **Exportación.** HTML a PDF o PNG; SVG a PPTX editable.
+
+**Memoria.** Inkling (unos 30 GB) junto al despliegue RAG (Qwen3.8-27B) usan los dos slots de LLM de MyDGX. El modelo de imagen corre en ComfyUI, fuera de esos slots, y añade entre 15 y 26 GB. Gemma-4-31B como revisor necesita un slot libre, así que entra en lugar del despliegue RAG o se sustituye por la visión de Inkling.
+
+## 32.5 Qué instalaría, por prioridad
+
+1. **Nada para webs:** Inkling 2 Mini ya está en el DGX. Crear un perfil de diseño con él y lanzar su benchmark.
+2. **Ming-Image-0.1-Design** en ComfyUI (MIT): cubre el hueco real, gráficos con texto legible y fondo transparente para diapositivas.
+3. **Z-Image-Turbo o ERNIE-Image-Turbo** (Apache 2.0) como alternativa rápida y permisiva.
+4. Opcional: UIGEN-FX-4B para borradores rápidos de componentes, o Muse Glimmer 30B como segunda opinión con licencia Apache.
+
+No merece la pena descargar Kimi K3/K3.1, Muse Spark Open, MiMo-V2.6-Flash ni Hy4 flash, aunque lideren las tablas abiertas: no caben en un Spark.
+
+## 32.6 Precauciones
+
+- **Licencias.** Qwen-Image 2.1, FLUX.2 klein 9B y UIGEN-T3 no permiten uso comercial. FLUX 3 Image Klein limita el uso comercial por facturación. HunyuanImage 3.0 no tiene licencia válida en la Unión Europea, el Reino Unido ni Corea del Sur \[D09\].
+- **Texto en imágenes.** Revisar cada palabra que genere un modelo de difusión. Nunca usarlo para cifras, gráficos ni nombres propios.
+- **HTML generado.** Revisarlo antes de publicarlo: puede cargar fuentes, scripts o imágenes de CDN externos, y la accesibilidad (etiquetas, ARIA, contraste) suele quedar incompleta. Previsualizar en un navegador aislado y no publicar sin revisión humana.
+- **Sin medir en el DGX:** la velocidad de Ming-Image y ERNIE-Image en el GB10, y la calidad de diseño de cualquier modelo con las cuantizaciones instaladas.
+
 # Fuentes nuevas y ficheros recomendados
 
 Enlaces directos a fichas y archivos verificados para la ampliación. Las cifras de velocidad y benchmarks proceden de sus respectivos autores salvo que se indique otra cosa.
@@ -1203,3 +1279,31 @@ Fuentes de la sección 30 (consultadas el 22 de noviembre de 2026):
 **\[R08\]** [GPUwerk · generación de vídeo en el DGX Spark, noviembre 2026](https://gpuwerk.com/dgx-spark/guides/video-generation-on-dgx-spark/)
 
 **\[R09\]** [GPUwerk · mejores modelos locales de generación de imagen 2026](https://gpuwerk.com/blog/local-image-generation-models/)
+
+Fuentes de la sección 32 (consultadas el 24 de noviembre de 2026):
+
+**\[D01\]** [LLMBenchmark · ranking de Design Arena websites (135 modelos, 24 nov 2026)](https://llmbenchmark.ai/rankings/design)
+
+**\[D02\]** [LLMBenchmark · Inkling 2 Mini en las tablas de Design Arena](https://llmbenchmark.ai/models/thinkingmachines-inkling-2-mini)
+
+**\[D03\]** [Code Arena · WebDev, modelos abiertos (13 nov 2026)](https://arena.ai/leaderboard/code/webdev?license=open-source)
+
+**\[D04\]** [Design Arena · SVG Arena](https://www.designarena.ai/leaderboard/svgs)
+
+**\[D05\]** [Fireworks · Design Arena Python-PPTX Slides (20 nov 2026)](https://fireworks.ai/specialized-intelligence-index/benchmarks/slide-generation/designarena-python-pptx-slides)
+
+**\[D06\]** [Hugging Face · presentación de Inkling 2 Mini y demos web](https://github.com/huggingface/blog/blob/main/inkling2mini.md)
+
+**\[D07\]** [Meta · Muse Glimmer 30B (ficha y licencia)](https://huggingface.co/meta-models/Muse-Glimmer-30B)
+
+**\[D08\]** [Tesslate · UIGEN-FX-4B-Preview](https://huggingface.co/Tesslate/UIGEN-FX-4B-Preview)
+
+**\[D09\]** [AI Wiki · modelos de imagen de pesos abiertos y licencias (19 nov 2026)](https://aiwiki.ai/wiki/best_open_weight_image_models)
+
+**\[D10\]** [Sparktastic · generador de carteles en un DGX Spark](https://medium.com/sparktastic/a-dgx-spark-poster-generator-1c7919912466)
+
+**\[D11\]** [cn-academic-spark · paper2ppt: páginas SVG convertidas a PPTX editable](https://github.com/wycmochi/cn-academic-spark/blob/main/skills/CN_Spark_paper2ppt/SKILL.md)
+
+**\[D12\]** [ComfyUI · Ming Image 0.1 Design](https://docs.comfy.org/tutorials/image/ming-image/ming-image-0-1-design)
+
+**\[D13\]** [Baidu · ERNIE-Image-Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo)

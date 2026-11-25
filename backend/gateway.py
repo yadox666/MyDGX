@@ -15,13 +15,15 @@ import time
 import uuid
 from urllib.parse import quote, urlparse
 from contextlib import asynccontextmanager
+from collections import OrderedDict
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.datastructures import UploadFile
 
 from backend.i18n import DEFAULT_LANGUAGE, request_language, translate_text
@@ -341,6 +343,9 @@ def apply_reasoning_controls(model: dict[str, Any], payload: dict[str, Any]) -> 
     """
     enabled, effort, exclude = requested_reasoning(payload)
     if model.get("engine") == "llama.cpp":
+        if enabled is False and effort not in {None, "minimal"}:
+            # An explicit per-request "off" wins over a profile-wide effort.
+            effort = "none"
         # llama.cpp ignores reasoning_effort; thinking is a chat-template switch.
         kwargs = payload.get("chat_template_kwargs")
         kwargs = dict(kwargs) if isinstance(kwargs, dict) else {}
@@ -363,6 +368,71 @@ def apply_reasoning_controls(model: dict[str, Any], payload: dict[str, Any]) -> 
     elif effort is None and enabled is not None:
         payload["reasoning_effort"] = "medium" if enabled else "none"
     return exclude
+
+
+SESSION_HEADERS = ("x-session-id", "x-mydgx-session")
+SLOT_AFFINITY_LIMIT = 4096
+# (llama-server URL, session) -> slot, oldest first. Single event loop, no lock needed.
+slot_affinity: OrderedDict[tuple[str, str], int] = OrderedDict()
+# (llama-server URL, slot) -> start times of requests the gateway pinned there.
+slot_leases: dict[tuple[str, int], list[float]] = {}
+
+
+def request_session(request: Request, payload: dict[str, Any]) -> str:
+    """OpenAI's prompt_cache_key, else a session header such as ARTIFEX's."""
+    key = payload.get("prompt_cache_key")
+    if not isinstance(key, str) or not key.strip():
+        key = next((request.headers[name] for name in SESSION_HEADERS if request.headers.get(name)), "")
+    return key.strip()[:256]
+
+
+def pin_session_slot(model: dict[str, Any], payload: dict[str, Any], session: str) -> Callable[[], None] | None:
+    """Send a session back to the llama.cpp slot that holds its prompt cache.
+
+    Pins only when that slot is idle: a pinned request waits for its slot even
+    while others are free, so a busy slot falls back to llama.cpp's own choice.
+    Returns the lease release, or None when the request is not pinned.
+    """
+    slots = int(model.get("parallel") or 1)
+    if model.get("engine") != "llama.cpp" or not session or slots < 2:
+        return None
+    server = upstream_url(model, "")
+    now = time.monotonic()
+    ttl = float(gateway_runtime_config()["request_timeout_seconds"])
+    busy: set[int] = set()
+    for slot in range(slots):
+        # Filter in place: pending release() closures hold these list objects.
+        starts = slot_leases.setdefault((server, slot), [])
+        starts[:] = [start for start in starts if now - start < ttl]
+        if starts:
+            busy.add(slot)
+    key = (server, session)
+    slot = slot_affinity.get(key)
+    if slot is None or slot >= slots:
+        free = [candidate for candidate in range(slots) if candidate not in busy]
+        if not free:
+            return None
+        owners = [owned for (owner, _), owned in slot_affinity.items() if owner == server]
+        slot = min(free, key=owners.count)
+    elif slot in busy:
+        return None
+    slot_affinity[key] = slot
+    slot_affinity.move_to_end(key)
+    while len(slot_affinity) > SLOT_AFFINITY_LIMIT:
+        slot_affinity.popitem(last=False)
+    lease = slot_leases.setdefault((server, slot), [])
+    lease.append(now)
+    payload["id_slot"] = slot
+    released = False
+
+    def release() -> None:
+        nonlocal released
+        if not released:
+            released = True
+            if now in lease:
+                lease.remove(now)
+
+    return release
 
 
 ANTHROPIC_EFFORT_BUDGETS = {"low": 2000, "medium": 5000, "high": 10000, "max": 16000}
@@ -1294,7 +1364,12 @@ async def proxy_openai_request(request: Request, endpoint: str) -> Response:
     fold_thinking_history(payload)
     exclude = apply_reasoning_controls(model, payload)
     return await relay_upstream(
-        model, endpoint, payload, reasoning_exclude=exclude, tool_names=requested_tool_names(payload)
+        model,
+        endpoint,
+        payload,
+        reasoning_exclude=exclude,
+        tool_names=requested_tool_names(payload),
+        release=pin_session_slot(model, payload, request_session(request, payload)),
     )
 
 
@@ -1305,6 +1380,31 @@ async def relay_upstream(
     is_tts_lab: bool = False,
     reasoning_exclude: bool | None = None,
     tool_names: frozenset[str] | None = None,
+    release: Callable[[], None] | None = None,
+) -> Response:
+    try:
+        response = await relay_upstream_response(
+            model, endpoint, payload, is_tts_lab, reasoning_exclude, tool_names
+        )
+    except BaseException:
+        if release:
+            release()
+        raise
+    if release:
+        if response.background is None:
+            response.background = BackgroundTask(release)
+        else:
+            release()
+    return response
+
+
+async def relay_upstream_response(
+    model: dict[str, Any],
+    endpoint: str,
+    payload: dict[str, Any],
+    is_tts_lab: bool,
+    reasoning_exclude: bool | None,
+    tool_names: frozenset[str] | None,
 ) -> Response:
     config = gateway_runtime_config()
     timeout = httpx.Timeout(float(config["request_timeout_seconds"]))
@@ -1662,6 +1762,79 @@ def chat_message_for_count(item: Any) -> Any:
     return {**item, "content": parts}
 
 
+def responses_input_to_chat(input_value: Any, instructions: Any) -> list[dict[str, Any]] | None:
+    """Responses input as plain chat messages for llama.cpp's template, or None with images."""
+    messages: list[dict[str, Any]] = []
+    if isinstance(instructions, str) and instructions:
+        messages.append({"role": "system", "content": instructions})
+    if isinstance(input_value, str):
+        return [*messages, {"role": "user", "content": input_value}]
+    for item in input_value if isinstance(input_value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("type")
+        if kind == "function_call":
+            messages.append({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": str(item.get("call_id") or item.get("id") or ""),
+                    "type": "function",
+                    "function": {"name": str(item.get("name") or ""), "arguments": str(item.get("arguments") or "{}")},
+                }],
+            })
+        elif kind == "function_call_output":
+            output = item.get("output")
+            messages.append({
+                "role": "tool",
+                "tool_call_id": str(item.get("call_id") or ""),
+                "content": output if isinstance(output, str) else json.dumps(output),
+            })
+        elif item.get("role"):
+            content = item.get("content")
+            if isinstance(content, list):
+                if any(isinstance(part, dict) and part.get("type") in {"input_image", "image_url"} for part in content):
+                    return None
+                content = "".join(
+                    str(part.get("text") or "") for part in content
+                    if isinstance(part, dict) and part.get("type") in {"input_text", "output_text", "text"}
+                )
+            role = "system" if item["role"] == "developer" else str(item["role"])
+            messages.append({"role": role, "content": content if isinstance(content, str) else ""})
+    return messages
+
+
+def responses_tools_to_chat(tools: Any) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for tool in tools if isinstance(tools, list) else []:
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            function = {key: tool[key] for key in ("name", "description", "parameters") if key in tool}
+        converted.append({"type": "function", "function": function})
+    return converted
+
+
+async def llama_input_tokens(model: dict[str, Any], messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> int | None:
+    """Exact prompt size from the model's own chat template and tokenizer."""
+    base = upstream_url(model, "")
+    body: dict[str, Any] = {"messages": messages}
+    if tools:
+        body["tools"] = tools
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+            rendered = await client.post(f"{base}/apply-template", json=body)
+            prompt = rendered.json().get("prompt") if rendered.status_code == 200 else None
+            if not isinstance(prompt, str):
+                return None
+            tokenized = await client.post(f"{base}/tokenize", json={"content": prompt, "parse_special": True})
+            tokens = tokenized.json().get("tokens") if tokenized.status_code == 200 else None
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return None
+    return len(tokens) if isinstance(tokens, list) else None
+
+
 async def response_input_tokens(request: Request) -> Response:
     """Count a Responses API input with LiteLLM's tokenizer without running inference."""
     config = gateway_runtime_config()
@@ -1702,13 +1875,20 @@ async def response_input_tokens(request: Request) -> Response:
             "El modelo necesita un adaptador no disponible", 409,
             "protocol_adapter_required",
         )
+    instructions = payload.get("instructions")
+    if model["engine"] == "llama.cpp" and not benchmark_gate_active():
+        chat = responses_input_to_chat(input_value, instructions)
+        exact = None if chat is None else await llama_input_tokens(
+            model, chat, responses_tools_to_chat(payload.get("tools"))
+        )
+        if exact is not None:
+            return JSONResponse({"object": "response.input_tokens", "input_tokens": exact})
     if not await litellm_adapter.ensure(routes):
         return openai_error(
             "El adaptador LiteLLM no está disponible", 503, "adapter_unavailable"
         )
 
     count_payload: dict[str, Any] = {"model": payload["model"]}
-    instructions = payload.get("instructions")
     if isinstance(input_value, str) and not instructions:
         count_payload["prompt"] = input_value
     else:

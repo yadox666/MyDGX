@@ -14,9 +14,10 @@ Para una prueba directa no es obligatorio editar el archivo:
 ```bash
 ./start.sh test root@192.168.1.100
 ./start.sh test root@192.168.1.100 -p22
+./start.sh test -i ~/.ssh/clave_spark root@192.168.1.100 -p 2222
 ```
 
-El puerto predeterminado es `22`. OpenSSH intenta las claves disponibles y pide
+El puerto predeterminado es `22`. `-i` elige una clave privada, como en OpenSSH. OpenSSH intenta las claves disponibles y pide
 la contraseña en la terminal únicamente si no consigue autenticar con ellas.
 
 Variables admitidas:

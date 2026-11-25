@@ -38,7 +38,16 @@ bloques `thinking` en Anthropic Messages. Los clientes lo piden con su parámetr
 habitual (`reasoning_effort`, `reasoning.effort` o `thinking`); ver
 [Razonamiento](api.md#razonamiento). En Open WebUI, pon **Reasoning Effort** en
 los parámetros avanzados del modelo (por ejemplo `high`) y el razonamiento
-aparece en un bloque plegable mientras el modelo trabaja.
+aparece en un bloque plegable mientras el modelo trabaja. Un `thinking:
+disabled` en la petición prevalece sobre un `reasoning_effort` de la misma
+petición.
+
+Caché de prompt: en Chat Completions, un identificador de sesión en
+`prompt_cache_key` o en la cabecera `X-Session-Id` devuelve cada conversación al
+slot de llama.cpp que ya tiene su prompt. Solo se aplica a modelos con más de un
+slot en paralelo. Si ese slot está ocupado, el gateway no fija la petición y
+llama.cpp elige un slot libre, así que ninguna petición espera a su slot
+anterior.
 
 ## Open WebUI
 

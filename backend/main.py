@@ -54,6 +54,7 @@ from huggingface_hub.utils import (
     HfHubHTTPError,
     RepositoryNotFoundError,
     RevisionNotFoundError,
+    filter_repo_objects,
 )
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -830,6 +831,13 @@ class Database:
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     fetched_at TEXT NOT NULL,
                     PRIMARY KEY(source, source_id)
+                );
+                CREATE TABLE IF NOT EXISTS hf_file_pins (
+                    repo_id TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    revision TEXT NOT NULL,
+                    pinned_at TEXT NOT NULL,
+                    PRIMARY KEY(repo_id, filename)
                 );
                 CREATE TABLE IF NOT EXISTS profiles (
                     id TEXT PRIMARY KEY,
@@ -4032,12 +4040,16 @@ def llama_knows_architecture(architecture: str, model: dict[str, Any] | None = N
 HF_REPO_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
-def cached_hf_file(repo: str, filename: str) -> Path:
-    """Resolve a cached Hub file offline, also for snapshots whose refs/main is missing."""
+def cached_hf_file(repo: str, filename: str, revision: str = "") -> Path:
+    """Resolve a cached Hub file offline, also for snapshots whose refs/main is missing.
+
+    With a pinned commit only that snapshot counts, so another cached version never stands in for it.
+    """
     try:
         return Path(hf_hub_download(
             repo_id=repo,
             filename=filename,
+            revision=revision or None,
             cache_dir=str(huggingface_cache_dir()),
             token=huggingface_token(),
             local_files_only=True,
@@ -4045,7 +4057,7 @@ def cached_hf_file(repo: str, filename: str) -> Path:
     except Exception as exc:
         failure = exc
     relative = Path(filename)
-    if not HF_REPO_ID.fullmatch(repo) or not filename or relative.is_absolute() or ".." in relative.parts:
+    if revision or not HF_REPO_ID.fullmatch(repo) or not filename or relative.is_absolute() or ".." in relative.parts:
         raise FileNotFoundError(filename) from failure
     snapshots = huggingface_cache_dir() / f"models--{repo.replace('/', '--')}" / "snapshots"
     try:
@@ -4223,6 +4235,11 @@ def build_llama_args(binary: str, model_file: Path, profile: dict[str, Any]) -> 
         args.extend(["--presence-penalty", str(profile["presence_penalty"])])
     if profile.get("flash_attention"):
         args.extend(["--flash-attn", "on"])
+    # llama-server serves /v1/embeddings and /v1/rerank only when started for them.
+    if profile.get("task") == "embeddings":
+        args.append("--embeddings")
+    elif profile.get("task") == "reranking":
+        args.append("--reranking")
     if profile.get("jinja"):
         args.append("--jinja")
     if profile.get("reasoning_off"):
@@ -4481,7 +4498,9 @@ def persist_managed_profile_ports(profile: dict[str, Any]) -> None:
     )
 
 
-MAX_LOADED_LLM_SLOTS = 2
+# Raised to 4 so the three ARTIFEX tier profiles (Q6-big/medium/small) can load
+# alongside RAGKit; the per-profile memory fit check still guards against OOM.
+MAX_LOADED_LLM_SLOTS = 4
 QUICK_SLOT_TASKS = {"chat", "vision"}
 
 
@@ -11066,6 +11085,7 @@ async def inspect_hf_model(repo_id: str, revision: str = Query(default="main", m
             ),
             "downloads": getattr(info, "downloads", 0) or 0,
             "files": files,
+            "security_warnings": safe_hf_security_warnings(repo_id, resolved_revision, info),
         }
 
     try:
@@ -11121,6 +11141,144 @@ def hf_gated_access(repo_id: str, revision: str, filenames: list[str]) -> str:
     return "granted"
 
 
+HF_CODE_SUFFIXES = (".py",)
+HF_PICKLE_SUFFIXES = (".bin", ".pt", ".pth", ".ckpt", ".pkl", ".pickle")
+HF_SAFE_WEIGHT_SUFFIXES = (".safetensors", ".gguf", ".onnx")
+HF_TEMPLATE_ESCAPES = ("__globals__", "__subclasses__", "__mro__", "__builtins__", "__import__", "popen")
+HF_TEMPLATE_FILES_MAX = 4
+HF_TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024
+# 1-bit quantizations still need ~0.2 bytes per parameter; half of that cannot be real weights.
+HF_MIN_WEIGHT_BYTES_PER_PARAMETER = 0.1
+HF_NAMED_PARAMETERS = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)b(?![a-z])", re.IGNORECASE)
+HF_GGUF_ALLOW_PATTERNS = [
+    "*.gguf", "README*", "LICENSE*", "LICENCE*", "NOTICE*", "USE_POLICY*",
+    "config.json", "generation_config.json", "params.json",
+]
+
+
+def hf_snapshot_patterns(filenames: list[str]) -> list[str] | None:
+    """What a whole-repo download keeps: GGUF repos only need weights, card, licence and config."""
+    return HF_GGUF_ALLOW_PATTERNS if any(name.lower().endswith(".gguf") for name in filenames) else None
+
+
+def hf_snapshot_files(filenames: list[str]) -> list[str]:
+    return list(filter_repo_objects(filenames, allow_patterns=hf_snapshot_patterns(filenames)))
+
+
+def remote_hf_text(repo_id: str, revision: str, filename: str) -> str | None:
+    """A small repo file read over HTTP without adding it to the cache; None when it can't be read."""
+    headers = {"User-Agent": "MyDGX"}
+    if token := huggingface_token():
+        headers["Authorization"] = f"Bearer {token}"
+    data = bytearray()
+    try:
+        with httpx.Client(follow_redirects=True, timeout=15) as client:
+            with client.stream("GET", hf_hub_url(repo_id, filename, revision=revision), headers=headers) as response:
+                response.raise_for_status()
+                for chunk in response.iter_bytes():
+                    data.extend(chunk)
+                    if len(data) > HF_TEXT_FILE_MAX_BYTES:
+                        return None
+    except (httpx.HTTPError, OSError):
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+def hf_chat_templates(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(item.get("template") or "") for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [item for item in value.values() if isinstance(item, str)]
+    return []
+
+
+def hf_named_parameters_b(repo_id: str) -> float | None:
+    match = HF_NAMED_PARAMETERS.search(repo_id.split("/")[-1])
+    return float(match.group(1)) if match and float(match.group(1)) > 0 else None
+
+
+def hf_security_warnings(
+    repo_id: str,
+    revision: str,
+    info: Any,
+    gguf_templates: Iterable[tuple[str, str]] = (),
+) -> list[str]:
+    """Signs that a repo carries code that runs when it is loaded. They warn; the download stays allowed."""
+    siblings = list(getattr(info, "siblings", None) or [])
+    sizes = {str(sibling.rfilename): integer_value(getattr(sibling, "size", None)) for sibling in siblings}
+    names = list(sizes)
+    warnings: list[str] = []
+    templates = list(gguf_templates)
+    auto_map = False
+    for filename in ("config.json", "tokenizer_config.json", "chat_template.json"):
+        if filename not in sizes or (text := remote_hf_text(repo_id, revision, filename)) is None:
+            continue
+        try:
+            data = json.loads(text)
+        except ValueError:
+            warnings.append(
+                f"{filename} no es un JSON válido. Un cargador puede reaccionar de forma inesperada; "
+                "trátalo con cautela fuera de llama.cpp"
+            )
+            continue
+        if isinstance(data, dict):
+            auto_map = auto_map or bool(data.get("auto_map"))
+            templates.extend((filename, template) for template in hf_chat_templates(data.get("chat_template")))
+    for filename in [name for name in names if name.lower().endswith(".jinja")][:HF_TEMPLATE_FILES_MAX]:
+        if text := remote_hf_text(repo_id, revision, filename):
+            templates.append((filename, text))
+
+    code = [name for name in names if name.lower().endswith(HF_CODE_SUFFIXES)]
+    if auto_map or code:
+        listed = ", ".join(code[:3]) + (f" y {len(code) - 3} más" if len(code) > 3 else "")
+        source = "auto_map en la configuración" + (f" y {listed}" if listed else "") if auto_map else listed
+        warnings.append(
+            f"Contiene código que se ejecuta al cargar el modelo ({source}). MyDGX no lo ejecuta, "
+            "pero Transformers, vLLM o SGLang con trust_remote_code sí: revísalo antes de usarlo con ellos"
+        )
+    weights = [name for name in names if name.lower().endswith(HF_SAFE_WEIGHT_SUFFIXES + HF_PICKLE_SUFFIXES)]
+    if weights and not any(name.lower().endswith(HF_SAFE_WEIGHT_SUFFIXES) for name in weights):
+        warnings.append(
+            "Los pesos solo están en formato PyTorch/pickle (.bin, .pt), que puede ejecutar código al cargarse. "
+            "Úsalos solo si confías en el autor y con PyTorch 2.6 o posterior"
+        )
+    if not weights and (auto_map or code):
+        warnings.append("No trae pesos: solo configuración y código. Un repositorio así no sirve para inferencia")
+    parameters_b = hf_named_parameters_b(repo_id)
+    weight_bytes = [sizes[name] for name in weights]
+    drafter_only = any(name.lower().endswith(".gguf") for name in weights) and not hf_gguf_groups(siblings)
+    if (
+        parameters_b and weight_bytes and all(weight_bytes) and not drafter_only
+        and "adapter_config.json" not in sizes
+        and sum(weight_bytes) < parameters_b * 1e9 * HF_MIN_WEIGHT_BYTES_PER_PARAMETER
+    ):
+        warnings.append(
+            f"Los pesos ocupan {human_bytes(sum(weight_bytes))} para un modelo de {parameters_b:g}B; "
+            "uno real de ese tamaño ocupa mucho más. Puede ser un repositorio falso"
+        )
+    for source, template in templates:
+        if found := [marker for marker in HF_TEMPLATE_ESCAPES if marker in template]:
+            warnings.append(
+                f"La plantilla de chat de {source} contiene {', '.join(found)}: no tiene uso legítimo "
+                "y sirve para escapar del sandbox de Jinja y ejecutar comandos"
+            )
+    return list(dict.fromkeys(warnings))
+
+
+def safe_hf_security_warnings(
+    repo_id: str,
+    revision: str,
+    info: Any,
+    gguf_templates: Iterable[tuple[str, str]] = (),
+) -> list[str]:
+    try:
+        return hf_security_warnings(repo_id, revision, info, gguf_templates)
+    except Exception as exc:
+        return [f"No se pudo revisar el contenido del repositorio ({type(exc).__name__}); revísalo tú antes de usarlo"]
+
+
 class ModelDownloadValidationError(RuntimeError):
     def __init__(self, detail: str, status_code: int = 413):
         super().__init__(detail)
@@ -11164,7 +11322,7 @@ async def validate_hf_download(
             str(sibling.rfilename): sibling
             for sibling in (info.siblings or [])
         }
-        requested = list(dict.fromkeys(filenames)) if filenames is not None else list(siblings)
+        requested = list(dict.fromkeys(filenames)) if filenames is not None else hf_snapshot_files(list(siblings))
         missing = [filename for filename in requested if filename not in siblings]
         if missing:
             raise ModelDownloadValidationError(
@@ -11242,6 +11400,78 @@ async def validate_hf_download(
 
 def download_validation_http_error(exc: ModelDownloadValidationError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
+HF_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
+
+
+def record_hf_pins(repo_id: str, revision: str, filenames: Iterable[str], replace: bool = False) -> None:
+    """Remember the commit each file came from. Profile repairs keep the first pin; explicit downloads move it."""
+    if not HF_COMMIT_PATTERN.fullmatch(revision):
+        return
+    now = utc_now()
+    with db.connect() as connection:
+        connection.executemany(
+            f"INSERT OR {'REPLACE' if replace else 'IGNORE'} INTO hf_file_pins(repo_id,filename,revision,pinned_at) "
+            "VALUES(?,?,?,?)",
+            [(repo_id, filename, revision, now) for filename in dict.fromkeys(filenames)],
+        )
+        connection.commit()
+
+
+def hf_pinned_revision(repo_id: str, filename: str) -> str:
+    """Pinned commit of a file; a file cached before pins existed is pinned to the snapshot it lives in."""
+    rows = db.rows("SELECT revision FROM hf_file_pins WHERE repo_id=? AND filename=?", (repo_id, filename))
+    if rows:
+        return str(rows[0]["revision"])
+    relative = Path(filename)
+    if not HF_REPO_ID.fullmatch(repo_id) or relative.is_absolute() or ".." in relative.parts:
+        return ""
+    snapshots = huggingface_cache_dir() / f"models--{repo_id.replace('/', '--')}" / "snapshots"
+    try:
+        main_commit = (snapshots.parent / "refs" / "main").read_text(encoding="utf-8").strip()
+    except OSError:
+        main_commit = ""
+    try:
+        candidates = sorted(
+            (
+                item for item in snapshots.iterdir()
+                if HF_COMMIT_PATTERN.fullmatch(item.name) and (item / relative).is_file()
+            ),
+            key=lambda item: (item.name != main_commit, -item.stat().st_mtime),
+        )
+    except OSError:
+        return ""
+    if not candidates:
+        return ""
+    record_hf_pins(repo_id, candidates[0].name, [filename])
+    return candidates[0].name
+
+
+async def validate_pinned_hf_files(work: list[tuple[str, str]]) -> tuple[dict[tuple[str, str], str], int]:
+    """Commit each (repo, file) is fetched from, its pin or main resolved now, after checking the bytes fit."""
+    groups: dict[tuple[str, str], list[str]] = {}
+    for repo, filename in dict.fromkeys(work):
+        pin = await asyncio.to_thread(hf_pinned_revision, repo, filename)
+        groups.setdefault((repo, pin or "main"), []).append(filename)
+    revisions: dict[tuple[str, str], str] = {}
+    total = 0
+    for (repo, revision), filenames in groups.items():
+        try:
+            commit, size = await validate_hf_download(repo, revision, filenames)
+        except ModelDownloadValidationError as exc:
+            if revision != "main" and isinstance(exc.__cause__, RevisionNotFoundError):
+                raise ModelDownloadValidationError(
+                    (
+                        f"La versión fijada de {repo} ({revision[:12]}) ya no existe en Hugging Face. "
+                        "Abre Detalles y descarga de nuevo para aceptar la versión actual"
+                    ),
+                    status_code=409,
+                ) from exc
+            raise
+        total += size
+        revisions.update({(repo, filename): commit for filename in filenames})
+    return revisions, total
 
 
 class HfFilesDownloadRequest(BaseModel):
@@ -11454,6 +11684,7 @@ async def download_hf_files(job_id: str, payload: HfFilesDownloadRequest, total_
                     f"Preparados {len(downloaded)}/{len(payload.files)}",
                 )
         shared_aliases = await asyncio.to_thread(materialize_hf_shared_engram_aliases, downloaded_paths)
+        await asyncio.to_thread(record_hf_pins, payload.repo_id, payload.revision, payload.files, True)
         await stop_hf_progress(stop, monitor)
         if db.job_cancel_requested(job_id):
             db.update_job(job_id, "cancelled", 99, "Descarga cancelada · los archivos ya bajados quedan en la caché")
@@ -11583,12 +11814,15 @@ def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> 
     groups.sort(key=lambda item: item["size"], reverse=True)
     warnings: list[str] = []
     headers: dict[str, dict[str, Any]] = {}
+    templates: list[tuple[str, str]] = []
     for group in groups[:PREFLIGHT_MAX_HEADERS]:
         try:
             headers[group["name"]] = remote_gguf_metadata(repo_id, commit, group["files"][0])
         except Exception as exc:
             headers[group["name"]] = {}
             warnings.append(f"No se pudo leer la cabecera de {group['files'][0]}: {type(exc).__name__}")
+        if template := str(headers[group["name"]].get("tokenizer.chat_template") or ""):
+            templates.append((Path(group["files"][0]).name, template))
     main_metadata = headers.get(groups[0]["name"], {}) if groups else {}
     budgets = spark_memory_budgets()
     capacity_mb = budgets["budget_mb"]
@@ -11676,6 +11910,7 @@ def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> 
         "other_files": [name for name in filenames if not name.lower().endswith(".gguf")],
         "suggested_draft": available["files"] if available and not roles & set(SPEC_TYPES) and not mmproj else [],
         "warnings": warnings,
+        "security_warnings": safe_hf_security_warnings(repo_id, commit, info, templates),
     }
 
 
@@ -12382,6 +12617,9 @@ async def download_hf(job_id: str, repo_id: str, revision: str, total_bytes: int
     stop = asyncio.Event()
     monitor = asyncio.create_task(track_hf_download_progress(job_id, repo_id, total_bytes, stop))
     try:
+        filenames = await asyncio.to_thread(
+            HfApi(token=huggingface_token()).list_repo_files, repo_id, revision=revision,
+        )
         await asyncio.to_thread(
             snapshot_download,
             repo_id=repo_id,
@@ -12389,7 +12627,9 @@ async def download_hf(job_id: str, repo_id: str, revision: str, total_bytes: int
             cache_dir=str(huggingface_cache_dir()),
             token=huggingface_token(),
             max_workers=huggingface_download_workers(),
+            allow_patterns=hf_snapshot_patterns(filenames),
         )
+        await asyncio.to_thread(record_hf_pins, repo_id, revision, hf_snapshot_files(filenames), True)
         await stop_hf_progress(stop, monitor)
         db.update_job(job_id, "running", 99, "Descarga completa · registrando el modelo")
         await asyncio.to_thread(refresh_hf_model_description, repo_id, revision)
@@ -12432,6 +12672,33 @@ async def start_hf_download(payload: HfDownloadRequest, background: BackgroundTa
     job_id = db.create_job("huggingface.download", payload.repo_id)
     background.add_task(download_hf, job_id, payload.repo_id, resolved_revision, total_bytes)
     return {"job_id": job_id, "deduplicated": False}
+
+
+@app.post("/api/models/huggingface/security", dependencies=secure)
+async def check_hf_repo_security(payload: HfDownloadRequest) -> dict[str, Any]:
+    """What a whole-repo download would fetch and the warning signs in it, before anything is downloaded."""
+    def check() -> dict[str, Any]:
+        info = HfApi(token=huggingface_token()).model_info(
+            payload.repo_id, revision=payload.revision, files_metadata=True,
+        )
+        commit = str(getattr(info, "sha", "") or payload.revision)
+        filenames = [str(sibling.rfilename) for sibling in (info.siblings or [])]
+        return {
+            "repo_id": payload.repo_id,
+            "revision": commit,
+            "files": hf_snapshot_files(filenames),
+            "total_files": len(filenames),
+            "gguf_only": hf_snapshot_patterns(filenames) is not None,
+            "security_warnings": safe_hf_security_warnings(payload.repo_id, commit, info),
+        }
+
+    try:
+        return await asyncio.to_thread(check)
+    except Exception as exc:
+        reason = huggingface_failure_reason(exc, payload.repo_id)
+        raise HTTPException(
+            status_code=502, detail=reason or f"No se pudo consultar Hugging Face: {type(exc).__name__}",
+        ) from exc
 
 
 @app.delete("/api/models/huggingface/{repo_id:path}", dependencies=secure)
@@ -13381,6 +13648,7 @@ async def download_hf_profile_file(
     job_id: str,
     repo: str,
     filename: str,
+    revision: str | None = None,
 ) -> str:
     last_error: Exception | None = None
     for attempt in range(1, 4):
@@ -13390,12 +13658,15 @@ async def download_hf_profile_file(
                 hf_hub_download,
                 repo_id=repo,
                 filename=filename,
+                revision=revision,
                 cache_dir=str(huggingface_cache_dir()),
                 token=huggingface_token(),
             )
             resolved = Path(path)
             if not resolved.is_file() or resolved.stat().st_size <= 0:
                 raise RuntimeError("el archivo descargado está vacío")
+            if revision:
+                await asyncio.to_thread(record_hf_pins, repo, revision, [filename])
             return hf_snapshot_path(resolved)
         except ProfileStartCancelled:
             raise
@@ -13451,7 +13722,7 @@ async def ensure_hf_profile_model(
             return False
         try:
             cached_files = [
-                cached_hf_file(repo, filename)
+                cached_hf_file(repo, filename, hf_pinned_revision(repo, filename))
                 for filename in files
             ]
             if all(Path(path).is_file() and Path(path).stat().st_size > 0 for path in cached_files):
@@ -13480,10 +13751,7 @@ async def ensure_hf_profile_model(
     files_by_repo: dict[str, list[str]] = {}
     for item_repo, filename in work:
         files_by_repo.setdefault(item_repo, []).append(filename)
-    verified_size = 0
-    for item_repo, item_files in files_by_repo.items():
-        _, item_size = await validate_hf_download(item_repo, "main", item_files)
-        verified_size += item_size
+    revisions, verified_size = await validate_pinned_hf_files(work)
     ensure_model_download_size(verified_size, str(model.get("name") or repo))
     downloaded: list[str] = []
     workers = min(huggingface_download_workers(), len(work))
@@ -13513,7 +13781,7 @@ async def ensure_hf_profile_model(
                     ),
                 )
             downloaded.extend(await asyncio.gather(*[
-                download_hf_profile_file(job_id, item_repo, filename)
+                download_hf_profile_file(job_id, item_repo, filename, revisions[(item_repo, filename)])
                 for item_repo, filename in batch
             ]))
     finally:
@@ -13781,13 +14049,18 @@ async def download_profile_models(job_id: str, profile: dict[str, Any]) -> None:
     if profile.get("spec_type") and draft and draft not in files:
         files = [*files, draft]
     downloaded: list[str] = []
+    mmproj_repo = str(profile.get("mmproj_repo") or repo)
+    mmproj_filename = str(profile.get("mmproj_filename") or "") if profile.get("task") == "vision" else ""
+    work = [(repo, filename) for filename in files]
+    if mmproj_filename:
+        work.append((mmproj_repo, mmproj_filename))
     try:
-        _, total_bytes = await validate_hf_download(repo, "main", files)
+        revisions, total_bytes = await validate_pinned_hf_files(work)
     except ModelDownloadValidationError as exc:
         db.update_job(job_id, "failed", 0, exc.detail)
         db.audit("profile.download.rejected", repo, False, exc.detail)
         return
-    touched_repos = [repo, str(profile.get("mmproj_repo") or repo)]
+    touched_repos = [repo, mmproj_repo]
     before = {item: await asyncio.to_thread(hf_snapshot_entries, item) for item in dict.fromkeys(touched_repos)}
     file_label = {"text": "Descargando"}
     stop = asyncio.Event()
@@ -13808,21 +14081,24 @@ async def download_profile_models(job_id: str, profile: dict[str, Any]) -> None:
                 hf_hub_download,
                 repo_id=repo,
                 filename=filename,
+                revision=revisions[(repo, filename)],
                 cache_dir=str(huggingface_cache_dir()),
                 token=huggingface_token(),
             )
             downloaded.append(path)
         await stop_hf_progress(stop, monitor)
         mmproj_path = ""
-        mmproj_filename = str(profile.get("mmproj_filename") or "")
-        if profile.get("task") == "vision" and mmproj_filename:
+        if mmproj_filename:
             mmproj_path = await asyncio.to_thread(
                 hf_hub_download,
-                repo_id=str(profile.get("mmproj_repo") or repo),
+                repo_id=mmproj_repo,
                 filename=mmproj_filename,
+                revision=revisions[(mmproj_repo, mmproj_filename)],
                 cache_dir=str(huggingface_cache_dir()),
                 token=huggingface_token(),
             )
+        for (item_repo, filename), revision in revisions.items():
+            await asyncio.to_thread(record_hf_pins, item_repo, revision, [filename])
         profile_id = profile.get("_profile_id") or profile["id"]
         if profile.get("_is_additional"):
             rows = db.rows("SELECT additional_models_json FROM profiles WHERE id=?", (profile_id,))

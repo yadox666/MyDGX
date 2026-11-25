@@ -26,6 +26,7 @@ import httpx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import backend.gateway as gateway_module
 import backend.main as main_module
 from backend import recovery as backup_recovery
 from backend.i18n import Catalog, request_language, translate_payload
@@ -885,6 +886,15 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("--cache-type-k", args)
         self.assertIn("--reasoning", args)
         self.assertNotIn("--repeat-penalty", args)
+        self.assertNotIn("--embeddings", args)
+        self.assertNotIn("--reranking", args)
+
+        embed = build_llama_args("/usr/bin/llama-server", Path("/models/e.gguf"), {**profile, "task": "embeddings"})
+        rerank = build_llama_args("/usr/bin/llama-server", Path("/models/r.gguf"), {**profile, "task": "reranking"})
+        self.assertIn("--embeddings", embed)
+        self.assertNotIn("--reranking", embed)
+        self.assertIn("--reranking", rerank)
+        self.assertNotIn("--embeddings", rerank)
 
     def test_multi_model_plan_rejects_duplicate_ports_and_builds_context_fallbacks(self) -> None:
         profile = {
@@ -8895,6 +8905,56 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(response.headers.get("x-request-id"), "req-count")
         settings.gateway_api_key = original_key
 
+    def test_gateway_counts_llama_cpp_input_tokens_with_the_model_template(self) -> None:
+        original_key = settings.gateway_api_key
+        settings.gateway_api_key = None
+        model = {
+            "engine": "llama.cpp", "model_ref": "internal", "model_alias": "public-model",
+            "port": 18080, "task": "chat", "api_protocol": "openai",
+        }
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        async def fake_post(_client: Any, url: str, json: dict[str, Any]) -> httpx.Response:
+            calls.append((url, json))
+            request = httpx.Request("POST", url)
+            if url.endswith("/apply-template"):
+                return httpx.Response(200, json={"prompt": "<|im_start|>rendered"}, request=request)
+            return httpx.Response(200, json={"tokens": list(range(42))}, request=request)
+
+        litellm = AsyncMock(return_value=False)
+        with patch(
+            "backend.gateway.loaded_routes",
+            new=AsyncMock(return_value=({"id": "profile"}, {"public-model": model})),
+        ), patch.object(litellm_adapter, "ensure", new=litellm), patch("httpx.AsyncClient.post", new=fake_post):
+            with TestClient(gateway_app) as gateway:
+                response = gateway.post(
+                    "/v1/responses/input_tokens",
+                    json={
+                        "model": "public-model",
+                        "instructions": "Be brief",
+                        "input": [
+                            {"role": "user", "content": [{"type": "input_text", "text": "scan it"}]},
+                            {"type": "function_call", "call_id": "c1", "name": "nmap", "arguments": "{}"},
+                            {"type": "function_call_output", "call_id": "c1", "output": "22/tcp open"},
+                        ],
+                        "tools": [{"type": "function", "name": "nmap", "parameters": {"type": "object"}}],
+                    },
+                )
+        settings.gateway_api_key = original_key
+        self.assertEqual(response.json(), {"object": "response.input_tokens", "input_tokens": 42})
+        litellm.assert_not_awaited()
+        self.assertEqual(calls[0][0], "http://127.0.0.1:18080/apply-template")
+        self.assertEqual(
+            [message["role"] for message in calls[0][1]["messages"]], ["system", "user", "assistant", "tool"]
+        )
+        self.assertEqual(calls[0][1]["tools"][0]["function"]["name"], "nmap")
+        self.assertEqual(calls[1][1], {"content": "<|im_start|>rendered", "parse_special": True})
+        self.assertIsNone(
+            gateway_module.responses_input_to_chat(
+                [{"role": "user", "content": [{"type": "input_image", "image_url": "data:"}]}], None
+            )
+        )
+
     def test_gateway_input_tokens_normalizes_responses_content_parts(self) -> None:
         self.assertEqual(
             chat_message_for_count({
@@ -9008,7 +9068,50 @@ class GatewayTests(unittest.TestCase):
         enabled: dict[str, Any] = {"thinking": {"type": "enabled", "budget_tokens": 4096}}
         apply_reasoning_controls(inkling, enabled)
         self.assertNotIn("reasoning_effort", enabled["chat_template_kwargs"])
+        # Compaction-style calls disable thinking per request while the profile keeps an effort.
+        override: dict[str, Any] = {"thinking": {"type": "disabled"}, "reasoning_effort": "high"}
+        apply_reasoning_controls(inkling, override)
+        self.assertEqual(override["chat_template_kwargs"]["reasoning_effort"], "none")
+        self.assertFalse(override["chat_template_kwargs"]["enable_thinking"])
+        qwen: dict[str, Any] = {"thinking": {"type": "disabled"}, "reasoning_effort": "high"}
+        apply_reasoning_controls({"engine": "llama.cpp", "model_alias": "qwen"}, qwen)
+        self.assertEqual(qwen["chat_template_kwargs"]["reasoning_effort"], "low")
         self.assertTrue(model_reasoning_capability({"task": "chat", "model_alias": "inkling-2-mini"}))
+
+    def test_session_slot_pinning_reuses_idle_slot_and_never_queues(self) -> None:
+        model = {"engine": "llama.cpp", "port": 18123, "parallel": 2}
+        with patch.object(gateway_module, "gateway_runtime_config", return_value={"request_timeout_seconds": 600}), \
+                patch.dict(gateway_module.slot_affinity, clear=True), \
+                patch.dict(gateway_module.slot_leases, clear=True):
+            first: dict[str, Any] = {}
+            release_a = gateway_module.pin_session_slot(model, first, "conv-a")
+            self.assertIsNotNone(release_a)
+            slot_a = first["id_slot"]
+            other: dict[str, Any] = {}
+            release_b = gateway_module.pin_session_slot(model, other, "conv-b")
+            self.assertNotEqual(other["id_slot"], slot_a)
+            # conv-a's slot is still busy: no pin, so llama.cpp may use any free slot.
+            busy: dict[str, Any] = {}
+            self.assertIsNone(gateway_module.pin_session_slot(model, busy, "conv-a"))
+            self.assertNotIn("id_slot", busy)
+            release_a()
+            release_a()
+            again: dict[str, Any] = {}
+            gateway_module.pin_session_slot(model, again, "conv-a")
+            self.assertEqual(again["id_slot"], slot_a)
+            assert release_b is not None
+            release_b()
+            single: dict[str, Any] = {}
+            self.assertIsNone(gateway_module.pin_session_slot({**model, "parallel": 1}, single, "conv-a"))
+            self.assertIsNone(gateway_module.pin_session_slot({"engine": "vllm", "parallel": 4}, single, "conv-a"))
+            self.assertIsNone(gateway_module.pin_session_slot(model, single, ""))
+            self.assertEqual(single, {})
+
+    def test_request_session_prefers_prompt_cache_key(self) -> None:
+        request = SimpleNamespace(headers={"x-session-id": "header"})
+        self.assertEqual(gateway_module.request_session(request, {"prompt_cache_key": " key "}), "key")
+        self.assertEqual(gateway_module.request_session(request, {}), "header")
+        self.assertEqual(gateway_module.request_session(SimpleNamespace(headers={}), {}), "")
 
     def test_reasoning_stream_splits_inline_think_tags_across_chunks(self) -> None:
         stream = ReasoningStream(exclude=False)
@@ -9567,6 +9670,145 @@ class ProfileAppTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as raised:
                 main_module.validate_profile(payload)
             self.assertEqual(raised.exception.status_code, 400)
+
+
+def hf_info(files: dict[str, int]) -> SimpleNamespace:
+    return SimpleNamespace(siblings=[SimpleNamespace(rfilename=name, size=size) for name, size in files.items()])
+
+
+class HfDownloadSafetyTests(unittest.TestCase):
+    def warnings(self, repo_id: str, files: dict[str, int], texts: Optional[dict[str, str]] = None,
+                 gguf_templates: tuple = ()) -> list[str]:
+        texts = texts or {}
+        with patch.object(main_module, "remote_hf_text", side_effect=lambda _repo, _rev, name: texts.get(name)):
+            return main_module.hf_security_warnings(repo_id, "a" * 40, hf_info(files), gguf_templates)
+
+    def test_clean_gguf_repo_has_no_warnings(self) -> None:
+        warnings = self.warnings(
+            "org/Model-8B-GGUF",
+            {"Model-8B-Q4_K_M.gguf": 5_000_000_000, "README.md": 2_000, "config.json": 500},
+            {"config.json": '{"model_type": "llama"}'},
+            (("Model-8B-Q4_K_M.gguf", "{% for message in messages %}{{ message.content }}{% endfor %}"),),
+        )
+        self.assertEqual(warnings, [])
+
+    def test_remote_code_and_pickle_only_weights_warn(self) -> None:
+        warnings = self.warnings(
+            "org/Model-7B",
+            {"config.json": 500, "modeling_evil.py": 4_000, "pytorch_model.bin": 14_000_000_000},
+            {"config.json": '{"auto_map": {"AutoModel": "modeling_evil.EvilModel"}}'},
+        )
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("auto_map en la configuración y modeling_evil.py", warnings[0])
+        self.assertIn("pickle", warnings[1])
+
+    def test_code_without_weights_and_invalid_config_warn(self) -> None:
+        warnings = self.warnings("org/Loader", {"config.json": 10, "loader.py": 900}, {"config.json": "{not json"})
+        self.assertTrue(any(item.startswith("config.json no es un JSON válido") for item in warnings))
+        self.assertTrue(any("(loader.py)" in item for item in warnings))
+        self.assertTrue(any(item.startswith("No trae pesos") for item in warnings))
+
+    def test_weights_too_small_for_the_named_size_warn(self) -> None:
+        warnings = self.warnings("org/Giant-70B", {"model.safetensors": 300_000_000})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("para un modelo de 70B", warnings[0])
+        self.assertEqual(self.warnings("org/Giant-70B-LoRA", {"adapter_config.json": 300,
+                                                             "adapter_model.safetensors": 300_000_000}), [])
+
+    def test_template_escapes_warn_from_json_jinja_and_gguf(self) -> None:
+        evil = "{{ cycler.__init__.__globals__.os.popen('id').read() }}"
+        warnings = self.warnings(
+            "org/Model-1B",
+            {"model.safetensors": 2_000_000_000, "tokenizer_config.json": 900, "chat_template.jinja": 100},
+            {"tokenizer_config.json": json.dumps({"chat_template": evil}), "chat_template.jinja": "{{ ().__class__.__subclasses__() }}"},
+            (("Model-1B.gguf", evil),),
+        )
+        self.assertEqual(len(warnings), 3)
+        for expected in (
+            "Model-1B.gguf contiene __globals__, popen",
+            "tokenizer_config.json contiene __globals__, popen",
+            "chat_template.jinja contiene __subclasses__",
+        ):
+            self.assertTrue(any(expected in item for item in warnings), expected)
+
+    def test_safe_wrapper_turns_errors_into_a_warning(self) -> None:
+        with patch.object(main_module, "hf_security_warnings", side_effect=RuntimeError("boom")):
+            warnings = main_module.safe_hf_security_warnings("org/model", "main", hf_info({}))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("RuntimeError", warnings[0])
+
+    def test_gguf_snapshot_keeps_only_what_llama_cpp_needs(self) -> None:
+        files = [
+            "Model-Q4_K_M.gguf", "mmproj-F16.gguf", "README.md", "LICENSE", "config.json",
+            "modeling.py", "pytorch_model.bin", "model.safetensors", "tokenizer.json", "subdir/extra.py",
+        ]
+        self.assertEqual(
+            main_module.hf_snapshot_files(files),
+            ["Model-Q4_K_M.gguf", "mmproj-F16.gguf", "README.md", "LICENSE", "config.json"],
+        )
+        transformers = ["model.safetensors", "config.json", "tokenizer.json"]
+        self.assertIsNone(main_module.hf_snapshot_patterns(transformers))
+        self.assertEqual(main_module.hf_snapshot_files(transformers), transformers)
+
+    def test_pins_are_kept_by_repairs_and_moved_by_explicit_downloads(self) -> None:
+        old, new = "1" * 40, "2" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(str(Path(directory) / "pins.db"))
+            database.initialize()
+            with patch.object(main_module, "db", database), \
+                    patch.object(main_module, "huggingface_cache_dir", return_value=Path(directory) / "hub"):
+                main_module.record_hf_pins("org/model", old, ["model.gguf"])
+                main_module.record_hf_pins("org/model", new, ["model.gguf"])
+                self.assertEqual(main_module.hf_pinned_revision("org/model", "model.gguf"), old)
+                main_module.record_hf_pins("org/model", new, ["model.gguf"], replace=True)
+                self.assertEqual(main_module.hf_pinned_revision("org/model", "model.gguf"), new)
+                main_module.record_hf_pins("org/model", "main", ["other.gguf"])
+                self.assertEqual(main_module.hf_pinned_revision("org/model", "other.gguf"), "")
+
+    def test_files_cached_before_pins_are_pinned_to_their_snapshot(self) -> None:
+        main_commit, stale = "a" * 40, "b" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "hub" / "models--org--model"
+            for commit in (stale, main_commit):
+                (repo / "snapshots" / commit).mkdir(parents=True)
+                (repo / "snapshots" / commit / "model.gguf").write_bytes(b"GGUF")
+            (repo / "refs").mkdir()
+            (repo / "refs" / "main").write_text(main_commit, encoding="utf-8")
+            database = Database(str(Path(directory) / "pins.db"))
+            database.initialize()
+            with patch.object(main_module, "db", database), \
+                    patch.object(main_module, "huggingface_cache_dir", return_value=Path(directory) / "hub"):
+                self.assertEqual(main_module.hf_pinned_revision("org/model", "model.gguf"), main_commit)
+                (repo / "refs" / "main").write_text(stale, encoding="utf-8")
+                self.assertEqual(main_module.hf_pinned_revision("org/model", "model.gguf"), main_commit)
+                self.assertEqual(main_module.hf_pinned_revision("org/model", "../model.gguf"), "")
+
+    def test_pinned_files_validate_against_their_pin(self) -> None:
+        pin = "c" * 40
+        validate = AsyncMock(side_effect=lambda repo, revision, files: (pin if revision == pin else "d" * 40, 10 * len(files)))
+        pins = {("org/model", "model.gguf"): pin}
+        with patch.object(main_module, "hf_pinned_revision", side_effect=lambda repo, name: pins.get((repo, name), "")), \
+                patch.object(main_module, "validate_hf_download", validate):
+            revisions, total = asyncio.run(main_module.validate_pinned_hf_files(
+                [("org/model", "model.gguf"), ("org/model", "mmproj.gguf"), ("org/model", "model.gguf")]
+            ))
+        self.assertEqual(revisions, {("org/model", "model.gguf"): pin, ("org/model", "mmproj.gguf"): "d" * 40})
+        self.assertEqual(total, 20)
+        self.assertEqual(sorted(call.args[1] for call in validate.await_args_list), sorted([pin, "main"]))
+
+    def test_a_vanished_pin_is_reported_instead_of_silently_moving(self) -> None:
+        response = httpx.Response(404, request=httpx.Request("GET", "https://huggingface.co/api/models/org/model"))
+        cause = main_module.RevisionNotFoundError("gone", response=response)
+
+        async def validate(repo: str, revision: str, files: list[str]) -> tuple[str, int]:
+            raise main_module.ModelDownloadValidationError("missing", status_code=404) from cause
+
+        with patch.object(main_module, "hf_pinned_revision", return_value="e" * 40), \
+                patch.object(main_module, "validate_hf_download", side_effect=validate):
+            with self.assertRaises(main_module.ModelDownloadValidationError) as raised:
+                asyncio.run(main_module.validate_pinned_hf_files([("org/model", "model.gguf")]))
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("eeeeeeeeeeee", str(raised.exception))
 
 
 class DocumentationTests(unittest.TestCase):

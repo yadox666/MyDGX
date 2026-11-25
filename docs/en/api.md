@@ -91,7 +91,8 @@ curl -s -H "X-MyDGX-Key: $MYDGX_API_KEY" http://127.0.0.1:8088/api/overview
 | GET | `/api/models/huggingface/favorites` | List of favorites. |
 | PUT | `/api/models/huggingface/favorites` | Adds or removes a favorite. Body: `repo_id`, `enabled`. |
 | GET | `/api/models/huggingface/inspect/{repo_id}` | Metadata, formats, files and capabilities of a repository. Parameter: `revision`. |
-| POST | `/api/models/huggingface/download` | Downloads a full snapshot. Body: `repo_id`, `revision`. Returns `job_id`. |
+| POST | `/api/models/huggingface/download` | Downloads a snapshot. If the repo contains GGUF files, it downloads only `*.gguf` plus the README, licence and config files. It pins every downloaded file to the resolved commit, and repairs and reinstalls reuse that commit. Body: `repo_id`, `revision`. Returns `job_id`. |
+| POST | `/api/models/huggingface/security` | Checks a repo before a full download without downloading anything. It returns the resolved commit (`revision`), the files that would be downloaded (`files`, `total_files`, `gguf_only`) and `security_warnings`. The warnings cover `auto_map` or `.py` code, pickle-only weights, weights far too small for the size in the name, an invalid `config.json`, and chat templates containing `__globals__`, `__subclasses__` or `popen`. These are warnings, not a block. Body: `repo_id`, `revision`. |
 | POST | `/api/models/huggingface/files/download` | Downloads only some files (for example a GGUF). Body: `repo_id`, `revision`, `files`. Returns `job_id`. When finished, it queues an automatic benchmark of the main GGUF files downloaded. That benchmark checks that they start and respond, and measures real versus estimated memory and drafter acceptance. |
 | POST | `/api/models/huggingface/preflight` | **Preflight check** without downloading anything: reads the header of each selected GGUF via HTTP Range. For each one it returns its role (main, mmproj or a drafter type), the architecture, whether the installed llama.cpp recognizes it, the native context, the quantization, whether it has built-in MTP and the estimated memory at 32K. Includes warnings: incomplete shards, missing main model, drafter with mmproj, drafter available but not selected (in `suggested_draft`) or insufficient memory. Body: `repo_id`, `revision`, `files`. |
 | GET | `/api/models/import/limits` | Limits for importing a ZIP: free space, maximum ZIP size right now (`max_upload_now_bytes`, the ZIP and its extraction fit with a 2 GiB margin), the `MODEL_IMPORT_MAX_GB` cap, the maximum memory for the main model and the namespace (`imported`). |
@@ -251,7 +252,7 @@ Details in [MyDGX Assistant](asistente-mydgx.md).
 | POST | `/v1/completions` | Classic text completion. |
 | POST | `/v1/responses` | OpenAI Responses API. |
 | POST | `/v1/responses/compact` | Compacts Responses input through the selected provider. If the provider lacks native compaction, MyDGX returns a reusable plaintext summary message and marks it as `mydgx.compaction_format=plaintext-summary-v1`; it never labels plaintext as encrypted content. |
-| POST | `/v1/responses/input_tokens` | Counts Responses input tokens locally through LiteLLM, without inference. Stored `conversation` IDs are not supported. |
+| POST | `/v1/responses/input_tokens` | Counts Responses input tokens without inference. For llama.cpp models the count is exact: llama-server applies the model's chat template and tokenizer, tools included. Inputs with images, other engines, and counts during a benchmark use LiteLLM's estimate. Stored `conversation` IDs are not supported. |
 | POST | `/v1/messages` | Anthropic Messages API (for Claude Code). |
 | POST | `/v1/messages/count_tokens` | Anthropic-style token counting. |
 | POST | `/v1/embeddings` | Embeddings. |

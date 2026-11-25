@@ -349,8 +349,37 @@ systemd_installed() {
   [[ -d /run/systemd/system && -f /etc/systemd/system/mydgx.service ]]
 }
 
+# Standalone audio runtimes (Whisper ASR on :9000, CUDA TTS on :9010) each hold a
+# model in memory (~2-4 GB) but are only needed for voice features (Open WebUI
+# voice, assistant speech). They are NOT required by the gateway, the LLM
+# profiles, or the cyber harness, yet a default install enables them at boot, so
+# they silently eat memory on machines that never use voice. Keep them opt-in:
+# unless MYDGX_AUDIO=1 or the opt-in marker exists, make sure they stay off.
+AUDIO_OPTIN_MARKER="$HOME/.local/share/mydgx/audio-services.enabled"
+
+audio_services_wanted() {
+  [[ "${MYDGX_AUDIO:-0}" == "1" || -f "$AUDIO_OPTIN_MARKER" ]]
+}
+
+disable_idle_audio_services() {
+  audio_services_wanted && return 0
+  local unit
+  for unit in mydgx-tts mydgx-whisper; do
+    [[ -f "/etc/systemd/system/$unit.service" ]] || continue
+    if systemctl is-enabled --quiet "$unit.service" 2>/dev/null ||
+       systemctl is-active --quiet "$unit.service" 2>/dev/null; then
+      say "Runtime de audio $unit desactivado para ahorrar memoria (actívalo con MYDGX_AUDIO=1 o crea $AUDIO_OPTIN_MARKER)." \
+          "Audio runtime $unit disabled to save memory (opt in with MYDGX_AUDIO=1 or create $AUDIO_OPTIN_MARKER)."
+      sudo -n systemctl disable --now "$unit" 2>/dev/null || true
+    fi
+  done
+}
+
 systemd_action() {
   local action="$1"
+  if [[ "$action" == start || "$action" == restart ]]; then
+    disable_idle_audio_services
+  fi
   local units=(mydgx mydgx-gateway)
   if [[ -f /etc/systemd/system/mydgx-searxng.service ]]; then
     units+=(mydgx-searxng)
@@ -973,21 +1002,42 @@ health_test() {
   local explicit_config=0 config_has_path=0 config_path=""
   local autodiscover=0 add_to_tray=0 show_help=0 shorthand=0 target user host
   local translated=()
-  if [[ $# -gt 0 && "$1" != -* && "$1" == *@* ]]; then
-    target="$1"
-    shift
-    user="${target%%@*}"
-    host="${target#*@}"
-    [[ -n "$user" && -n "$host" && "$host" != "$target" ]] || {
-      say "Destino inválido. Usa USUARIO@HOST, por ejemplo root@192.168.1.100." "Invalid target. Use USER@HOST, for example root@192.168.1.100." >&2
-      exit 2
-    }
-    translated+=(--user "$user" --host "$host")
-    shorthand=1
-  fi
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --host|--user|--port|--identity|--timeout|--expect-fingerprint|--expect-disk-tb|--host-key-alias)
+        translated+=("$1")
+        [[ $# -lt 2 ]] || translated+=("$2")
+        shift $(( $# < 2 ? 1 : 2 ))
+        ;;
+      -i)
+        [[ $# -ge 2 ]] || {
+          say "-i necesita la ruta de una clave privada." "-i requires a private key path." >&2
+          exit 2
+        }
+        translated+=(--identity "$2")
+        shift 2
+        ;;
+      -i?*)
+        translated+=(--identity "${1#-i}")
+        shift
+        ;;
+      [!-]*@*)
+        [[ "$shorthand" == "0" ]] || {
+          say "Indica un solo destino USUARIO@HOST." "Give a single USER@HOST target." >&2
+          exit 2
+        }
+        target="$1"
+        user="${target%%@*}"
+        host="${target#*@}"
+        [[ -n "$user" && -n "$host" && "$host" != *@* ]] || {
+          say "Destino inválido. Usa USUARIO@HOST, por ejemplo root@192.168.1.100." "Invalid target. Use USER@HOST, for example root@192.168.1.100." >&2
+          exit 2
+        }
+        translated+=(--user "$user" --host "$host")
+        shorthand=1
+        shift
+        ;;
       -p)
         [[ $# -ge 2 ]] || {
           say "-p necesita un puerto." "-p requires a port." >&2

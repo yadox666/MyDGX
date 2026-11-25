@@ -130,8 +130,9 @@ Dos modos:
   indica la ficha (`--spec-type`, `--spec-draft-model`) si está descargado. Si
   no, prefiere DSpark, DFlash, EAGLE-3 y, por último, el MTP integrado en el
   GGUF (`nextn_predict_layers`). Los modelos con especulativa llevan su etiqueta
-  (por ejemplo *DSpark* o *MTP*). Con el `mmproj` activo no se usa, porque
-  llama.cpp no combina las dos cosas. Si el modelo no arranca con el drafter,
+  (por ejemplo *DSpark* o *MTP*). Con el `mmproj` activo solo se usa el MTP:
+  llama.cpp sigue proponiendo tokens con MTP mientras acepta imágenes, pero los
+  demás tipos de drafter no se han probado con visión. Si el modelo no arranca con el drafter,
   MyDGX lo vuelve a lanzar sin él y lo anota en los logs.
 - **Comprobación previa a la descarga**: antes de bajar un GGUF, MyDGX lee por
   HTTP Range la cabecera de cada archivo seleccionado, sin descargar los pesos.
@@ -140,7 +141,7 @@ Dos modos:
   contexto nativo, la cuantización y la memoria estimada con 32K. Avisa de:
   - shards incompletos;
   - una selección sin modelo principal;
-  - un drafter junto a un `mmproj`;
+  - un drafter que no es MTP junto a un `mmproj`;
   - memoria insuficiente.
 
   Si el repositorio trae un drafter que no está seleccionado, ofrece **Añadir

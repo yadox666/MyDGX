@@ -56,8 +56,11 @@ Cada rechazo queda en los logs como `http.cross_site_blocked`.
   `ACTIVAR SERVICIOS`; el cambio queda auditado y genera un aviso.
 - `/etc/sudoers.d/mydgx` concede solo una lista cerrada: las órdenes APT de
   actualización, el script de reparación, `systemctl` sobre los servicios de
-  MyDGX y el apagado. **Nunca** `NOPASSWD: ALL`. El navegador no puede enviar
-  comandos arbitrarios.
+  MyDGX, el apagado y el programa de límite de reloj solo con los argumentos
+  fijos `apply` y `clear`. **Nunca** `NOPASSWD: ALL`. El navegador no puede
+  enviar comandos arbitrarios. El límite de reloj exige además la frase
+  `APLICAR LIMITE GB10` o `QUITAR LIMITE GB10` después del diálogo de
+  Configuración.
 - El asistente solo **propone** acciones. Se ejecutan cuando el usuario las
   confirma y caducan a los `ASSISTANT_ACTION_TTL_SECONDS`.
 - Toda acción queda en la auditoría (`GET /api/audit`).

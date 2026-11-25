@@ -190,8 +190,8 @@ significa que se entendieron todas las palabras.
 | 10 | **[DeepSeek-V4-Pro-Qwen3.5-9B heretic](https://huggingface.co/mradermacher/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic-GGUF)** | **46** | 50 % | 18,5 s | 9,8 GB |
 
 <sub>El tiempo por imagen es la mediana e incluye el razonamiento de los modelos
-que razonan. En llama.cpp la visión no se combina con MTP, así que estas
-medidas se hicieron sin drafter. OrcaCyber-Nano-1.0 es un repositorio con
+que razonan. Estas medidas se hicieron sin drafter; llama.cpp ya combina la
+visión con MTP, así que los modelos con drafter MTP pueden ir más rápido. OrcaCyber-Nano-1.0 es un repositorio con
 acceso restringido (*gated*): hay que aceptar sus condiciones en Hugging Face y
 guardar un token en *Configuración* antes de descargarlo.</sub>
 
@@ -204,7 +204,7 @@ guardar un token en *Configuración* antes de descargarlo.</sub>
 | **MoE** | *Mixture of Experts*: el modelo tiene muchos "expertos" y en cada palabra solo usa unos pocos. Rápido aunque sea enorme. |
 | **Razonamiento** | Algunos modelos escriben un razonamiento antes de la respuesta. Es entrenamiento del modelo, no un añadido: la plantilla de chat solo decide si se activa (`enable_thinking`, `reasoning_effort`). El gateway de MyDGX lo traduce desde las APIs de OpenAI, Anthropic y Responses. Razonar mejora las respuestas difíciles, pero cuesta tiempo: esos tokens también se generan. |
 | **Decodificación especulativa** | Un modelo pequeño (*drafter*) propone varios tokens y el grande los comprueba de una vez. Si acierta, la respuesta sale más rápido sin cambiar su calidad. |
-| **Drafter** | El modelo pequeño que propone los tokens. Debe compartir vocabulario con el principal (Qwen3-Coder-Next, por ejemplo, no tiene ninguno compatible instalado) y los MTP solo sirven para el modelo con el que se entrenaron. En llama.cpp no se combina con visión (`mmproj`), así que MyDGX elige el drafter salvo que pidas visión. |
+| **Drafter** | El modelo pequeño que propone los tokens. Debe compartir vocabulario con el principal (Qwen3-Coder-Next, por ejemplo, no tiene ninguno compatible instalado) y los MTP solo sirven para el modelo con el que se entrenaron. En llama.cpp, los drafters MTP funcionan junto a la visión (`mmproj`), así que MyDGX carga los dos. Los demás tipos de drafter solo funcionan sin visión, así que MyDGX los elige salvo que pidas visión. |
 | **MTP** | *Multi-Token Prediction*: un drafter que viene dentro del GGUF o en un archivo aparte (`mtp-*.gguf`). En el Spark acepta entre el 44 % y el 62 % de los tokens propuestos y duplica la velocidad de los modelos densos de 27B. MyDGX lo activa solo si encuentra el drafter. |
 | **Cuantización** | Compresión del modelo. `Q8_0` ≈ original; `Q6_K` muy bueno; `Q4` buen equilibrio; `IQ2`/`IQ3` mucha compresión para que quepan modelos gigantes. |
 | **GGUF** | Formato de archivo que usa llama.cpp. Es el que mejor funciona en el Spark. |

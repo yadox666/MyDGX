@@ -34,6 +34,16 @@ aparecen en el grupo **Mantenimiento del sistema**. Desactivarlas es inmediato;
 activarlas exige escribir `ACTIVAR ACTUALIZACIONES`, `ACTIVAR FIRMWARE` o
 `ACTIVAR SERVICIOS`, queda en la auditoría y genera un aviso en Notificaciones.
 
+### Límite de reloj del GB10
+
+En un GB10 detectado, Configuración muestra el interruptor **Límite de reloj
+del GB10**. Tras una confirmación limita la GPU a 2200 MHz y la CPU a 2808 MHz
+al momento, y un servicio de arranque vuelve a aplicar los mismos límites en
+el próximo arranque. Quitarlo, también tras una confirmación, devuelve los
+relojes de fábrica y borra ese servicio. No reinicia y no cambia el kernel. El
+programa se copia al instalar los servicios systemd; hasta esa instalación, el
+interruptor no cambia nada.
+
 ## Servidor y acceso
 
 | Variable | Por defecto | Descripción |

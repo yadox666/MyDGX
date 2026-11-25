@@ -102,7 +102,55 @@ import os
 import pathlib
 import secrets
 import shlex
+import sqlite3
 import sys
+from contextlib import closing
+
+# Bump when the chat defaults below change, so existing installs receive them once.
+CHAT_DEFAULTS_VERSION = "1"
+
+
+def json_object(raw: object) -> dict:
+    try:
+        value = json.loads(raw) if isinstance(raw, str) and raw else raw
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def with_tool_approval(settings: dict) -> dict:
+    params = settings.get("params") if isinstance(settings.get("params"), dict) else {}
+    return {**settings, "params": {"tool_approval_mode": "ask", **params}}
+
+
+def with_web_search(metadata: dict) -> dict:
+    features = metadata.get("defaultFeatureIds")
+    features = [item for item in features if isinstance(item, str)] if isinstance(features, list) else []
+    return {**metadata, "defaultFeatureIds": features if "web_search" in features else [*features, "web_search"]}
+
+
+def apply_chat_defaults(database: pathlib.Path, web_search: bool) -> None:
+    """Existing installs keep their saved Admin settings over the environment, so the defaults go into the database."""
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "config" in tables and {"key", "value"} <= {row[1] for row in connection.execute("PRAGMA table_info(config)")}:
+            def update(key: str, change) -> None:
+                row = connection.execute("SELECT value FROM config WHERE key=?", (key,)).fetchone()
+                if row is not None:
+                    connection.execute("UPDATE config SET value=? WHERE key=?", (json.dumps(change(row[0])), key))
+
+            update("chat.tool_permissions.enable", lambda _value: True)
+            update("ui.default_interface_settings", lambda value: with_tool_approval(json_object(value)))
+            if web_search:
+                update("models.default_metadata", lambda value: with_web_search(json_object(value)))
+        if "user" in tables and "settings" in {row[1] for row in connection.execute("PRAGMA table_info(user)")}:
+            for user_id, raw in connection.execute("SELECT id, settings FROM user").fetchall():
+                settings = json_object(raw)
+                ui = json_object(settings.get("ui"))
+                settings["ui"] = with_tool_approval(ui)
+                connection.execute("UPDATE user SET settings=? WHERE id=?", (json.dumps(settings), user_id))
+        connection.commit()
+
 
 env_path = pathlib.Path(sys.argv[1])
 data_dir = pathlib.Path(sys.argv[2])
@@ -169,6 +217,7 @@ image_keys = {
     "COMFYUI_API_KEY",
     "COMFYUI_WORKFLOW",
     "COMFYUI_WORKFLOW_NODES",
+    "ENABLE_CHAT_RESPONSE_BASE64_IMAGE_URL_CONVERSION",
 }
 if comfyui_workflow_file and comfyui_nodes_file:
     workflow = json.loads(pathlib.Path(comfyui_workflow_file).read_text(encoding="utf-8"))
@@ -189,6 +238,8 @@ if comfyui_workflow_file and comfyui_nodes_file:
         "COMFYUI_API_KEY": "",
         "COMFYUI_WORKFLOW": json.dumps(workflow, separators=(",", ":")),
         "COMFYUI_WORKFLOW_NODES": json.dumps(nodes, separators=(",", ":")),
+        # Chatting with the FLUX model returns the image inline; store it as a file, not in the chat JSON.
+        "ENABLE_CHAT_RESPONSE_BASE64_IMAGE_URL_CONVERSION": "True",
     })
 else:
     for key in image_keys:
@@ -210,6 +261,18 @@ if tool_api_key:
 else:
     values.pop("ENABLE_DIRECT_CONNECTIONS", None)
     values.pop("TOOL_SERVER_CONNECTIONS", None)
+values["ENABLE_TOOL_PERMISSIONS"] = "True"
+values["DEFAULT_INTERFACE_SETTINGS"] = json.dumps(
+    with_tool_approval(json_object(existing.get("DEFAULT_INTERFACE_SETTINGS"))), separators=(",", ":")
+)
+if searxng_query_url:
+    values["DEFAULT_MODEL_METADATA"] = json.dumps(
+        with_web_search(json_object(existing.get("DEFAULT_MODEL_METADATA"))), separators=(",", ":")
+    )
+database = data_dir / "webui.db"
+if existing.get("MYDGX_CHAT_DEFAULTS") != CHAT_DEFAULTS_VERSION and database.is_file():
+    apply_chat_defaults(database, bool(searxng_query_url))
+values["MYDGX_CHAT_DEFAULTS"] = CHAT_DEFAULTS_VERSION
 env_path.write_text(
     "".join(f"{key}={shlex.quote(str(value))}\n" for key, value in values.items()),
     encoding="utf-8",

@@ -78,6 +78,16 @@ cuándo consultar; con modelos pequeños puede ser necesario activar la búsqued
 manualmente. Una configuración guardada previamente en Admin prevalece sobre las
 variables del entorno.
 
+Con SearXNG instalado, cada chat nuevo empieza con la búsqueda web activada
+(`DEFAULT_MODEL_METADATA` con `defaultFeatureIds: ["web_search"]`). Además, Open
+WebUI pide confirmación antes de cada llamada a una herramienta
+(`ENABLE_TOOL_PERMISSIONS` y el modo `ask` en `DEFAULT_INTERFACE_SETTINGS`). En
+una instalación que ya existía, el deployment aplica estos valores una sola vez
+en la base de datos de Open WebUI y marca `MYDGX_CHAT_DEFAULTS` en
+`open-webui.env`. A partir de ahí, lo que cambies en Admin, en un modelo o en el
+selector de permisos del chat se respeta. Un usuario que ya había elegido un
+modo de permisos lo conserva.
+
 La instalación también carga un workflow API de FLUX.1 Schnell FP8 en Open
 WebUI. El botón de imagen del chat envía el prompt directamente al ComfyUI local.
 Para vídeo, Open WebUI recibe la conexión OpenAPI **MyDGX Laboratorio IA**:

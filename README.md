@@ -302,10 +302,12 @@ just by popularity.
 - the recommendation prefers Q6 over Q8 (same practical quality, less memory),
   understands Unsloth dynamic `UD-…_K_XL` quantizations and picks the best one
   that fits in free memory without stopping what is running; when the repository
-  ships a drafter, it downloads it instead of the `mmproj` (llama.cpp does not
-  combine vision and speculative decoding) and leaves vision as optional;
+  ships an MTP drafter, it downloads the drafter and the `mmproj` together,
+  because llama.cpp combines vision with MTP. With any other drafter type, it
+  downloads the drafter instead of the `mmproj` and leaves vision as optional;
 - if you download a drafter later, that model's profiles without speculative
-  decoding or vision turn it on automatically (recorded in the audit log);
+  decoding turn it on automatically (recorded in the audit log). A profile with
+  vision only gets an MTP drafter;
 - it rejects files that are already downloaded and reuses the ongoing download
   if the repository is already being fetched;
 - when finished, Benchmarks checks that the model starts and responds and compares the

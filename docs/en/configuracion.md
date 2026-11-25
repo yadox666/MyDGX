@@ -34,6 +34,16 @@ appear in the **System maintenance** group. Turning them off is immediate;
 turning them on requires typing `ACTIVAR ACTUALIZACIONES`, `ACTIVAR FIRMWARE`
 or `ACTIVAR SERVICIOS`, is audited, and posts a notification.
 
+### GB10 clock cap
+
+On a detected GB10, Settings shows a **GB10 clock cap** switch. After a
+confirmation it limits the GPU to 2200 MHz and the CPU to 2808 MHz immediately,
+and a boot service applies the same limits again on the next boot. Turning it
+off, also after a confirmation, restores factory clocks and removes that
+service. It does not reboot and does not change the kernel. The program is
+copied when the systemd services are installed; until that install has been
+run, the switch does nothing.
+
 ## Server and access
 
 | Variable | Default | Description |

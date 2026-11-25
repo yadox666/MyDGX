@@ -65,6 +65,13 @@ from backend.i18n import DEFAULT_LANGUAGE, request_language, translate_payload
 
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_REPAIR_SCRIPT = Path("/usr/local/libexec/mydgx-system-repair")
+CLOCK_CAP_SCRIPT = Path("/usr/local/libexec/mydgx-gb10-clock-cap")
+CLOCK_CAP_UNIT = "mydgx-gb10-clock-cap.service"
+CLOCK_CAP_GPU_MHZ = 2200
+CLOCK_CAP_CPU_KHZ = 2_808_000
+CLOCK_CAP_CONFIRM_ON = "APLICAR LIMITE GB10"
+CLOCK_CAP_CONFIRM_OFF = "QUITAR LIMITE GB10"
+CPUFREQ_ROOT = Path("/sys/devices/system/cpu/cpufreq")
 
 
 class Settings(BaseSettings):
@@ -1209,6 +1216,8 @@ class Database:
                 "recipe_version": "INTEGER NOT NULL DEFAULT 0",
                 "recipe_modified": "INTEGER NOT NULL DEFAULT 0",
                 "comfyui_json": "TEXT NOT NULL DEFAULT ''",
+                "grounding_prompt": "TEXT NOT NULL DEFAULT 'inherit'",
+                "model_grounding_prompt": "TEXT NOT NULL DEFAULT 'inherit'",
             }
             for column, definition in additions.items():
                 if column not in existing:
@@ -1602,6 +1611,57 @@ def gateway_runtime_config() -> dict[str, Any]:
     web_search = stored.get("web_search", True)
     merged["web_search"] = web_search if isinstance(web_search, bool) else True
     return merged
+
+
+GROUNDING_PROMPT_DEFAULT = (
+    "Answer only with information you are confident is correct. If you don't know or aren't sure, "
+    "say so plainly instead of guessing; if you know part of the answer, give that part and say what "
+    "is uncertain. Never invent facts, figures, names, quotes, citations, URLs, APIs, commands or "
+    "file contents. Do not claim to have searched, browsed, run code or read a file unless a tool "
+    "result in this conversation shows it. When a search or other tool is available and the answer "
+    "depends on recent or specific facts, use it instead of relying on memory, and base the answer "
+    "on what it returns. Mark assumptions as assumptions. Today's date is {date} (UTC); your "
+    "training data may be out of date. Reply in the user's language."
+)
+GROUNDING_PROMPT_MAX_CHARS = 4000
+GROUNDING_PROMPT_MODES = ("inherit", "on", "off")
+GROUNDING_PROMPT_TASKS = {"chat", "vision"}
+
+
+def grounding_config() -> dict[str, Any]:
+    config = {"enabled": False, "text": GROUNDING_PROMPT_DEFAULT}
+    try:
+        stored = json.loads(preference_value("gateway.grounding") or "{}")
+    except json.JSONDecodeError:
+        stored = {}
+    if isinstance(stored, dict):
+        if isinstance(stored.get("enabled"), bool):
+            config["enabled"] = stored["enabled"]
+        text = stored.get("text")
+        if isinstance(text, str) and text.strip():
+            config["text"] = text.strip()[:GROUNDING_PROMPT_MAX_CHARS]
+    config["custom"] = config["text"] != GROUNDING_PROMPT_DEFAULT
+    return config
+
+
+def grounding_prompt_active(
+    model: dict[str, Any], profile_mode: Any, global_enabled: bool
+) -> bool:
+    """Model setting wins over the profile's, which wins over the global default."""
+    if str(model.get("task") or "chat") not in GROUNDING_PROMPT_TASKS:
+        return False
+    if str(model.get("api_protocol") or "openai") not in {"openai", "ollama"}:
+        return False
+    for mode in (model.get("model_grounding_prompt"), profile_mode):
+        if mode == "on":
+            return True
+        if mode == "off":
+            return False
+    return global_enabled
+
+
+def grounding_prompt_text(config: dict[str, Any]) -> str:
+    return str(config["text"]).replace("{date}", datetime.now(timezone.utc).date().isoformat())
 
 
 def sync_openwebui_gateway_port(port: int) -> None:
@@ -6598,6 +6658,38 @@ async def update_gateway_config(payload: GatewayConfigPayload) -> dict[str, Any]
     return {"updated": True, "restart_required": True}
 
 
+class GroundingConfigPayload(BaseModel):
+    enabled: bool = False
+    text: str = Field(default="", max_length=GROUNDING_PROMPT_MAX_CHARS)
+
+
+@app.get("/api/gateway/grounding", dependencies=secure)
+async def gateway_grounding() -> dict[str, Any]:
+    return {**grounding_config(), "default_text": GROUNDING_PROMPT_DEFAULT}
+
+
+@app.put("/api/gateway/grounding", dependencies=secure)
+async def update_gateway_grounding(payload: GroundingConfigPayload) -> dict[str, Any]:
+    text = payload.text.strip()
+    value = {
+        "enabled": payload.enabled,
+        "text": "" if text == GROUNDING_PROMPT_DEFAULT else text,
+    }
+    db.execute(
+        """
+        INSERT INTO preferences(key,value,updated_at) VALUES(?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+        """,
+        ("gateway.grounding", json.dumps(value), utc_now()),
+    )
+    db.audit(
+        "gateway.grounding",
+        f"enabled={payload.enabled} custom={bool(value['text'])}",
+        True,
+    )
+    return {**grounding_config(), "default_text": GROUNDING_PROMPT_DEFAULT}
+
+
 @app.get("/api/overview", dependencies=secure)
 async def overview() -> dict[str, Any]:
     sample = await asyncio.to_thread(collect_metrics)
@@ -8484,6 +8576,8 @@ SPEC_LABELS = {
     "draft-mtp": "MTP", "draft-dspark": "DSpark", "draft-dflash": "DFlash",
     "draft-eagle3": "EAGLE3", "draft-simple": "Draft",
 }
+# Only MTP is known to keep drafting with an mmproj loaded; the other drafters are untested with vision.
+SPEC_TYPES_WITH_MMPROJ = frozenset({"draft-mtp"})
 # Every quantization of a model has the same tensors; a drafter carries a small fraction of them.
 DRAFTER_TENSOR_RATIO = 0.25
 # llama.cpp accepts a drafter whose vocabulary differs from the target's by at most this many tokens.
@@ -8917,9 +9011,10 @@ def persistent_model_config_with_origins(
     speculative: dict[str, Any] = {}
     spec_origin = ""
     candidates = local_speculative_candidates(model_id, siblings, selected)
-    if not mmproj_name:
-        # llama.cpp does not combine speculative decoding with a multimodal projector.
-        speculative, spec_origin = choose_speculative(model_id, candidates)
+    speculative, spec_origin = choose_speculative(
+        model_id,
+        [item for item in candidates if item["spec_type"] in SPEC_TYPES_WITH_MMPROJ] if mmproj_name else candidates,
+    )
     if overrides.get("spec_type") is not None:
         wanted_type = str(overrides["spec_type"])
         wanted_file = str(overrides.get("draft_filename") or "")
@@ -9062,6 +9157,7 @@ def model_settings_report(model_id: str) -> dict[str, Any]:
         })
     limits = quick_context_limits(current) or (0, 0, 0)
     quick = quick_model_config(current, model_id)
+    candidates = local_speculative_candidates(model_id, siblings, selected)
     fields = {
         key: {"value": current.get(key), "auto": automatic.get(key), "origin": origins.get(key, "MyDGX")}
         for key in (*OVERRIDE_SAMPLING_KEYS, "cache_type_k", "cache_type_v")
@@ -9088,10 +9184,13 @@ def model_settings_report(model_id: str) -> dict[str, Any]:
             "draft_filename": current.get("draft_filename") or "",
             "spec_draft_n_max": int(current.get("spec_draft_n_max") or 0),
             "origin": origins.get("spec_type", ""),
-            "blocked_by_mmproj": bool(current.get("mmproj_filename")) and origins.get("spec_type") != "manual",
+            "blocked_by_mmproj": (
+                bool(current.get("mmproj_filename")) and origins.get("spec_type") != "manual"
+                and not any(item["spec_type"] in SPEC_TYPES_WITH_MMPROJ for item in candidates)
+            ),
             "candidates": [
                 {key: item[key] for key in ("spec_type", "draft_filename", "size", "quantization", "architecture", "embedded")}
-                for item in local_speculative_candidates(model_id, siblings, selected)
+                for item in candidates
             ],
             "runtime_supported": llama_supports_flag(llama_binary(current), "--spec-type"),
         },
@@ -10122,9 +10221,12 @@ def hf_spark_recommendation(
     architecture = hf_architecture_profile(info, selected["resident_size"] if selected else 0)
     drafter = hf_named_drafter(siblings) if selected else None
     mmproj_files_all = mmproj_files
-    prefer_drafter = bool(drafter and task != "vision")
+    drafter_keeps_vision = bool(drafter and drafter["spec_type"] in SPEC_TYPES_WITH_MMPROJ)
+    prefer_drafter = bool(drafter and (task != "vision" or drafter_keeps_vision))
+    vision_dropped = prefer_drafter and not drafter_keeps_vision
     if prefer_drafter:
-        mmproj_files = []
+        if vision_dropped:
+            mmproj_files = []
         label = SPEC_LABELS[drafter["spec_type"]]
         architecture["speculative_methods"] = [label, *(item for item in architecture["speculative_methods"] if item != label)]
         architecture["speculative_memory_mb"] = max(1536, math.ceil(drafter["size"] / (1024 * 1024) * 1.25))
@@ -10220,7 +10322,7 @@ def hf_spark_recommendation(
     }
     trusted_publisher = publisher in trusted_publishers
     task_match = task == "any" or task in tasks
-    mmproj_required = bool(selected and "vision" in tasks and not prefer_drafter)
+    mmproj_required = bool(selected and "vision" in tasks and not vision_dropped)
     mmproj = mmproj_files[0] if mmproj_files else None
     if selected and mmproj:
         estimate["weight_mb"] += math.ceil(mmproj["size"] / (1024 * 1024))
@@ -10367,9 +10469,9 @@ def hf_spark_recommendation(
     if drafter and prefer_drafter:
         recommended_files.extend(drafter["files"])
         reasons.append(f"Drafter {drafter['spec_type']} incluido: {Path(drafter['files'][0]).name}")
-        if mmproj_files_all:
+        if vision_dropped and mmproj_files_all:
             reasons.append(
-                f"Visión opcional: {mmproj_files_all[0]['name']} (llama.cpp desactiva la especulativa con el mmproj)"
+                f"Visión opcional: {mmproj_files_all[0]['name']} (llama.cpp solo combina el mmproj con la especulativa MTP)"
             )
     return {
         "id": repo_id,
@@ -10396,7 +10498,7 @@ def hf_spark_recommendation(
         "recommended_files": recommended_files,
         "recommended_mmproj_file": mmproj["name"] if mmproj else None,
         "recommended_draft_file": drafter["files"][0] if drafter and prefer_drafter else None,
-        "optional_mmproj_file": mmproj_files_all[0]["name"] if prefer_drafter and mmproj_files_all else None,
+        "optional_mmproj_file": mmproj_files_all[0]["name"] if vision_dropped and mmproj_files_all else None,
         "recommended_context": target_context,
         "recommended_slots": slots,
         "architecture": architecture["architecture"],
@@ -11597,13 +11699,13 @@ def queue_downloaded_gguf_benchmark(repo_id: str, files: list[str] | None) -> in
 
 
 def attach_downloaded_drafter(repo_id: str, filenames: list[str]) -> list[str]:
-    """Profiles of this repo without speculative decoding or vision get the drafter just downloaded; their names."""
+    """Profiles of this repo without speculative decoding get the drafter just downloaded (MTP only with vision)."""
     drafters = [name for name in filenames if name.lower().endswith(".gguf") and GGUF_AUXILIARY_PATTERN.search(name)]
     if not drafters:
         return []
     rows = db.rows(
-        "SELECT id,name,model_filename FROM profiles WHERE engine='llama.cpp' AND model_repo=? COLLATE NOCASE "
-        "AND COALESCE(spec_type,'')='' AND COALESCE(mmproj_filename,'')=''",
+        "SELECT id,name,model_filename,mmproj_filename FROM profiles WHERE engine='llama.cpp' "
+        "AND model_repo=? COLLATE NOCASE AND COALESCE(spec_type,'')=''",
         (repo_id,),
     )
     updated = []
@@ -11613,6 +11715,8 @@ def attach_downloaded_drafter(repo_id: str, filenames: list[str]) -> list[str]:
             metadata = local_gguf_metadata(repo_id, name)
             role = gguf_file_role(name, metadata, main_metadata)
             if role not in SPEC_TYPES or drafter_vocab_mismatch(main_metadata, metadata):
+                continue
+            if row["mmproj_filename"] and role not in SPEC_TYPES_WITH_MMPROJ:
                 continue
             db.execute(
                 "UPDATE profiles SET spec_type=?, draft_filename=?, updated_at=? WHERE id=?",
@@ -11890,12 +11994,14 @@ def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> 
         warnings.insert(0, "La selección solo contiene drafters o proyectores: falta el modelo principal")
     if sum(1 for item in files if item["role"] == "main") > 1:
         warnings.append("Hay varias cuantizaciones principales; Encender usará una sola")
-    if mmproj and roles & set(SPEC_TYPES):
-        warnings.append("Con el mmproj activo no se usa la especulativa; el drafter solo sirve sin visión")
+    spec_roles = roles & set(SPEC_TYPES)
+    if mmproj and spec_roles - SPEC_TYPES_WITH_MMPROJ:
+        warnings.append("Con el mmproj activo solo se usa la especulativa MTP; este drafter solo sirve sin visión")
     available = hf_named_drafter(list(by_name.values()))
-    if available and not roles & set(SPEC_TYPES) and not mmproj:
+    suggest = bool(available and not spec_roles and (not mmproj or available["spec_type"] in SPEC_TYPES_WITH_MMPROJ))
+    if suggest:
         warnings.append(f"El repositorio ofrece un drafter ({available['spec_type']}) que no está en la selección: {available['files'][0]}")
-    elif available and not roles & set(SPEC_TYPES):
+    elif available and not spec_roles:
         warnings.append(
             f"El repositorio ofrece un drafter ({available['spec_type']}: {available['files'][0]}), pero con el mmproj "
             "no se usaría; para solo texto, quita el mmproj y añade el drafter"
@@ -11908,7 +12014,7 @@ def hf_download_preflight(repo_id: str, revision: str, filenames: list[str]) -> 
         "files": files,
         "mmproj": mmproj,
         "other_files": [name for name in filenames if not name.lower().endswith(".gguf")],
-        "suggested_draft": available["files"] if available and not roles & set(SPEC_TYPES) and not mmproj else [],
+        "suggested_draft": available["files"] if suggest else [],
         "warnings": warnings,
         "security_warnings": safe_hf_security_warnings(repo_id, commit, info, templates),
     }
@@ -12834,6 +12940,7 @@ class ModelPayload(BaseModel):
     timeout_seconds: int = Field(default=600, ge=10, le=86_400)
     comfyui: ComfyUISpecPayload | None = None
     enabled: bool = True
+    model_grounding_prompt: Literal["inherit", "on", "off"] = "inherit"
 
 
 PROFILE_MAX_ADDITIONAL_MODELS = 12
@@ -12851,6 +12958,7 @@ class ProfilePayload(ModelPayload):
     auto_fit_context: bool = True
     minimum_context_size: int = Field(default=8192, ge=512, le=1_048_576)
     app: str = Field(default="", max_length=64, pattern=rf"^({PROFILE_APP_NAME})?$")
+    grounding_prompt: Literal["inherit", "on", "off"] = "inherit"
 
 
 class ProfileFavoritePayload(BaseModel):
@@ -13047,6 +13155,7 @@ def profile_values(profile_id: str, payload: ProfilePayload, now: str) -> tuple[
         payload.memory_reserve_mb, int(payload.auto_fit_context), payload.minimum_context_size,
         payload.spec_type, payload.draft_filename, payload.spec_draft_n_max,
         serialize_comfyui_spec(payload.comfyui),
+        payload.grounding_prompt, payload.model_grounding_prompt,
         0, now, now,
     )
 
@@ -13062,8 +13171,8 @@ PROFILE_INSERT_SQL = """
         output_modalities_json,runtime_backend,endpoint_url,api_protocol,
         estimated_memory_mb,max_input_mb,timeout_seconds,additional_models_json,
         memory_reserve_mb,auto_fit_context,minimum_context_size,spec_type,draft_filename,spec_draft_n_max,
-        comfyui_json,active,created_at,updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        comfyui_json,grounding_prompt,model_grounding_prompt,active,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 PROFILE_INSERT_COLUMNS = [
     column.strip() for column in PROFILE_INSERT_SQL.split("(", 1)[1].split(")", 1)[0].split(",")
@@ -13275,8 +13384,16 @@ async def profiles() -> dict[str, Any]:
     loaded_profiles = running_profiles()
     published = _recipes_cache["value"]["recipes"] if _recipes_cache else local_recipes()
     latest_recipe_versions = {str(recipe["id"]): recipe_version(recipe) for recipe in published}
+    grounding_enabled = grounding_config()["enabled"]
     for profile in profile_rows:
         models = profile_models(profile)
+        for model in models:
+            model["grounding_prompt_active"] = grounding_prompt_active(
+                model, profile.get("grounding_prompt"), grounding_enabled
+            )
+        profile["grounding_prompt_models"] = sum(
+            1 for model in models if model.get("enabled", True) and model["grounding_prompt_active"]
+        )
         plan = profile_memory_plan(profile)
         try:
             profile["model_files"] = json.loads(profile.pop("model_files_json") or "[]")
@@ -24793,10 +24910,145 @@ async def system_health_center_report() -> dict[str, Any]:
     return sanitize_log_detail(report)
 
 
+def cpu_cap_observation(root: Path | None = None) -> dict[str, int | bool | None]:
+    """Read the live CPU ceiling. None means cpufreq could not be read."""
+    base = root or CPUFREQ_ROOT
+    seen = 0
+    capped = 0
+    if not base.is_dir():
+        return {"policies": 0, "capped": None}
+    try:
+        policies = sorted(base.iterdir())
+    except OSError:
+        return {"policies": 0, "capped": None}
+    for policy in policies:
+        if not re.fullmatch(r"policy\d+", policy.name):
+            continue
+        try:
+            current = int((policy / "scaling_max_freq").read_text(encoding="utf-8").strip())
+            hard = int((policy / "cpuinfo_max_freq").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            continue
+        seen += 1
+        if current == min(CLOCK_CAP_CPU_KHZ, hard):
+            capped += 1
+    if seen == 0:
+        return {"policies": 0, "capped": None}
+    return {"policies": seen, "capped": capped == seen}
+
+
+def clock_cap_installed() -> bool:
+    return CLOCK_CAP_SCRIPT.is_file() and not CLOCK_CAP_SCRIPT.is_symlink()
+
+
+def clock_cap_status() -> dict[str, Any]:
+    available = bool(device_identity().get("is_dgx_spark"))
+    installed = clock_cap_installed()
+    enabled = False
+    active = False
+    if shutil.which("systemctl"):
+        enabled_result = run_command(["systemctl", "is-enabled", CLOCK_CAP_UNIT], 5)
+        active_result = run_command(["systemctl", "is-active", CLOCK_CAP_UNIT], 5)
+        enabled = enabled_result.returncode == 0 and enabled_result.stdout.strip() == "enabled"
+        active = active_result.returncode == 0 and active_result.stdout.strip() == "active"
+    cpu = cpu_cap_observation()
+    if not available:
+        detail = "Este límite solo se aplica en un NVIDIA GB10"
+    elif not installed:
+        detail = "Falta el programa de límite de reloj. Vuelve a instalar los servicios de MyDGX; hasta entonces no se cambia nada"
+    elif enabled and active:
+        detail = "Límite activo. El próximo arranque lo vuelve a aplicar"
+    elif enabled:
+        detail = "Límite guardado para el próximo arranque"
+    else:
+        detail = "Relojes de fábrica. Un arranque no volverá a limitar"
+    return {
+        "available": available,
+        "installed": installed,
+        "ready": available and installed,
+        "enabled": enabled and available,
+        "active": active and available,
+        "persisted": enabled and available,
+        "gpu_cap_mhz": CLOCK_CAP_GPU_MHZ,
+        "cpu_cap_mhz": CLOCK_CAP_CPU_KHZ // 1000,
+        "cpu_policies": cpu["policies"],
+        "cpu_capped": cpu["capped"],
+        "detail": detail,
+    }
+
+
+_clock_cap_lock = asyncio.Lock()
+
+
+class ClockCapPayload(BaseModel):
+    enabled: bool
+    confirm: str = Field(max_length=80)
+
+
+def clock_cap_failure_detail(result: subprocess.CompletedProcess[str], enabled: bool) -> str:
+    reason = f"{result.stderr}\n{result.stdout}".lower()
+    if any(marker in reason for marker in ("a password is required", "not permitted", "not allowed", "no tty")):
+        return "El sistema no autorizó el cambio de reloj. Vuelve a instalar los servicios de MyDGX; no se ha cambiado el kernel ni se ha reiniciado"
+    if enabled:
+        return "No se pudo aplicar el límite de reloj. No se ha cambiado el kernel ni se ha reiniciado"
+    return "No se pudo quitar el límite de reloj. No se ha cambiado el kernel ni se ha reiniciado"
+
+
 class ServiceActionRequest(BaseModel):
     name: str
     action: Literal["start", "stop", "restart"]
     confirm: str
+
+
+@app.get("/api/system/clock-cap", dependencies=secure)
+async def get_clock_cap() -> dict[str, Any]:
+    return await asyncio.to_thread(clock_cap_status)
+
+
+@app.put("/api/system/clock-cap", dependencies=secure)
+async def set_clock_cap(payload: ClockCapPayload) -> dict[str, Any]:
+    """Lock or restore GB10 clocks. The confirm phrase is sent only after the dialog."""
+    async with _clock_cap_lock:
+        status = await asyncio.to_thread(clock_cap_status)
+        if not status["available"]:
+            raise HTTPException(status_code=400, detail="Este límite solo se aplica en un NVIDIA GB10")
+        if not status["installed"]:
+            raise HTTPException(
+                status_code=409,
+                detail="Falta el programa de límite de reloj. Vuelve a instalar los servicios de MyDGX; hasta entonces no se cambia nada",
+            )
+        expected = CLOCK_CAP_CONFIRM_ON if payload.enabled else CLOCK_CAP_CONFIRM_OFF
+        if not hmac.compare_digest(payload.confirm, expected):
+            raise HTTPException(status_code=400, detail="La confirmación del límite de reloj no es válida")
+        if payload.enabled == status["enabled"] and (not payload.enabled or status["active"]):
+            return status
+        action = "apply" if payload.enabled else "clear"
+        result = await asyncio.to_thread(
+            run_command,
+            ["sudo", "-n", str(CLOCK_CAP_SCRIPT), action],
+            90,
+        )
+        success = result.returncode == 0
+        db.audit(f"clock_cap.{action}", "gb10", success, (result.stderr or result.stdout or "")[:300])
+        if not success:
+            detail = clock_cap_failure_detail(result, payload.enabled)
+            notify_safely("clock_cap.failed", "No se cambió el límite de reloj", detail, level="warning")
+            raise HTTPException(status_code=502, detail=detail)
+        if payload.enabled:
+            notify_safely(
+                "clock_cap.enabled",
+                "Límite de reloj del GB10 activado",
+                "La GPU queda en 2200 MHz y la CPU en 2808 MHz, también después de reiniciar.",
+                level="info",
+            )
+        else:
+            notify_safely(
+                "clock_cap.disabled",
+                "Límite de reloj del GB10 quitado",
+                "La GPU y la CPU vuelven a sus relojes de fábrica, también después de reiniciar.",
+                level="warning",
+            )
+        return await asyncio.to_thread(clock_cap_status)
 
 
 @app.post("/api/services/action", dependencies=secure)

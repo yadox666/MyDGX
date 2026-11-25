@@ -1162,31 +1162,42 @@ class CollectorTests(unittest.TestCase):
         self.assertGreater(moe_result["recommended_score"], dense_result["recommended_score"])
         self.assertEqual(moe_result["recommended_slots"], 8)
 
-    def test_huggingface_spark_prefers_drafter_over_vision_and_sweet_spot_quant(self) -> None:
-        info = SimpleNamespace(
-            id="org/Cyber-Coder-35B-A3B-GGUF",
-            tags=["gguf", "image-text-to-text"], pipeline_tag="image-text-to-text",
-            siblings=[
-                SimpleNamespace(rfilename="Model-UD-Q5_K_XL.gguf", size=27 * 1024**3),
-                SimpleNamespace(rfilename="Model-UD-Q6_K_XL.gguf", size=32 * 1024**3),
-                SimpleNamespace(rfilename="Model-UD-Q8_K_XL.gguf", size=39 * 1024**3),
-                SimpleNamespace(rfilename="mmproj-BF16.gguf", size=1 * 1024**3),
-                SimpleNamespace(rfilename="mtp-Model.gguf", size=2 * 1024**3),
-            ],
-            config={"max_position_embeddings": 262_144}, card_data={"license": "apache-2.0"},
-            private=False, gated=False, downloads=1000, likes=10, last_modified=None,
-        )
+    def test_huggingface_spark_keeps_vision_with_mtp_and_sweet_spot_quant(self) -> None:
+        def repo(drafter: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                id="org/Cyber-Coder-35B-A3B-GGUF",
+                tags=["gguf", "image-text-to-text"], pipeline_tag="image-text-to-text",
+                siblings=[
+                    SimpleNamespace(rfilename="Model-UD-Q5_K_XL.gguf", size=27 * 1024**3),
+                    SimpleNamespace(rfilename="Model-UD-Q6_K_XL.gguf", size=32 * 1024**3),
+                    SimpleNamespace(rfilename="Model-UD-Q8_K_XL.gguf", size=39 * 1024**3),
+                    SimpleNamespace(rfilename="mmproj-BF16.gguf", size=1 * 1024**3),
+                    SimpleNamespace(rfilename=drafter, size=2 * 1024**3),
+                ],
+                config={"max_position_embeddings": 262_144}, card_data={"license": "apache-2.0"},
+                private=False, gated=False, downloads=1000, likes=10, last_modified=None,
+            )
+        info = repo("mtp-Model.gguf")
         result = hf_spark_recommendation(info, "any", "any", memory_total_mb=128 * 1024, memory_available_mb=120 * 1024)
         self.assertEqual(result["recommended_quantization"], "UD-Q6_K_XL")
-        self.assertEqual(result["recommended_files"], ["Model-UD-Q6_K_XL.gguf", "mtp-Model.gguf"])
-        self.assertEqual(result["optional_mmproj_file"], "mmproj-BF16.gguf")
+        self.assertEqual(result["recommended_files"], ["Model-UD-Q6_K_XL.gguf", "mmproj-BF16.gguf", "mtp-Model.gguf"])
+        self.assertEqual(result["recommended_mmproj_file"], "mmproj-BF16.gguf")
+        self.assertIsNone(result["optional_mmproj_file"])
         self.assertTrue(result["speculative_verified"])
         self.assertEqual(result["speculative_methods"][0], "MTP")
         tight = hf_spark_recommendation(info, "any", "any", memory_total_mb=128 * 1024, memory_available_mb=38 * 1024)
         self.assertEqual(tight["recommended_quantization"], "UD-Q5_K_XL")
         vision = hf_spark_recommendation(info, "vision", "any", memory_total_mb=128 * 1024, memory_available_mb=120 * 1024)
         self.assertIn("mmproj-BF16.gguf", vision["recommended_files"])
-        self.assertNotIn("mtp-Model.gguf", vision["recommended_files"])
+        self.assertIn("mtp-Model.gguf", vision["recommended_files"])
+
+        dflash = repo("dflash-Model.gguf")
+        text = hf_spark_recommendation(dflash, "any", "any", memory_total_mb=128 * 1024, memory_available_mb=120 * 1024)
+        self.assertEqual(text["recommended_files"], ["Model-UD-Q6_K_XL.gguf", "dflash-Model.gguf"])
+        self.assertEqual(text["optional_mmproj_file"], "mmproj-BF16.gguf")
+        vision = hf_spark_recommendation(dflash, "vision", "any", memory_total_mb=128 * 1024, memory_available_mb=120 * 1024)
+        self.assertIn("mmproj-BF16.gguf", vision["recommended_files"])
+        self.assertNotIn("dflash-Model.gguf", vision["recommended_files"])
 
     def test_gguf_quant_rank_and_drafter_vocabulary(self) -> None:
         rank = main_module.gguf_quant_rank
@@ -7162,7 +7173,7 @@ class ProfileApiTests(unittest.TestCase):
             )
         db.path = original_path
 
-    def test_downloaded_drafter_is_attached_to_plain_profiles(self) -> None:
+    def test_downloaded_drafter_is_attached_to_profiles_without_one(self) -> None:
         original_path = db.path
         repo = "peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF"
         recipes = [recipe for recipe in main_module.local_recipes() if recipe.get("model_repo") == repo]
@@ -7178,12 +7189,15 @@ class ProfileApiTests(unittest.TestCase):
                 db.execute("UPDATE profiles SET mmproj_filename='mmproj-BF16.gguf' WHERE id=?", (with_projector["id"],))
                 with patch.object(main_module, "local_gguf_metadata", return_value={}):
                     self.assertEqual(main_module.attach_downloaded_drafter(repo, ["README.md"]), [])
+                    attached = main_module.attach_downloaded_drafter(repo, ["dflash-Cyber-Tiel-Coder-35B-A3B.gguf"])
+                    self.assertEqual(attached, [plain["name"]])
+                    db.execute("UPDATE profiles SET spec_type='', draft_filename='' WHERE model_repo=?", (repo,))
                     attached = main_module.attach_downloaded_drafter(repo, ["mtp-Cyber-Tiel-Coder-35B-A3B.gguf"])
-                self.assertEqual(attached, [plain["name"]])
+                self.assertEqual(sorted(attached), sorted([plain["name"], with_projector["name"]]))
                 rows = {row["id"]: row for row in db.rows("SELECT id,spec_type,draft_filename FROM profiles WHERE model_repo=?", (repo,))}
-                self.assertEqual(rows[plain["id"]]["spec_type"], "draft-mtp")
-                self.assertEqual(rows[plain["id"]]["draft_filename"], "mtp-Cyber-Tiel-Coder-35B-A3B.gguf")
-                self.assertEqual(rows[with_projector["id"]]["spec_type"], "")
+                for profile in (plain, with_projector):
+                    self.assertEqual(rows[profile["id"]]["spec_type"], "draft-mtp")
+                    self.assertEqual(rows[profile["id"]]["draft_filename"], "mtp-Cyber-Tiel-Coder-35B-A3B.gguf")
         finally:
             db.path = original_path
 
@@ -8062,6 +8076,55 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"][0]["b64_json"], "iVBORw0KGgo=")
 
+    def test_chatting_with_the_comfyui_image_model_draws_the_prompt(self) -> None:
+        model = {
+            "id": "comfyui-image",
+            "engine": "comfyui",
+            "model_ref": "flux.safetensors",
+            "model_alias": "comfyui-image",
+            "api_protocol": "comfyui",
+            "task": "image-generation",
+        }
+        generate = AsyncMock(return_value={"content_type": "image/png", "data_base64": "iVBORw0KGgo="})
+        with (
+            patch(
+                "backend.gateway.loaded_routes",
+                new=AsyncMock(return_value=({"id": "managed-comfyui"}, {"comfyui-image": model})),
+            ),
+            patch("backend.gateway.execute_multimodal_request", new=generate),
+            TestClient(gateway_app) as gateway,
+        ):
+            streamed = gateway.post("/v1/chat/completions", json={
+                "model": "comfyui-image", "stream": True,
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "A green cube"}]}],
+            })
+            plain = gateway.post("/v1/chat/completions", json={
+                "model": "comfyui-image",
+                "messages": [
+                    {"role": "system", "content": "context"},
+                    {"role": "user", "content": "### Task:\nRespond using the context.\n<user_query>A red sphere</user_query>"},
+                ],
+            })
+            title = gateway.post("/v1/chat/completions", json={
+                "model": "comfyui-image",
+                "messages": [{"role": "user", "content": "### Task:\nGenerate a concise title for the chat."}],
+            })
+            empty = gateway.post("/v1/chat/completions", json={
+                "model": "comfyui-image", "messages": [{"role": "user", "content": "  "}],
+            })
+        self.assertEqual(streamed.status_code, 200)
+        self.assertTrue(streamed.headers["content-type"].startswith("text/event-stream"))
+        events = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
+        self.assertEqual(events[0]["choices"][0]["delta"]["content"], "![comfyui-image](data:image/png;base64,iVBORw0KGgo=)")
+        self.assertEqual(events[-1]["choices"][0]["finish_reason"], "stop")
+        self.assertTrue(streamed.text.rstrip().endswith("data: [DONE]"))
+        self.assertEqual(plain.status_code, 200)
+        self.assertIn("data:image/png;base64,", plain.json()["choices"][0]["message"]["content"])
+        self.assertEqual([call.args[0].prompt for call in generate.await_args_list], ["A green cube", "A red sphere"])
+        self.assertEqual(title.json()["choices"][0]["message"]["content"], "{}")
+        self.assertEqual(empty.status_code, 400)
+        self.assertFalse(supports_endpoint(model, "/v1/chat/completions"))
+
     def test_gateway_adapts_comfyui_image_edits_to_openai(self) -> None:
         model = {
             "id": "comfyui-image",
@@ -8253,6 +8316,49 @@ class GatewayTests(unittest.TestCase):
                 self.assertNotIn("secreto-que-no-debe-loguearse", denied.text)
         finally:
             settings.gateway_api_key = original_key
+            db.path = original_path
+
+    def test_grounding_prompt_layers_and_respects_client_instructions(self) -> None:
+        original_path = db.path
+        chat = {"task": "chat", "api_protocol": "openai"}
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                db.path = Path(directory) / "grounding.db"
+                with TestClient(app) as client:
+                    initial = client.get("/api/gateway/grounding").json()
+                    self.assertFalse(initial["enabled"])
+                    self.assertEqual(initial["text"], initial["default_text"])
+                    payload = {"messages": [{"role": "user", "content": "hola"}]}
+                    self.assertFalse(gateway_module.apply_grounding_prompt(chat, "/v1/chat/completions", payload))
+                    on_model = {**chat, "model_grounding_prompt": "on", "_profile_grounding_prompt": "off"}
+                    self.assertTrue(gateway_module.apply_grounding_prompt(on_model, "/v1/chat/completions", payload))
+                    self.assertEqual(payload["messages"][0]["role"], "system")
+                    self.assertNotIn("{date}", payload["messages"][0]["content"])
+
+                    saved = client.put("/api/gateway/grounding", json={"enabled": True, "text": "  Sé honesto.  "})
+                    self.assertEqual(saved.status_code, 200)
+                    self.assertTrue(saved.json()["custom"])
+                    profile_off = {**chat, "_profile_grounding_prompt": "off"}
+                    self.assertFalse(gateway_module.apply_grounding_prompt(profile_off, "/v1/chat/completions", {
+                        "messages": [{"role": "user", "content": "hola"}]
+                    }))
+                    own_system = {"messages": [
+                        {"role": "developer", "content": "propio"}, {"role": "user", "content": "hola"},
+                    ]}
+                    self.assertFalse(gateway_module.apply_grounding_prompt(chat, "/v1/chat/completions", own_system))
+                    self.assertEqual(len(own_system["messages"]), 2)
+                    responses = {"input": "hola"}
+                    self.assertTrue(gateway_module.apply_grounding_prompt(chat, "/v1/responses", responses))
+                    self.assertEqual(responses["instructions"], "Sé honesto.")
+                    embeddings = {"task": "embeddings", "api_protocol": "openai"}
+                    self.assertFalse(gateway_module.apply_grounding_prompt(embeddings, "/v1/chat/completions", {
+                        "messages": [{"role": "user", "content": "hola"}]
+                    }))
+
+                    reset = client.put("/api/gateway/grounding", json={"enabled": True, "text": ""}).json()
+                    self.assertFalse(reset["custom"])
+                    self.assertEqual(reset["text"], reset["default_text"])
+        finally:
             db.path = original_path
 
     def test_gateway_web_search_hides_upstream_failures(self) -> None:

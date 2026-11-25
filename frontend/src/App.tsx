@@ -600,7 +600,7 @@ const MODEL_GLOSSARY: ModelGlossaryEntry[] = [
   { id: "engram", term: t("Engram"), summary: t("Grandes tablas de memoria consultadas por token. Pueden permanecer en un NVMe rápido mediante mmap y no ocupar toda la RAM."), category: "Arquitectura y velocidad", patterns: [/\bengram\b/i, /\.v41rows\b/i] },
   { id: "mtp", term: t("MTP · Multi-Token Prediction"), summary: t("Capas extra que proponen varios tokens por adelantado; el modelo los valida y la generación se acelera. Pueden venir dentro del GGUF o en un archivo aparte (mtp-*.gguf) que se descarga junto al modelo. MyDGX lo detecta y lo activa en el perfil; si falta el archivo, arranca sin él."), category: "Arquitectura y velocidad", patterns: [/\bmtp\b/i, /multi.token.prediction/i, /\bnextn\b/i] },
   { id: "speculative", term: t("Speculative decoding"), summary: t("Un modelo pequeño propone tokens y el principal los valida. Puede aumentar bastante la velocidad."), category: "Arquitectura y velocidad", patterns: [/speculative/i, /\bdraft(?: model)?\b/i, /\bdspark\b/i, /\bdflash\d*\b/i, /\beagle\d?\b/i] },
-  { id: "drafter", term: t("Drafter · modelo borrador"), summary: t("El modelo pequeño que propone tokens en la decodificación especulativa. Puede ser un archivo aparte (mtp-*.gguf, DFlash, EAGLE3 o un modelo pequeño de la misma familia) o venir dentro del GGUF. Debe compartir vocabulario con el modelo principal, y los MTP solo sirven para el modelo con el que se entrenaron. Ocupa algo de memoria extra y en llama.cpp no se combina con visión (mmproj)."), category: "Arquitectura y velocidad", patterns: [/\bdrafters?\b/i, /draft.?model/i, /modelo.borrador/i] },
+  { id: "drafter", term: t("Drafter · modelo borrador"), summary: t("El modelo pequeño que propone tokens en la decodificación especulativa. Puede ser un archivo aparte (mtp-*.gguf, DFlash, EAGLE3 o un modelo pequeño de la misma familia) o venir dentro del GGUF. Debe compartir vocabulario con el modelo principal, y los MTP solo sirven para el modelo con el que se entrenaron. Ocupa algo de memoria extra. En llama.cpp, el MTP funciona junto a la visión (mmproj); los demás drafters, solo sin ella."), category: "Arquitectura y velocidad", patterns: [/\bdrafters?\b/i, /draft.?model/i, /modelo.borrador/i] },
   { id: "gqa", term: "GQA / MQA", summary: t("Reduce el coste de atención y de la caché KV. Ayuda especialmente con contextos largos."), category: "Arquitectura y velocidad", patterns: [/\bgqa\b/i, /\bmqa\b/i, /grouped.query/i] },
   { id: "flash-attention", term: t("Flash Attention"), summary: t("Implementación de atención más rápida y eficiente en memoria cuando el runtime y la GPU la soportan."), category: "Arquitectura y velocidad", patterns: [/flash.?attention/i, /\bfa2\b/i, /\bfa3\b/i] },
   { id: "flash-line", term: t("Flash · nombre de familia"), summary: t("Etiqueta comercial, no técnica: suele indicar la variante rápida y barata de una familia, a menudo un MoE con pocos parámetros activos. No tiene relación con Flash Attention; compara tamaño, parámetros activos y benchmarks."), category: "Arquitectura y velocidad", patterns: [/[-_.]flash\b(?![-_ ]?att)/i] },
@@ -968,11 +968,13 @@ function ModelSettingsDialog({ modelId, notify, onClose, onSaved }: {
   const hasProjector = Boolean(report?.mmproj.length);
   const visionSelected = draft.mmproj ? draft.mmproj !== "none" : Boolean(report?.mmproj_filename);
   const specSelected = Boolean(draft.spec) && draft.spec !== "off";
+  const specKeepsVision = (value?: string) => Boolean(value?.startsWith("draft-mtp|"));
+  const specDropsVision = specSelected && !specKeepsVision(draft.spec);
   function chooseSpec(value: string) {
     setDraft((previous) => ({
       ...previous,
       spec: value,
-      ...(value && value !== "off" && hasProjector && visionSelected ? { mmproj: "none" } : {}),
+      ...(value && value !== "off" && !specKeepsVision(value) && hasProjector && visionSelected ? { mmproj: "none" } : {}),
     }));
   }
   return <div className="model-help-overlay" role="dialog" aria-modal="true" aria-label={t("Ajustes de {modelId}", { modelId: modelId })} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -1010,10 +1012,10 @@ function ModelSettingsDialog({ modelId, notify, onClose, onSaved }: {
         <section className="model-settings-section">
           <h4>{t("Decodificación especulativa")}{" "}<small>{t("ahora:")} {current}{spec?.origin ? t(" · origen {origin}", { origin: originLabel(spec.origin) }) : ""}</small></h4>
           {spec?.runtime_supported === false && <div className="profile-warning"><TriangleAlert size={14} />{t("El llama.cpp instalado no admite")}{" "}<code>--spec-type</code>.</div>}
-          {spec?.blocked_by_mmproj && !specSelected && <small className="preflight-note">{t("Con el mmproj activo llama.cpp no usa la especulativa. Elige «Sin visión» si prefieres velocidad a imágenes.")}</small>}
-          {hasProjector && specSelected && (visionSelected
-            ? <div className="profile-warning"><TriangleAlert size={14} />{t("Hay un proyector visual elegido: llama.cpp no combina visión y especulativa, así que el arranque seguirá sin MTP. Elige «Sin visión» para usarla.")}</div>
-            : <div className="profile-warning"><TriangleAlert size={14} />{t("Al activar MTP se pierde la visión: el modelo arrancará solo con texto y no aceptará imágenes. Para recuperarla, vuelve a elegir el proyector visual.")}</div>)}
+          {spec?.blocked_by_mmproj && !specSelected && <small className="preflight-note">{t("Con el mmproj activo llama.cpp solo combina la visión con la especulativa MTP, y este modelo no tiene drafter MTP. Elige «Sin visión» si prefieres velocidad a imágenes.")}</small>}
+          {hasProjector && specDropsVision && (visionSelected
+            ? <div className="profile-warning"><TriangleAlert size={14} />{t("Hay un proyector visual elegido: llama.cpp solo combina la visión con la especulativa MTP, así que el arranque seguirá sin este drafter. Elige «Sin visión» para usarlo.")}</div>
+            : <div className="profile-warning"><TriangleAlert size={14} />{t("Este drafter no es MTP: al activarlo se pierde la visión y el modelo arrancará solo con texto. Para recuperarla, elige un drafter MTP o vuelve a elegir el proyector visual.")}</div>)}
           <label>{t("Drafter")}
             <select value={draft.spec ?? ""} onChange={(event) => chooseSpec(event.target.value)}>
               <option value="">{t("Automático")}</option>
@@ -2328,7 +2330,10 @@ type ModelConfig = {
   timeout_seconds: number;
   comfyui?: ComfyUISpec | null;
   enabled: boolean;
+  model_grounding_prompt?: GroundingMode;
 };
+
+type GroundingMode = "inherit" | "on" | "off";
 
 type ComfyUISpec = {
   workflow: string;
@@ -2343,6 +2348,7 @@ type ProfileModel = ModelConfig & {
   draft_filename?: string;
   uncensored?: string;
   reasoning?: ReasoningMode;
+  grounding_prompt_active?: boolean;
 };
 
 const GGUF_QUANT_SUFFIX = /[-_.]((?:UD-)?(?:I?Q\d(?:_[A-Z0-9]+)*|BF16|F16|F32|MXFP4(?:_[A-Z0-9]+)*))$/i;
@@ -2366,6 +2372,8 @@ type Profile = ModelConfig & {
   auto_fit_context: number;
   minimum_context_size: number;
   app: string;
+  grounding_prompt?: GroundingMode;
+  grounding_prompt_models?: number;
   read_only?: boolean;
   recipe_id?: string;
   recipe_version?: number;
@@ -2617,7 +2625,7 @@ function profileModelCategory(model: ProfileModel): ModelCategoryKey {
   return guessed === "code" ? guessed : "text";
 }
 
-/** llama.cpp only sees images with an mmproj, and drops it when speculative decoding (MTP) is on. */
+/** llama.cpp only sees images with an mmproj. */
 function profileModelVisionPossible(model: ProfileModel): boolean {
   return model.engine !== "llama.cpp" && !model.spec_type;
 }
@@ -2639,6 +2647,11 @@ function ReasoningBadge({ mode }: { mode?: ReasoningMode }) {
     ? t("Razona por defecto; el cliente puede bajarlo u ocultarlo con reasoning_effort o thinking")
     : t("Razonamiento desactivado por defecto; el cliente lo activa por petición con reasoning_effort o thinking");
   return <span className={`badge reasoning ${mode}`} title={title}><Brain size={11} />{" "}{t("Razonamiento")}</span>;
+}
+
+function ParallelBadge({ parallel }: { parallel?: number }) {
+  if (!parallel || parallel < 2) return null;
+  return <span className="badge parallel" title={t("Configurado con {count} slots en paralelo: atiende {count} peticiones a la vez (más caché y memoria)", { count: parallel })}>{parallel}×</span>;
 }
 
 function profileCategories(models: ProfileModel[]): ModelCategoryKey[] {
@@ -5141,7 +5154,7 @@ function ModelsView({
                     <span title={t("Estimación comparativa basada en pesos activos y ancho de banda; no sustituye un benchmark")}><small>{t("Arquitectura")}</small><strong>{model.architecture}{model.active_parameters_b ? t(" · {count}B activos", { count: model.active_parameters_b }) : ""}</strong></span>
                     <span title={t("Estimación conservadora; depende del runtime, plantilla, contexto y batching")}><small>{t("Rendimiento")}</small><strong>{model.estimated_tokens_per_second ? `≈${model.estimated_tokens_per_second} tok/s · ${model.recommended_slots} slot(s)` : t("Según runtime")}</strong></span>
                     {model.speculative_methods.length > 0 && <span title={model.speculative_verified === false ? t("Solo lo dice la ficha; la comprobación previa lee la cabecera del GGUF antes de descargar") : t("El repositorio incluye el drafter y la descarga recomendada lo trae")}><small>{t("Especulativa")}</small><strong>{model.speculative_methods.join(" · ")}{model.speculative_verified === false ? ` ${t("(sin verificar)")}` : ""}</strong></span>}
-                    {model.optional_mmproj_file && <span title={t("llama.cpp no combina visión y especulativa; se descarga el drafter. Añade el mmproj desde Detalles si quieres imágenes.")}><small>{t("Visión")}</small><strong>{t("Opcional")}</strong></span>}
+                    {model.optional_mmproj_file && <span title={t("llama.cpp solo combina la visión con la especulativa MTP y este drafter no lo es; se descarga el drafter. Añade el mmproj desde Detalles si quieres imágenes.")}><small>{t("Visión")}</small><strong>{t("Opcional")}</strong></span>}
                     {model.spark_count > 1 && <span><small>{t("Cluster")}</small><strong>{model.spark_count}{" "}{t("Sparks ·")}{" "}{model.memory_bandwidth_gbps}{" "}{t("GB/s")}</strong></span>}
                     <span><small>{t("Memoria")}</small><strong>{Math.round(model.estimated_memory_mb / 1024)} GB</strong></span>
                   </div>
@@ -6049,6 +6062,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             {profile.recipe_id ? <span className="badge" title={profile.recipe_modified ? t("Receta editada: las versiones nuevas no se aplican solas para no perder tus cambios") : t("Receta: se actualiza sola mientras no la edites")}>{t("Receta")} · v{profile.recipe_version}{profile.recipe_modified ? ` · ${t("editada")}` : ""}</span> : null}
             {profile.active ? <span className="badge live">{t("Predeterminado")}</span> : null}
             {running ? <span className="badge running">{t("Cargado")}</span> : null}
+            {profile.grounding_prompt_models ? <span className="badge grounding" title={t("{count} modelo(s) de chat reciben el prompt anti-alucinación cuando la petición no trae mensaje de sistema", { count: profile.grounding_prompt_models })}>{t("Anti-alucinación")}</span> : null}
           </div>
           <button
             className={`profile-favorite ${profile.favorite ? "selected" : ""}`}
@@ -6104,6 +6118,8 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
                   <UncensoredBadge name={`${model.uncensored ?? ""} ${identity.name}`} flagged={Boolean(model.uncensored)} showKind />
                   {profileModelHasVision(model) && <VisionBadge />}
                   <ReasoningBadge mode={model.reasoning} />
+                  <ParallelBadge parallel={model.parallel} />
+                  <GroundingBadge active={model.grounding_prompt_active} />
                 </span>
                 {aliases.length > 0 && <small>{aliases.join(" · ")}</small>}
               </span>
@@ -6266,6 +6282,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             <label>{t("Hilos CPU")}<input type="number" value={form.threads} min={1} onChange={(event) => setField("threads", Number(event.target.value))} /></label>
             <label>{t("Límite de entrada (MiB)")}<input type="number" min={1} max={1024} value={form.max_input_mb} onChange={(event) => setField("max_input_mb", Number(event.target.value))} /></label>
             <label>{t("Modalidades")}<input value={`${form.input_modalities.join(" + ")} → ${form.output_modalities.join(" + ")}`} readOnly /></label>
+            {GROUNDING_TASKS.has(form.task) && <GroundingModeField label={t("Anti-alucinación del modelo")} inheritLabel={t("Heredar del perfil")} value={form.model_grounding_prompt} onChange={(value) => setField("model_grounding_prompt", value)} />}
             {form.engine === "llama.cpp" && <details className="wide profile-advanced">
               <summary>{t("Parámetros avanzados de llama.cpp")}</summary>
               <div className="advanced-grid">
@@ -6299,6 +6316,13 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
               <label>{t("Reserva del sistema (MiB)")}<input type="number" min={1024} value={form.memory_reserve_mb} onChange={(event) => setField("memory_reserve_mb", Number(event.target.value))} /></label>
               <label>{t("Contexto mínimo de recuperación")}<input type="number" min={512} value={form.minimum_context_size} onChange={(event) => setField("minimum_context_size", Number(event.target.value))} /></label>
               <label className="checkbox"><input type="checkbox" checked={Boolean(form.auto_fit_context)} onChange={(event) => setField("auto_fit_context", Number(event.target.checked))} /><span>{t("Reducir contexto automáticamente tras OOM")}</span></label>
+            </div>
+            <div className="wide capacity-editor">
+              <div>
+                <strong>{t("Prompt anti-alucinación")}</strong>
+                <small>{t("El gateway lo añade a los modelos de chat del perfil cuando la petición no trae mensaje de sistema. Cada modelo puede cambiarlo; el texto se edita en Configuración.")}</small>
+              </div>
+              <GroundingModeField label={t("En este perfil")} inheritLabel={t("Heredar de Configuración")} value={form.grounding_prompt} onChange={(value) => setField("grounding_prompt", value)} />
             </div>
             <div className="wide capacity-editor">
               <div>
@@ -6338,6 +6362,7 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
                     <label>{t("Nombre")}<input value={model.name} onChange={(event) => setAdditionalField(index, "name", event.target.value)} required /></label>
                     <label>{t("Motor")}<select value={model.engine} onChange={(event) => setAdditionalEngine(index, event.target.value as ProfileModel["engine"])}>{engineOptions.map((engine) => <option value={engine} key={engine}>{engine}</option>)}</select></label>
                     <label>{t("Tarea")}<select value={model.task} onChange={(event) => setAdditionalTask(index, event.target.value as ModelTask)}>{taskOptions.map((task) => <option value={task.id} key={task.id}>{task.label}</option>)}</select></label>
+                    {GROUNDING_TASKS.has(model.task) && <GroundingModeField label={t("Anti-alucinación")} inheritLabel={t("Heredar del perfil")} value={model.model_grounding_prompt} onChange={(value) => setAdditionalField(index, "model_grounding_prompt", value)} />}
                     <label>{t("Identificador / modelo")}<input value={model.model_ref} onChange={(event) => setAdditionalField(index, "model_ref", event.target.value)} {...(model.engine === "ollama" ? modelFieldEvents(index) : {})} placeholder={model.engine === "llama.cpp" ? t("Se completa con el repositorio") : undefined} required /></label>
                     <PortField auto={isAutoPort(model)} port={model.port} onAuto={(auto) => setAdditionalField(index, "port_auto", auto)} onPort={(port) => setAdditionalField(index, "port", port)} />
                     {!["llama.cpp", "ollama"].includes(model.engine) && <>
@@ -9683,6 +9708,150 @@ function ServerSettingsCard({ notify }: { notify: (message: string, error?: bool
   </Card>;
 }
 
+type ClockCapStatus = {
+  available: boolean;
+  installed: boolean;
+  ready: boolean;
+  enabled: boolean;
+  active: boolean;
+  persisted: boolean;
+  gpu_cap_mhz: number;
+  cpu_cap_mhz: number;
+  cpu_policies: number;
+  cpu_capped: boolean | null;
+  detail: string;
+};
+
+function ClockCapCard({ notify }: { notify: (message: string, error?: boolean) => void }) {
+  const [status, setStatus] = useState<ClockCapStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    api<ClockCapStatus>("/api/system/clock-cap")
+      .then(setStatus)
+      .catch((error) => notify((error as Error).message, true));
+  }, [notify]);
+  useEffect(() => { load(); }, [load]);
+
+  async function toggle(enabled: boolean) {
+    if (!status?.ready || busy) return;
+    const message = enabled
+      ? t("Se limitará la GPU a 2200 MHz y la CPU a 2808 MHz ahora, y el mismo límite se volverá a aplicar en cada arranque. No se reinicia el equipo ni se cambia el kernel. Los modelos cargados siguen en marcha; la prefill puede ir un poco más lenta. ¿Aplicar el límite?")
+      : t("Se devuelven la GPU y la CPU a sus relojes de fábrica ahora, y el próximo arranque ya no los limitará. Sin este límite, una carga fuerte puede acercarse al corte de alimentación de algunos GB10, cerca de 88 W en la GPU, y apagar el equipo de golpe. No lo quites en medio de un trabajo que no puedas interrumpir. ¿Quitar el límite?");
+    if (!await confirmDialog(message, {
+      tone: "danger",
+      confirmLabel: enabled ? t("Aplicar límite") : t("Quitar límite"),
+      title: t("Límite de reloj del GB10"),
+    })) return;
+    setBusy(true);
+    try {
+      setStatus(await api<ClockCapStatus>("/api/system/clock-cap", {
+        method: "PUT",
+        body: JSON.stringify({ enabled, confirm: enabled ? "APLICAR LIMITE GB10" : "QUITAR LIMITE GB10" }),
+      }));
+      notify(enabled
+        ? t("Límite de reloj aplicado. Se mantiene después de reiniciar.")
+        : t("Límite de reloj quitado. El próximo arranque tampoco lo aplica."));
+    } catch (error) {
+      notify((error as Error).message, true);
+      load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const state = !status
+    ? t("Comprobando el límite de reloj…")
+    : !status.available
+      ? t("Este límite solo existe en un NVIDIA GB10. En este equipo no se cambia ningún reloj.")
+      : !status.installed
+        ? t("El programa de límite aún no está instalado. Vuelve a instalar los servicios de MyDGX. Hasta entonces este interruptor no cambia nada.")
+        : status.enabled && status.active
+          ? t("Activo ahora. El próximo arranque lo vuelve a aplicar.")
+          : status.enabled
+            ? t("Guardado para el próximo arranque. Vuelve a activarlo si el reloj de ahora no coincide.")
+            : t("Relojes de fábrica. Un arranque no volverá a limitar.");
+
+  return <Card className="clock-cap-card">
+    <div className="card-kicker"><Gauge size={16} />{" "}{t("Límite de reloj del GB10")}</div>
+    <div className="clock-cap-warning">
+      <TriangleAlert size={16} />
+      <p>{t("No cambia el kernel, no reinicia y no detiene modelos ni servicios. La GPU queda con un techo de 2200 MHz y puede bajar en reposo; la CPU queda a 2808 MHz. Sirve para alejarse del corte de alimentación que algunos GB10 sufren cerca de 88 W en la GPU. Quitar el límite devuelve los relojes de fábrica y ese riesgo vuelve.")}</p>
+    </div>
+    <label className="settings-row clock-cap-switch">
+      <span>
+        <strong>{t("Mantener el límite")}</strong>
+        <small>{state}</small>
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        checked={Boolean(status?.enabled)}
+        disabled={!status?.ready || busy}
+        onChange={(event) => { void toggle(event.target.checked); }}
+        aria-label={t("Mantener el límite de reloj del GB10")}
+      />
+    </label>
+  </Card>;
+}
+
+type GroundingConfig = { enabled: boolean; text: string; custom: boolean; default_text: string };
+
+function GroundingBadge({ active }: { active?: boolean }) {
+  if (!active) return null;
+  return <span className="badge grounding" title={t("El gateway añade el prompt anti-alucinación cuando la petición no trae su propio mensaje de sistema")}>{t("Anti-alucinación")}</span>;
+}
+
+const GROUNDING_TASKS = new Set<string>(["chat", "vision"]);
+
+function GroundingModeField({ label, inheritLabel, value, onChange }: { label: string; inheritLabel: string; value?: GroundingMode; onChange: (value: GroundingMode) => void }) {
+  return <label>{label}<select value={value ?? "inherit"} onChange={(event) => onChange(event.target.value as GroundingMode)}>
+    <option value="inherit">{inheritLabel}</option>
+    <option value="on">{t("Activado")}</option>
+    <option value="off">{t("Desactivado")}</option>
+  </select></label>;
+}
+
+function GroundingSettingsCard({ notify }: { notify: (message: string, error?: boolean) => void }) {
+  const [grounding, setGrounding] = useState<GroundingConfig | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api<GroundingConfig>("/api/gateway/grounding").then(setGrounding).catch((error) => notify(error.message, true));
+  }, [notify]);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (!grounding) return;
+    setBusy(true);
+    try {
+      setGrounding(await api<GroundingConfig>("/api/gateway/grounding", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: grounding.enabled, text: grounding.text }),
+      }));
+      notify(t("Prompt anti-alucinación guardado; el gateway lo aplica desde la próxima petición."));
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <Card className="gateway-settings">
+    <div className="gateway-settings-head">
+      <div><ShieldCheck size={17} /><span><strong>{t("Prompt de sistema anti-alucinación")}</strong><small>{t("Lo añade el gateway a los modelos de chat y visión solo si la petición no trae su propio mensaje system o developer.")}</small></span></div>
+      <span className={`badge ${grounding?.enabled ? "live" : ""}`}>{grounding?.enabled ? t("Por defecto en todos") : t("Solo donde se active")}</span>
+    </div>
+    {grounding && <form onSubmit={save}>
+      <label className="checkbox"><input type="checkbox" checked={grounding.enabled} onChange={(event) => setGrounding({ ...grounding, enabled: event.target.checked })} /><span>{t("Aplicar por defecto a todos los modelos de chat. Cada perfil o modelo puede activarlo o desactivarlo por su cuenta.")}</span></label>
+      <label className="grounding-text"><span>{t("Texto del prompt ·")}{" "}<code>{"{date}"}</code>{" "}{t("se sustituye por la fecha UTC")}</span><textarea rows={5} maxLength={4000} value={grounding.text} onChange={(event) => setGrounding({ ...grounding, text: event.target.value })} /></label>
+      <div className="gateway-actions">
+        <small>{grounding.text.trim() === grounding.default_text ? t("Texto por defecto") : t("Texto personalizado")}</small>
+        <button className="button secondary" type="button" disabled={busy || grounding.text.trim() === grounding.default_text} onClick={() => setGrounding({ ...grounding, text: grounding.default_text })}>{t("Restablecer texto")}</button>
+        <button className="button primary" type="submit" disabled={busy}>{t("Guardar prompt")}</button>
+      </div>
+    </form>}
+  </Card>;
+}
+
 function SettingsView({ config, themePreference, setThemePreference, notify }: { config: Config | null; themePreference: ThemePreference; setThemePreference: (preference: ThemePreference) => void; notify: (message: string, error?: boolean) => void }) {
   const [languagePreference, setLanguageChoice] = useState<LanguagePreference>(storedLanguagePreference);
   const chooseLanguage = (preference: LanguagePreference) => {
@@ -9740,6 +9909,7 @@ function SettingsView({ config, themePreference, setThemePreference, notify }: {
           <div><span><strong>{t("Servicios")}</strong><small>{t("systemd con lista permitida")}</small></span><span className={`badge ${config?.service_control_enabled ? "live" : ""}`}>{config?.service_control_enabled ? t("Activado") : t("Solo lectura")}</span></div>
         </div>
       </Card>
+      <ClockCapCard notify={notify} />
       <ServerSettingsCard notify={notify} />
       <Card className="gateway-settings">
         <div className="gateway-settings-head">
@@ -9764,6 +9934,7 @@ function SettingsView({ config, themePreference, setThemePreference, notify }: {
           <div className="gateway-actions"><small>{t("Los cambios de host, puerto o activación requieren reiniciar MyDGX.")}</small><button className="button primary" type="submit">{t("Guardar gateway")}</button></div>
         </form>}
       </Card>
+      <GroundingSettingsCard notify={notify} />
       <div className="security-note"><ShieldCheck /><div><strong>{t("Diseñado para mantener los secretos en el servidor")}</strong><p>{t("Las claves de Hugging Face y servicios nunca se devuelven al navegador, a los logs ni a SQLite.")}</p></div></div>
     </div>
   );

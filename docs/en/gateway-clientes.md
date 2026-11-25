@@ -75,6 +75,15 @@ when to search; with small models you may need to enable search
 manually. A configuration previously saved in Admin takes precedence over the
 environment variables.
 
+With SearXNG installed, every new chat starts with web search on
+(`DEFAULT_MODEL_METADATA` with `defaultFeatureIds: ["web_search"]`). Open WebUI
+also asks for confirmation before each tool call (`ENABLE_TOOL_PERMISSIONS` and
+the `ask` mode in `DEFAULT_INTERFACE_SETTINGS`). On an existing installation, the
+deployment writes these values into the Open WebUI database once and marks
+`MYDGX_CHAT_DEFAULTS` in `open-webui.env`. After that, whatever you change in
+Admin, on a model or in the chat's permission selector is kept. A user who had
+already chosen a permission mode keeps it.
+
 The installation also loads a FLUX.1 Schnell FP8 API workflow into Open
 WebUI. The chat's image button sends the prompt directly to the local ComfyUI.
 For video, Open WebUI receives the **MyDGX Laboratorio IA** OpenAPI connection:

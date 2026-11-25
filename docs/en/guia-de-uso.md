@@ -130,8 +130,9 @@ Two modes:
   the model card specifies (`--spec-type`, `--spec-draft-model`) if it is downloaded. If
   not, it prefers DSpark, DFlash, EAGLE-3 and, finally, the MTP built into the
   GGUF (`nextn_predict_layers`). Models with speculative decoding carry its tag
-  (for example *DSpark* or *MTP*). It is not used with the `mmproj` active, because
-  llama.cpp does not combine the two. If the model does not start with the drafter,
+  (for example *DSpark* or *MTP*). With the `mmproj` active, only MTP is used:
+  llama.cpp keeps drafting with MTP while it accepts images, but the other drafter
+  types are untested with vision. If the model does not start with the drafter,
   MyDGX relaunches it without it and notes this in the logs.
 - **Pre-download check**: before downloading a GGUF, MyDGX reads via
   HTTP Range the header of each selected file, without downloading the weights.
@@ -140,7 +141,7 @@ Two modes:
   native context, the quantization, and the estimated memory at 32K. It warns about:
   - incomplete shards;
   - a selection without a main model;
-  - a drafter alongside an `mmproj`;
+  - a drafter that is not MTP alongside an `mmproj`;
   - insufficient memory.
 
   If the repository includes a drafter that is not selected, it offers **Add

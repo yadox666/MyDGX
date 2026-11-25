@@ -55,9 +55,11 @@ Each rejection is recorded in the logs as `http.cross_site_blocked`.
   `ACTIVAR ACTUALIZACIONES`, `ACTIVAR FIRMWARE` or `ACTIVAR SERVICIOS`; the
   change is audited and posts a notification.
 - `/etc/sudoers.d/mydgx` grants only a closed list: the APT update
-  commands, the repair script, `systemctl` on the MyDGX services
-  and shutdown. **Never** `NOPASSWD: ALL`. The browser cannot send
-  arbitrary commands.
+  commands, the repair script, `systemctl` on the MyDGX services,
+  shutdown, and the clock-cap program with the fixed arguments `apply`
+  and `clear` only. **Never** `NOPASSWD: ALL`. The browser cannot send
+  arbitrary commands. The clock cap also requires the confirmation phrase
+  `APLICAR LIMITE GB10` or `QUITAR LIMITE GB10` after the Settings dialog.
 - The assistant only **proposes** actions. They run when the user
   confirms them and expire after `ASSISTANT_ACTION_TTL_SECONDS`.
 - Every action is recorded in the audit (`GET /api/audit`).

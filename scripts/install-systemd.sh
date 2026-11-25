@@ -40,6 +40,9 @@ SEARXNG_RUNNER="$ROOT/scripts/searxng-container.sh"
 COMFYUI_ROOT="$SERVICE_HOME/.local/share/mydgx/comfyui"
 NVME_SMART_READER="$ROOT/scripts/nvme-smart-reader.sh"
 DUCKDNS_UPDATER="$ROOT/scripts/duckdns-update.sh"
+CLOCK_CAP="$ROOT/scripts/gb10-clock-cap.sh"
+[[ -f "$CLOCK_CAP" && ! -L "$CLOCK_CAP" ]] ||
+  fail "No se encontró el límite de reloj del GB10." "The GB10 clock cap program was not found."
 [[ -f "$NVME_SMART_READER" && ! -L "$NVME_SMART_READER" ]] ||
   fail "No se encontró el lector SMART seguro." "The safe SMART reader was not found."
 if [[ "$ENABLE_DUCKDNS" == "1" ]]; then
@@ -69,7 +72,8 @@ systemd_fingerprint="$(
       "$ROOT/scripts/install-systemd.sh" \
       "$ROOT/scripts/system-repair.sh" \
       "$NVME_SMART_READER" \
-      "$DUCKDNS_UPDATER"; do
+      "$DUCKDNS_UPDATER" \
+      "$CLOCK_CAP"; do
       sha256sum "$fingerprint_file" | awk '{print $1}'
     done
     printf 'root=%s\nuser=%s\nllama=%s\nsearxng=%s\ncomfyui=%s\nduckdns=%s\n' \
@@ -123,6 +127,7 @@ install -d -m 0755 /usr/local/libexec
 install -o root -g root -m 0755 "$ROOT/scripts/system-repair.sh" /usr/local/libexec/mydgx-system-repair
 install -o root -g root -m 0755 "$NVME_SMART_READER" /usr/local/libexec/mydgx-nvme-smart
 install -o root -g root -m 0755 "$DUCKDNS_UPDATER" /usr/local/libexec/mydgx-duckdns-update
+install -o root -g root -m 0755 "$CLOCK_CAP" /usr/local/libexec/mydgx-gb10-clock-cap
 
 apt_get="$(command -v apt-get || true)"
 systemctl_bin="$(command -v systemctl || true)"
@@ -140,8 +145,9 @@ Cmnd_Alias MYDGX_APT = $apt_get check, $apt_get update, $env_bin DEBIAN_FRONTEND
 Cmnd_Alias MYDGX_REPAIR = /usr/local/libexec/mydgx-system-repair --repair, /usr/local/libexec/mydgx-system-repair --drop-caches
 Cmnd_Alias MYDGX_SERVICES = $systemctl_bin start mydgx, $systemctl_bin stop mydgx, $systemctl_bin restart mydgx, $systemctl_bin start mydgx-gateway, $systemctl_bin stop mydgx-gateway, $systemctl_bin restart mydgx-gateway, $systemctl_bin start mydgx-repair, $systemctl_bin stop mydgx-repair, $systemctl_bin restart mydgx-repair, $systemctl_bin start mydgx-searxng, $systemctl_bin stop mydgx-searxng, $systemctl_bin restart mydgx-searxng, $systemctl_bin enable --now mydgx-searxng, $systemctl_bin disable --now mydgx-searxng, $systemctl_bin start mydgx-comfyui, $systemctl_bin stop mydgx-comfyui, $systemctl_bin restart mydgx-comfyui, $systemctl_bin enable --now mydgx-comfyui, $systemctl_bin disable --now mydgx-comfyui, $systemctl_bin start mydgx-whisper, $systemctl_bin stop mydgx-whisper, $systemctl_bin restart mydgx-whisper, $systemctl_bin enable --now mydgx-whisper, $systemctl_bin disable --now mydgx-whisper, $systemctl_bin start mydgx-tts, $systemctl_bin stop mydgx-tts, $systemctl_bin start open-webui, $systemctl_bin stop open-webui, $systemctl_bin restart open-webui, $systemctl_bin start ollama, $systemctl_bin stop ollama, $systemctl_bin restart ollama, $systemctl_bin start docker, $systemctl_bin stop docker, $systemctl_bin restart docker
 Cmnd_Alias MYDGX_POWER = /usr/sbin/shutdown -h now
+Cmnd_Alias MYDGX_CLOCK_CAP = /usr/local/libexec/mydgx-gb10-clock-cap apply, /usr/local/libexec/mydgx-gb10-clock-cap clear
 $firmware_alias
-$SERVICE_USER ALL=(root) NOPASSWD: MYDGX_APT, MYDGX_REPAIR, MYDGX_SERVICES, MYDGX_POWER$firmware_grant
+$SERVICE_USER ALL=(root) NOPASSWD: MYDGX_APT, MYDGX_REPAIR, MYDGX_SERVICES, MYDGX_POWER, MYDGX_CLOCK_CAP$firmware_grant
 EOF
 chmod 0440 /etc/sudoers.d/mydgx
 visudo -cf /etc/sudoers.d/mydgx >/dev/null || {
@@ -219,7 +225,7 @@ RestartSec=5
 TimeoutStartSec=600
 TimeoutStopSec=90
 KillMode=mixed
-NoNewPrivileges=true
+# No NoNewPrivileges here: the panel runs the fixed sudoers commands above, and that flag blocks sudo.
 PrivateTmp=true
 ProtectSystem=full
 ReadWritePaths=$ROOT/data $ROOT/logs

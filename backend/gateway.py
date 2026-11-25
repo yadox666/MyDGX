@@ -40,6 +40,9 @@ from backend.main import (
     gateway_model_full_name,
     execute_video_job,
     gateway_runtime_config,
+    grounding_config,
+    grounding_prompt_active,
+    grounding_prompt_text,
     managed_comfyui_enabled,
     SEARXNG_URL,
     mark_gateway_inference,
@@ -150,7 +153,11 @@ def active_routes() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
             else [model for model in profile_models(profile) if model.get("enabled", True)]
         )
         for source in sources:
-            model = {**source, "_profile_id": profile["id"]}
+            model = {
+                **source,
+                "_profile_id": profile["id"],
+                "_profile_grounding_prompt": profile.get("grounding_prompt"),
+            }
             alias = model.get("model_alias") or model["model_ref"]
             if alias.casefold() in route_keys:
                 continue
@@ -1024,12 +1031,21 @@ def supports_endpoint(model: dict[str, Any], endpoint: str) -> bool:
     return str(model.get("task") or "chat") in ENDPOINT_TASKS.get(endpoint, set())
 
 
+def chat_draws_image(model: dict[str, Any], endpoint: str) -> bool:
+    """Chat clients such as Open WebUI list every model; chatting with a ComfyUI image model draws the prompt."""
+    return (
+        endpoint == "/v1/chat/completions"
+        and model.get("task") == "image-generation"
+        and model.get("api_protocol") == "comfyui"
+    )
+
+
 def supports_gateway_protocol(model: dict[str, Any], endpoint: str) -> bool:
     protocol = str(model.get("api_protocol") or "openai")
     if protocol in {"openai", "ollama"}:
         return True
     if protocol == "comfyui":
-        return endpoint in {
+        return chat_draws_image(model, endpoint) or endpoint in {
             "/v1/images/generations",
             "/v1/images/edits",
             "/v1/videos/generations",
@@ -1050,7 +1066,7 @@ async def resolve_route(model_alias: str, endpoint: str) -> dict[str, Any] | JSO
             404,
             "model_not_found",
         )
-    if not supports_endpoint(model, endpoint):
+    if not supports_endpoint(model, endpoint) and not chat_draws_image(model, endpoint):
         return openai_error(
             f"El modelo '{model_alias}' no admite este endpoint",
             400,
@@ -1108,11 +1124,80 @@ def managed_video_payload(job_id: str) -> dict[str, Any] | None:
     }
 
 
+# Open WebUI sends titles, tags, follow-ups and search queries to the selected model with this prefix,
+# and wraps the user's message in <user_query> when it adds web or document context.
+CHAT_TASK_PREFIX = "### Task:"
+CHAT_USER_QUERY = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.S)
+
+
+def chat_image_prompt(payload: dict[str, Any]) -> tuple[str, bool]:
+    """Text of the last user message to draw, and whether it is a client's background task instead."""
+    for message in reversed(payload.get("messages") or []):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            content = " ".join(
+                str(part.get("text") or "") for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        text = str(content or "").strip()
+        if match := CHAT_USER_QUERY.search(text):
+            return match.group(1).strip(), False
+        return text, text.startswith(CHAT_TASK_PREFIX)
+    return "", False
+
+
+def chat_completion_response(payload: dict[str, Any], model_alias: str, content: str) -> Response:
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    created = int(time.time())
+    if payload.get("stream"):
+        chunks = [
+            {"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None},
+            {"index": 0, "delta": {}, "finish_reason": "stop"},
+        ]
+        body = "".join(
+            "data: " + json.dumps({
+                "id": completion_id, "object": "chat.completion.chunk", "created": created,
+                "model": model_alias, "choices": [choice],
+            }) + "\n\n"
+            for choice in chunks
+        )
+        return Response(body + "data: [DONE]\n\n", media_type="text/event-stream")
+    return JSONResponse({
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": created,
+        "model": model_alias,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    })
+
+
+async def managed_comfyui_chat_response(model: dict[str, Any], payload: dict[str, Any]) -> Response:
+    alias = str(model.get("model_alias") or model["model_ref"])
+    prompt, background_task = chat_image_prompt(payload)
+    if background_task:
+        return chat_completion_response(payload, alias, "{}")
+    if not prompt:
+        return openai_error("Describe en el mensaje la imagen que quieres", 400, "prompt_required")
+    result = await execute_multimodal_request(
+        MultimodalRunRequest(model=alias, task="image-generation", prompt=prompt, response_format="b64_json")
+    )
+    encoded = str(result.get("data_base64") or "")
+    if not encoded:
+        return openai_error("ComfyUI no devolvió una imagen", 502, "invalid_upstream_response")
+    content_type = str(result.get("content_type") or "image/png")
+    return chat_completion_response(payload, alias, f"![{alias}](data:{content_type};base64,{encoded})")
+
+
 async def managed_comfyui_response(
     model: dict[str, Any],
     endpoint: str,
     payload: dict[str, Any],
 ) -> Response:
+    if chat_draws_image(model, endpoint):
+        return await managed_comfyui_chat_response(model, payload)
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return openai_error("El campo prompt es obligatorio", 400, "prompt_required")
@@ -1312,6 +1397,32 @@ async def managed_comfyui_edit_response(request: Request) -> Response:
     return JSONResponse({"created": int(time.time()), "data": [item]})
 
 
+def has_system_instructions(items: Any) -> bool:
+    return isinstance(items, list) and any(
+        isinstance(item, dict) and item.get("role") in {"system", "developer"}
+        for item in items
+    )
+
+
+def apply_grounding_prompt(model: dict[str, Any], endpoint: str, payload: dict[str, Any]) -> bool:
+    """Adds the grounding prompt only when the client sent no system or developer instructions."""
+    config = grounding_config()
+    if not grounding_prompt_active(model, model.get("_profile_grounding_prompt"), config["enabled"]):
+        return False
+    if endpoint == "/v1/chat/completions":
+        messages = payload.get("messages")
+        if not isinstance(messages, list) or has_system_instructions(messages):
+            return False
+        payload["messages"] = [{"role": "system", "content": grounding_prompt_text(config)}, *messages]
+        return True
+    if endpoint == "/v1/responses":
+        if payload.get("instructions") or has_system_instructions(payload.get("input")):
+            return False
+        payload["instructions"] = grounding_prompt_text(config)
+        return True
+    return False
+
+
 async def proxy_openai_request(request: Request, endpoint: str) -> Response:
     if paused := benchmark_pause_response():
         return paused
@@ -1361,6 +1472,7 @@ async def proxy_openai_request(request: Request, endpoint: str) -> Response:
         payload["model"] = upstream_model_id(model)
     if endpoint != "/v1/chat/completions":
         return await relay_upstream(model, endpoint, payload, is_tts_lab)
+    apply_grounding_prompt(model, endpoint, payload)
     fold_thinking_history(payload)
     exclude = apply_reasoning_controls(model, payload)
     return await relay_upstream(
@@ -2402,6 +2514,7 @@ async def internal_litellm_upstream(
     ):
         return openai_error("Modelo no disponible", 404, "model_not_found")
     payload["model"] = upstream_model_id(model)
+    apply_grounding_prompt(model, endpoint, payload)
     exclude = apply_reasoning_controls(model, payload)
     if endpoint != "/v1/chat/completions":
         return await relay_upstream(model, endpoint, payload)

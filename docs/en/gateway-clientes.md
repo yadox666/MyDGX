@@ -84,8 +84,12 @@ deployment writes these values into the Open WebUI database once and marks
 Admin, on a model or in the chat's permission selector is kept. A user who had
 already chosen a permission mode keeps it.
 
-The installation also loads a FLUX.1 Schnell FP8 API workflow into Open
-WebUI. The chat's image button sends the prompt directly to the local ComfyUI.
+The installation also connects Open WebUI's image generation to the gateway as
+`comfyui-image`, so the chat's image button uses the model chosen in
+**Engines → Image model** (Z-Image-Turbo by default). On an existing
+installation, the deployment disables the old direct ComfyUI connection once,
+without deleting it, and marks `MYDGX_IMAGE_DEFAULTS`; image connections you
+added yourself are kept.
 For video, Open WebUI receives the **MyDGX Laboratorio IA** OpenAPI connection:
 enable it from the tool selector and the agent will be able to start a
 Wan 2.1 job, check its progress and retrieve its result. The connection uses an

@@ -134,6 +134,18 @@ R_PRODUCT_NAME=""
 R_PRODUCT_VERSION=""
 R_BOARD_VENDOR=""
 R_BOARD_NAME=""
+R_DGX_SERIAL=""
+R_IDENTITY_ACCESS=""
+R_SYSTEM_SERIAL=""
+R_BOARD_SERIAL=""
+R_CHASSIS_SERIAL=""
+R_SYSTEM_UUID=""
+R_CPU_MODELS=""
+R_CPU_ID=""
+R_SOC=""
+R_SOC_SERIAL=""
+R_GPU_SERIAL=""
+R_GPU_UUID=""
 HOST_FP=""
 HOST_FP_TYPE=""
 SCANNED_MATCHING_KEY=""
@@ -177,6 +189,9 @@ SECURITY NOTES:
   The script does not forward your agent, does not scan the LAN, does not
   read ~/.ssh/config, and does not print key material.
   --prepare requires sudo and never runs during a normal read-only check.
+  The Identity section prints DGX, DMI, SoC and GPU serials and UUIDs; root-only
+  DMI fields are read with sudo -n only when it needs no password. Redact them
+  before sharing the output.
 EOF
 }
 
@@ -831,17 +846,107 @@ emit product_name "$(read_dmi product_name)"
 emit product_version "$(read_dmi product_version)"
 emit board_vendor "$(read_dmi board_vendor)"
 emit board_name "$(read_dmi board_name)"
+
+# Hardware identity. DMI serials and the system UUID are root-only, so they are
+# read directly when possible and otherwise through sudo -n or dmidecode.
+clean_id() {
+  v=$(printf '%s' "$1" | tr -d '\r' | tr '\n|' '  ' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  case "$v" in
+    ''|'Not Specified'|'Not Present'|'Not Applicable'|'Default string'|\
+    'To Be Filled By O.E.M.'|'None'|'N/A'|'[N/A]'|0|00000000|\
+    'System Serial Number'|'Chassis Serial Number'|'Base Board Serial Number'|\
+    '03000200-0400-0500-0006-000700080009') v="" ;;
+  esac
+  printf '%s' "$v"
+}
+can_sudo=0
+if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  can_sudo=1
+fi
+read_root_dmi() {
+  path="/sys/class/dmi/id/$1"
+  if [ -r "$path" ]; then
+    cat "$path" 2>/dev/null
+  elif [ "$can_sudo" -eq 1 ] && [ -e "$path" ]; then
+    sudo -n cat "$path" 2>/dev/null
+  fi
+}
+read_dmidecode() {
+  [ "$can_sudo" -eq 1 ] && command -v dmidecode >/dev/null 2>&1 || return 0
+  sudo -n dmidecode -s "$1" 2>/dev/null | grep -v '^#' | head -n 1
+}
+identity_value() {
+  v=$(clean_id "$(read_root_dmi "$1")")
+  [ -n "$v" ] || v=$(clean_id "$(read_dmidecode "$2")")
+  printf '%s' "$v"
+}
+if [ -r /sys/class/dmi/id/product_serial ]; then
+  identity_access="direct"
+elif [ "$can_sudo" -eq 1 ]; then
+  identity_access="sudo -n"
+else
+  identity_access="unavailable"
+fi
+emit identity_access "$identity_access"
+emit system_serial "$(identity_value product_serial system-serial-number)"
+emit board_serial "$(identity_value board_serial baseboard-serial-number)"
+emit chassis_serial "$(identity_value chassis_serial chassis-serial-number)"
+emit system_uuid "$(identity_value product_uuid system-uuid)"
+
+# CPU identity: MIDR_EL1 on Arm, CPUID leaf 1 or /proc/cpuinfo signature on x86.
+cpu_models=""
+if command -v lscpu >/dev/null 2>&1; then
+  cpu_models=$(LC_ALL=C lscpu 2>/dev/null | awk -F: '/^Model name:/{gsub(/^[ \t]+|[ \t]+$/,"",$2); if($2!="" && !seen[$2]++){printf "%s%s", sep, $2; sep=" + "}}')
+fi
+emit cpu_models "$cpu_models"
+cpu_id=""
+midrs=$(cat /sys/devices/system/cpu/cpu[0-9]*/regs/identification/midr_el1 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ *$//; s/ /, /g')
+if [ -n "$midrs" ]; then
+  cpu_id="MIDR_EL1 $midrs"
+elif command -v cpuid >/dev/null 2>&1; then
+  leaf1=$(cpuid -1 -r -l 1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^eax=/){sub(/^eax=/,"",$i); print $i; exit}}')
+  [ -z "$leaf1" ] || cpu_id="CPUID.1:EAX $leaf1"
+fi
+if [ -z "$cpu_id" ] && [ -r /proc/cpuinfo ]; then
+  cpu_id=$(awk -F: '
+    {k=$1; gsub(/[ \t]+$/,"",k); v=$2; gsub(/^[ \t]+|[ \t]+$/,"",v)}
+    k=="vendor_id" && vd=="" {vd=v}
+    k=="cpu family" && fam=="" {fam=v}
+    k=="model" && mod=="" {mod=v}
+    k=="stepping" && st=="" {st=v}
+    k=="microcode" && mc=="" {mc=v}
+    END{if(fam!=""){printf "%s family %s model %s stepping %s", vd, fam, mod, st; if(mc!="") printf " · microcode %s", mc}}
+  ' /proc/cpuinfo)
+fi
+emit cpu_id "$cpu_id"
+soc=""
+if [ -d /sys/devices/soc0 ]; then
+  soc_family=$(clean_id "$(cat /sys/devices/soc0/family 2>/dev/null)")
+  soc_id=$(clean_id "$(cat /sys/devices/soc0/soc_id 2>/dev/null)")
+  soc_rev=$(clean_id "$(cat /sys/devices/soc0/revision 2>/dev/null)")
+  case "$soc_id" in
+    "$soc_family"*) soc=$soc_id ;;
+    *) soc=$(printf '%s %s' "$soc_family" "$soc_id" | sed 's/^ *//; s/ *$//') ;;
+  esac
+  [ -z "$soc_rev" ] || soc="$soc rev $soc_rev"
+  emit soc_serial "$(clean_id "$(cat /sys/devices/soc0/serial_number 2>/dev/null)")"
+fi
+emit soc "$soc"
+
 dgx_name=""
 dgx_ver=""
+dgx_serial=""
 if [ -r /etc/dgx-release ]; then
   dgx_name=$(awk -F= '/^DGX_PRETTY_NAME=/{gsub(/"/,"",$2); print $2; exit}' /etc/dgx-release)
   if [ -z "$dgx_name" ]; then
     dgx_name=$(awk -F= '/^DGX_NAME=/{gsub(/"/,"",$2); print $2; exit}' /etc/dgx-release)
   fi
   dgx_ver=$(awk -F= '/^DGX_SWBUILD_VERSION=/{gsub(/"/,"",$2); print $2; exit}' /etc/dgx-release)
+  dgx_serial=$(clean_id "$(awk -F= '/^DGX_SERIAL_NUMBER=/{gsub(/"/,"",$2); print $2; exit}' /etc/dgx-release)")
 fi
 emit dgx_name "$dgx_name"
 emit dgx_version "$dgx_ver"
+emit dgx_serial "$dgx_serial"
 if [ -r /proc/uptime ]; then
   emit uptime_s "$(awk '{print int($1)}' /proc/uptime)"
 fi
@@ -960,9 +1065,16 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     listed=$(nvidia-smi -L 2>/dev/null | head -n 1 || true)
   fi
   listed=$(printf '%s' "$listed" | sed 's/ (UUID:.*//')
+  nv_timeout=""
+  command -v timeout >/dev/null 2>&1 && nv_timeout="timeout 10"
+  gpu_ids=$($nv_timeout nvidia-smi --query-gpu=serial,uuid --format=csv,noheader 2>/dev/null | head -n 1 || true)
   emit gpu_csv "$csv"
   emit cuda "$cuda"
   emit gpu_list "$listed"
+  emit gpu_serial "$(clean_id "${gpu_ids%%,*}")"
+  case "$gpu_ids" in
+    *,*) emit gpu_uuid "$(clean_id "${gpu_ids#*,}")" ;;
+  esac
 fi
 
 # Exercise CUDA using an existing PyTorch environment, or a tiny native CUDA
@@ -1217,6 +1329,18 @@ parse_remote() {
       product_version) R_PRODUCT_VERSION=$val ;;
       board_vendor) R_BOARD_VENDOR=$val ;;
       board_name) R_BOARD_NAME=$val ;;
+      dgx_serial) R_DGX_SERIAL=$val ;;
+      identity_access) R_IDENTITY_ACCESS=$val ;;
+      system_serial) R_SYSTEM_SERIAL=$val ;;
+      board_serial) R_BOARD_SERIAL=$val ;;
+      chassis_serial) R_CHASSIS_SERIAL=$val ;;
+      system_uuid) R_SYSTEM_UUID=$val ;;
+      cpu_models) R_CPU_MODELS=$val ;;
+      cpu_id) R_CPU_ID=$val ;;
+      soc) R_SOC=$val ;;
+      soc_serial) R_SOC_SERIAL=$val ;;
+      gpu_serial) R_GPU_SERIAL=$val ;;
+      gpu_uuid) R_GPU_UUID=$val ;;
     esac
   done < "$file"
 }
@@ -1423,6 +1547,37 @@ format_minutes() {
   printf '%sh %sm (%sm total)' "$hours" "$minutes" "$value"
 }
 
+print_serial() {
+  value=$2
+  if [ -n "$value" ] && [ -n "$R_DGX_SERIAL" ] && [ "$value" = "$R_DGX_SERIAL" ]; then
+    value="$value (matches DGX serial)"
+  fi
+  print_field "$1" "$value"
+}
+
+print_identity() {
+  print_section "Identity"
+  print_field "DGX serial" "$R_DGX_SERIAL"
+  print_serial "System serial" "$R_SYSTEM_SERIAL"
+  print_serial "Board serial" "$R_BOARD_SERIAL"
+  print_serial "Chassis serial" "$R_CHASSIS_SERIAL"
+  print_field "System UUID" "$R_SYSTEM_UUID"
+  if [ "$R_IDENTITY_ACCESS" = "unavailable" ] &&
+     [ -z "$R_SYSTEM_SERIAL$R_BOARD_SERIAL$R_CHASSIS_SERIAL$R_SYSTEM_UUID" ]; then
+    print_field "Firmware serials" "root-only; sudo -n unavailable"
+  elif [ -n "$R_IDENTITY_ACCESS" ]; then
+    print_field "Read via" "$R_IDENTITY_ACCESS"
+  fi
+  print_field "CPU ID" "$R_CPU_ID"
+  print_field "SoC" "$R_SOC"
+  print_field "SoC serial" "$R_SOC_SERIAL"
+  print_field "GPU serial" "$R_GPU_SERIAL"
+  print_field "GPU UUID" "$R_GPU_UUID"
+  if [ -n "$R_DGX_SERIAL$R_SYSTEM_SERIAL$R_BOARD_SERIAL$R_CHASSIS_SERIAL$R_SYSTEM_UUID$R_SOC_SERIAL$R_GPU_SERIAL$R_GPU_UUID" ]; then
+    add_note "Output includes serial numbers and UUIDs; redact them before sharing."
+  fi
+}
+
 print_system() {
   print_section "System"
   print_field "Manufacturer" "$(trim "$R_SYSTEM_VENDOR")"
@@ -1438,8 +1593,8 @@ print_system() {
   print_field "OS" "$R_OS"
   print_field "Kernel" "$R_KERNEL"
   print_field "Arch" "$R_ARCH"
-  if [ -n "$R_CPU" ] || [ -n "$R_NCPU" ]; then
-    cpu_line=$R_CPU
+  if [ -n "$R_CPU_MODELS$R_CPU" ] || [ -n "$R_NCPU" ]; then
+    cpu_line=${R_CPU_MODELS:-$R_CPU}
     if [ -n "$R_NCPU" ]; then
       if [ -n "$cpu_line" ]; then
         cpu_line="$cpu_line · ${R_NCPU} threads"
@@ -1474,6 +1629,8 @@ print_system() {
     print_field "Host key" "${HOST_FP}  ${HOST_FP_TYPE}"
   fi
 
+  print_identity
+
   print_section "GPU"
   name=$(gpu_name)
   print_field "Name" "${name:-not reported}"
@@ -1507,10 +1664,12 @@ print_system() {
   fi
   print_field "NVMe SMART" "$R_NVME_HEALTH"
   if [ -n "$R_NVME_MODEL" ]; then
-    print_field "NVMe model" "$R_NVME_MODEL"
+    print_field "NVMe model" "$(trim "$R_NVME_MODEL")"
   fi
   if [ -n "$R_NVME_SERIAL" ] || [ -n "$R_NVME_FIRMWARE" ]; then
-    print_field "Serial / firmware" "${R_NVME_SERIAL:-unknown} / ${R_NVME_FIRMWARE:-unknown}"
+    nvme_serial=$(trim "$R_NVME_SERIAL")
+    nvme_firmware=$(trim "$R_NVME_FIRMWARE")
+    print_field "Serial / firmware" "${nvme_serial:-unknown} / ${nvme_firmware:-unknown}"
   fi
   if [ -n "$R_NVME_TEMP" ]; then
     print_field "NVMe temp" "${R_NVME_TEMP} C"

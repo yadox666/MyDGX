@@ -61,13 +61,25 @@ buying:
   DGX OS            NVIDIA DGX OS 7
   Kernel            7.0.0-1025-nvidia
   Arch              aarch64
-  CPU               0xd87 · 20 threads
+  CPU               Cortex-X925 + Cortex-A725 · 20 threads
   Memory            118.8 GiB free of 121.7 GiB unified
   Disk /            45.9 GiB used of 3.7 TiB (2%)
   Load              0.31 0.26 0.14
   Uptime            8m
   Address           [REDACTED]
   Host key          SHA256:[REDACTED]  ED25519
+
+  Identity
+  ────────────────────────────────────────────────────────────────────
+  DGX serial        [REDACTED]
+  System serial     [REDACTED] (matches DGX serial)
+  Board serial      [REDACTED] (matches DGX serial)
+  Chassis serial    [REDACTED] (matches DGX serial)
+  System UUID       [REDACTED]
+  Read via          sudo -n
+  CPU ID            MIDR_EL1 0x00000000410fd851, 0x00000000410fd871
+  SoC               jep106:0426:8901 rev 0x00000000
+  GPU UUID          [REDACTED]
 
   GPU
   ────────────────────────────────────────────────────────────────────
@@ -131,6 +143,17 @@ Before buying, pay special attention to **Manufacturer**, **Product**, the GPU
 wear, unsafe shutdowns, media errors, and the final result. Hours of use
 should not be confused with `Uptime`: `Power-on time` is the accumulated use
 of the SSD, while `Uptime` only measures the time since the last boot.
+
+The **Identity** section lets you compare the unit with the invoice and the
+warranty. `DGX serial` comes from `/etc/dgx-release`. The system, board, and
+chassis serials and the `System UUID` come from firmware (DMI) and are
+root-only: the test reads them with `sudo -n` (or `dmidecode`) only when it
+needs no password; otherwise it shows `root-only; sudo -n unavailable`. On the
+Spark we tested, the three DMI serials match the DGX serial; if they differ,
+ask the seller. `CPU ID` is the Arm
+equivalent of `cpuid` (`MIDR_EL1`, one per core type); on x86 it uses `cpuid`
+or the `/proc/cpuinfo` signature. The GB10 reports no GPU serial, only a UUID.
+All of these values identify the unit: redact them before sharing the output.
 
 ## Verify the machine's identity first
 

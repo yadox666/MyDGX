@@ -7698,6 +7698,87 @@ class ProfileApiTests(unittest.TestCase):
                 db.path = original_path
 
 
+class ComfyUIImageModelTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.original_db = db.path
+        db.path = self.root / "image-models.db"
+        db.initialize()
+        self.source = patch("backend.main.managed_comfyui_source", return_value=self.root / "ComfyUI")
+        self.source.start()
+        self.enabled = patch("backend.main.managed_comfyui_enabled", return_value=True)
+        self.enabled.start()
+
+    def tearDown(self) -> None:
+        self.enabled.stop()
+        self.source.stop()
+        db.path = self.original_db
+        self.directory.cleanup()
+
+    def install(self, choice_id: str) -> None:
+        choice = main_module.comfyui_image_choice(choice_id)
+        files = choice["files"] or [{"folder": "checkpoints", "filename": "flux1-schnell-fp8.safetensors"}]
+        for item in files:
+            target = main_module.comfyui_file_target(item)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"weights")
+
+    def test_every_catalog_workflow_is_a_valid_recipe_workflow(self) -> None:
+        catalog = main_module.comfyui_image_catalog()
+        self.assertEqual(catalog["default"], "z-image-turbo")
+        for choice in catalog["models"]:
+            with self.subTest(choice=choice["id"]):
+                if choice["workflow"]:
+                    main_module.load_comfyui_spec_workflow(choice["workflow"])
+                    for item in choice["files"]:
+                        main_module.ComfyUIFilePayload.model_validate(item)
+                        self.assertNotEqual(item["revision"], "main")
+        workflow = main_module.comfyui_workflow(
+            "image-generation", "a poster", seed=3, width=768, height=512, persist_output=False,
+            spec={"workflow": "z-image-turbo-api.json"},
+        )
+        self.assertEqual(workflow["5"]["inputs"]["text"], "a poster")
+        self.assertEqual((workflow["8"]["inputs"]["seed"], workflow["8"]["inputs"]["steps"]), (3, 8))
+        self.assertEqual((workflow["7"]["inputs"]["width"], workflow["7"]["inputs"]["height"]), (768, 512))
+        self.assertEqual(workflow["10"]["class_type"], "PreviewImage")
+
+    def test_comfyui_image_follows_the_installed_choice(self) -> None:
+        self.install("flux1-schnell")
+        self.assertNotIn("comfyui", main_module.managed_comfyui_model("comfyui-image"))
+        self.install("z-image-turbo")
+        model = main_module.managed_comfyui_model("comfyui-image")
+        self.assertEqual(model["comfyui"]["workflow"], "z-image-turbo-api.json")
+        self.assertEqual(model["model_alias"], "comfyui-image")
+        self.assertEqual(main_module.managed_comfyui_model("comfyui-video"), main_module.COMFYUI_MANAGED_MODELS["comfyui-video"])
+
+        client = TestClient(main_module.app)
+        with patch("backend.main.release_comfyui_models", new=AsyncMock()) as release:
+            missing = client.put("/api/comfyui/image-model", json={"id": "moss-image"})
+            chosen = client.put("/api/comfyui/image-model", json={"id": "flux1-schnell"})
+            again = client.put("/api/comfyui/image-model", json={"id": "flux1-schnell"})
+        self.assertEqual(missing.status_code, 409)
+        self.assertEqual(chosen.status_code, 200, chosen.text)
+        self.assertEqual(chosen.json()["active"], "flux1-schnell")
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(release.await_count, 1)
+        self.assertNotIn("comfyui", main_module.active_model_by_alias("comfyui-image"))
+        self.assertEqual(client.put("/api/comfyui/image-model", json={"id": "nope"}).status_code, 404)
+
+    def test_a_missing_saved_choice_falls_back_without_losing_it(self) -> None:
+        self.install("flux1-schnell")
+        main_module.save_preference(main_module.COMFYUI_IMAGE_MODEL_KEY, "qwen-image-turbo")
+        report = main_module.comfyui_image_models_report()
+        self.assertEqual((report["selected"], report["active"]), ("qwen-image-turbo", "flux1-schnell"))
+        client = TestClient(main_module.app)
+        with patch("backend.main.download_recipe_files", new=AsyncMock()) as download:
+            response = client.post("/api/comfyui/image-models/qwen-image-turbo/download")
+        self.assertEqual(response.status_code, 200, response.text)
+        model = download.await_args.args[1]
+        self.assertEqual(len(model["comfyui"]["files"]), 3)
+        self.assertEqual(client.post("/api/comfyui/image-models/flux1-schnell/download").status_code, 404)
+
+
 class ComfyUIRecipeTests(unittest.TestCase):
     RECIPE_ID = "c4e9a1d7-5b62-4f3a-8e0d-2a7b6f9c1e83"
     RETIRED_QWEN_RECIPE_ID = "7b3f0e52-2c41-4d8e-9a6f-5e1c9a2b7d40"

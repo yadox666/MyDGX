@@ -48,6 +48,17 @@ if [[ "$force_install" == "0" &&
       "$SOURCE/models/vae/wan_2.1_vae.safetensors"; do
       [[ -f "$model" ]] || prepared=0
     done
+    "$APP_ROOT/.venv/bin/python" - "$APP_ROOT/config/comfyui/image-models.json" "$SOURCE/models" <<'PY' || prepared=0
+import json
+import pathlib
+import sys
+
+catalog = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+default = next(item for item in catalog["models"] if item["id"] == catalog["default"])
+models = pathlib.Path(sys.argv[2])
+missing = [item for item in default.get("files") or [] if not (models / item["folder"] / pathlib.Path(item["filename"]).name).is_file()]
+raise SystemExit(1 if missing else 0)
+PY
   fi
   (
     cd "$SOURCE"
@@ -114,8 +125,9 @@ PY
 fi
 
 if [[ "$INSTALL_MODELS" == "1" ]]; then
-  "$APP_ROOT/.venv/bin/python" - "$SOURCE/models" <<'PY'
+  "$APP_ROOT/.venv/bin/python" - "$SOURCE/models" "$APP_ROOT/config/comfyui/image-models.json" <<'PY'
 import hashlib
+import json
 import os
 import pathlib
 import shutil
@@ -124,6 +136,8 @@ import sys
 from huggingface_hub import hf_hub_download
 
 models = pathlib.Path(sys.argv[1])
+catalog = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+default_image = next(item for item in catalog["models"] if item["id"] == catalog["default"])
 downloads = [
     (
         "Comfy-Org/Flux-1-Schnell",
@@ -150,6 +164,11 @@ downloads = [
         "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b",
     ),
 ]
+revisions = {}
+for item in default_image.get("files") or []:
+    destination = models / item["folder"] / pathlib.Path(item["filename"]).name
+    downloads.append((item["repo"], item["filename"], destination, item["sha256"]))
+    revisions[item["filename"]] = item.get("revision") or "main"
 
 def sha256(path: pathlib.Path) -> str:
     digest = hashlib.sha256()
@@ -166,7 +185,7 @@ for repo_id, filename, destination, expected in downloads:
     # Linking that symlink into ComfyUI would make it point at a non-existent
     # relative target, so always link/copy the resolved immutable blob.
     cached = pathlib.Path(
-        hf_hub_download(repo_id=repo_id, filename=filename)
+        hf_hub_download(repo_id=repo_id, filename=filename, revision=revisions.get(filename, "main"))
     ).resolve(strict=True)
     temporary = destination.with_suffix(destination.suffix + ".new")
     temporary.unlink(missing_ok=True)

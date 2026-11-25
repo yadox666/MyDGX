@@ -61,7 +61,11 @@ These profiles usually point to external local engines such as Whisper, Riva, NI
 or a compatible server. MyDGX includes a native adapter for its managed
 ComfyUI:
 
-- FLUX.1 Schnell FP8 for image through `comfyui-image`;
+- image through `comfyui-image`, with the model chosen in **Engines → Image
+  model**: Z-Image-Turbo by default, or Qwen-Image 2.1 Turbo, MOSS-Image,
+  FLUX 3 Klein and FLUX.1 Schnell FP8. Each one downloads from there with its
+  pinned, verified files. If the chosen one is incomplete, FLUX.1 Schnell is
+  used. Image editing always uses FLUX.1 Schnell;
 - Wan 2.1 T2V 1.3B for video through `comfyui-video`;
 - versioned workflows in `config/comfyui/`;
 - GB10-specific measures that disable pinned memory and cudaMalloc.

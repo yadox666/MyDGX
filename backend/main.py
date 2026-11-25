@@ -9979,6 +9979,69 @@ async def release_comfyui_memory() -> dict[str, Any]:
     return {"released": True, "models": sorted(before)}
 
 
+def comfyui_image_models_report() -> dict[str, Any]:
+    catalog = comfyui_image_catalog()
+    active = selected_comfyui_image_choice()
+    return {
+        "enabled": managed_comfyui_enabled(),
+        "default": catalog["default"],
+        "selected": preference_value(COMFYUI_IMAGE_MODEL_KEY) or catalog["default"],
+        "active": active["id"],
+        "models": [
+            {
+                "id": choice["id"],
+                "name": choice.get("name") or choice["id"],
+                "license": choice.get("license") or "",
+                "gated": bool(choice.get("gated")),
+                "size_gb": float(choice.get("size_gb") or 0),
+                "seconds": int(choice.get("seconds") or 0),
+                "description": choice.get("description") or {},
+                "installed": comfyui_image_choice_installed(choice),
+                "downloadable": bool(choice.get("files")),
+            }
+            for choice in catalog["models"]
+        ],
+    }
+
+
+class ComfyUIImageModelPayload(BaseModel):
+    id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
+
+
+@app.get("/api/comfyui/image-models", dependencies=secure)
+async def get_comfyui_image_models() -> dict[str, Any]:
+    return await asyncio.to_thread(comfyui_image_models_report)
+
+
+@app.put("/api/comfyui/image-model", dependencies=secure)
+async def set_comfyui_image_model(payload: ComfyUIImageModelPayload) -> dict[str, Any]:
+    choice = comfyui_image_choice(payload.id)
+    if not choice:
+        raise HTTPException(status_code=404, detail="Modelo de imagen no encontrado")
+    if not await asyncio.to_thread(comfyui_image_choice_installed, choice):
+        raise HTTPException(status_code=409, detail="Descarga el modelo antes de elegirlo")
+    previous = selected_comfyui_image_choice()["id"]
+    save_preference(COMFYUI_IMAGE_MODEL_KEY, choice["id"])
+    if previous != choice["id"]:
+        # The previous model would otherwise stay resident in unified memory until ComfyUI needs the space.
+        await release_comfyui_models()
+    db.audit("comfyui.image_model", choice["id"], True, previous)
+    return await asyncio.to_thread(comfyui_image_models_report)
+
+
+@app.post("/api/comfyui/image-models/{choice_id}/download", dependencies=secure)
+async def download_comfyui_image_model(choice_id: str, background: BackgroundTasks) -> dict[str, str]:
+    choice = comfyui_image_choice(choice_id)
+    if not choice or not choice.get("files"):
+        raise HTTPException(status_code=404, detail="Modelo de imagen no encontrado")
+    if not managed_comfyui_enabled():
+        raise HTTPException(status_code=409, detail="ComfyUI no está instalado en MyDGX")
+    model = {"name": choice.get("name") or choice["id"], "comfyui": {"files": choice["files"]}}
+    job_id = db.create_job("comfyui.download", model["name"])
+    background.add_task(download_recipe_files, job_id, model)
+    return {"job_id": job_id}
+
+
 def hf_architecture_profile(info: Any, selected_weight_bytes: int = 0) -> dict[str, Any]:
     config = getattr(info, "config", None) or {}
     if not isinstance(config, dict):
@@ -15182,6 +15245,62 @@ def managed_comfyui_enabled() -> bool:
     )
 
 
+COMFYUI_IMAGE_MODEL_KEY = "comfyui.image_model"
+COMFYUI_LEGACY_IMAGE_MODEL = "flux1-schnell"
+
+
+@lru_cache(maxsize=1)
+def comfyui_image_catalog() -> dict[str, Any]:
+    """Image models the comfyui-image route can run; FLUX.1 Schnell keeps the built-in workflow."""
+    try:
+        catalog = json.loads((COMFYUI_WORKFLOW_DIR / "image-models.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        catalog = {}
+    models = [item for item in catalog.get("models") or [] if isinstance(item, dict) and item.get("id")]
+    if not any(item["id"] == COMFYUI_LEGACY_IMAGE_MODEL for item in models):
+        models.append({"id": COMFYUI_LEGACY_IMAGE_MODEL, "name": "FLUX.1 Schnell FP8", "workflow": "", "files": []})
+    default = str(catalog.get("default") or COMFYUI_LEGACY_IMAGE_MODEL)
+    return {"default": default, "models": models}
+
+
+def comfyui_image_choice(choice_id: str) -> dict[str, Any] | None:
+    return next((item for item in comfyui_image_catalog()["models"] if item["id"] == choice_id), None)
+
+
+def comfyui_image_choice_installed(choice: dict[str, Any]) -> bool:
+    if not choice.get("workflow"):
+        return managed_flux_checkpoint().is_file()
+    return not comfyui_missing_files({"comfyui": {"files": choice.get("files") or []}})
+
+
+def selected_comfyui_image_choice() -> dict[str, Any]:
+    """The saved choice, else the catalog default; an incomplete download falls back to FLUX.1 Schnell."""
+    catalog = comfyui_image_catalog()
+    for choice_id in (preference_value(COMFYUI_IMAGE_MODEL_KEY), catalog["default"]):
+        choice = comfyui_image_choice(str(choice_id or ""))
+        if choice and comfyui_image_choice_installed(choice):
+            return choice
+    return comfyui_image_choice(COMFYUI_LEGACY_IMAGE_MODEL) or {"id": COMFYUI_LEGACY_IMAGE_MODEL, "workflow": ""}
+
+
+def managed_comfyui_model(alias: str) -> dict[str, Any]:
+    model = dict(COMFYUI_MANAGED_MODELS[alias])
+    if alias != "comfyui-image":
+        return model
+    choice = selected_comfyui_image_choice()
+    if choice.get("workflow"):
+        model.update({
+            "name": f"ComfyUI · {choice['name']}",
+            "model_ref": choice["id"],
+            "comfyui": {"workflow": choice["workflow"], "files": choice.get("files") or []},
+        })
+    return model
+
+
+def managed_comfyui_models() -> dict[str, dict[str, Any]]:
+    return {alias: managed_comfyui_model(alias) for alias in COMFYUI_MANAGED_MODELS}
+
+
 COMFYUI_SPEC_TITLES = {
     "prompt": "MyDGX Prompt",
     "seed": "MyDGX Seed",
@@ -15657,7 +15776,7 @@ def model_endpoint(model: dict[str, Any]) -> str:
 
 def active_model_by_alias(alias: str) -> dict[str, Any]:
     if managed_comfyui_enabled() and alias in COMFYUI_MANAGED_MODELS:
-        return dict(COMFYUI_MANAGED_MODELS[alias])
+        return managed_comfyui_model(alias)
     profiles = running_profiles()
     runtime_ids = {profile["id"] for profile in profiles}
     if not profiles:
@@ -15730,7 +15849,7 @@ async def multimodal_capabilities() -> dict[str, Any]:
                 "max_input_mb": model["max_input_mb"],
                 "endpoint": MULTIMODAL_ENDPOINTS[model["task"]],
             }
-            for model in COMFYUI_MANAGED_MODELS.values()
+            for model in managed_comfyui_models().values()
         )
     for profile in profiles:
         sources = (

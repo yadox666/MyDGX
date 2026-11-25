@@ -88,8 +88,12 @@ en la base de datos de Open WebUI y marca `MYDGX_CHAT_DEFAULTS` en
 selector de permisos del chat se respeta. Un usuario que ya había elegido un
 modo de permisos lo conserva.
 
-La instalación también carga un workflow API de FLUX.1 Schnell FP8 en Open
-WebUI. El botón de imagen del chat envía el prompt directamente al ComfyUI local.
+La instalación también conecta la generación de imágenes de Open WebUI al
+gateway como `comfyui-image`, de modo que el botón de imagen del chat usa el
+modelo elegido en **Motores → Modelo de imagen** (Z-Image-Turbo por defecto). En
+una instalación existente, el deployment desactiva una sola vez la antigua
+conexión directa a ComfyUI, sin borrarla, y marca `MYDGX_IMAGE_DEFAULTS`; las
+conexiones de imagen que hayas añadido tú se conservan.
 Para vídeo, Open WebUI recibe la conexión OpenAPI **MyDGX Laboratorio IA**:
 actívala desde el selector de herramientas y el agente podrá iniciar un trabajo
 Wan 2.1, consultar su progreso y recuperar su resultado. La conexión usa una

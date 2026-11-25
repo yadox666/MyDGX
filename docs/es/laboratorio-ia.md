@@ -61,7 +61,11 @@ Estos perfiles suelen apuntar a motores locales externos como Whisper, Riva, NIM
 o un servidor compatible. MyDGX incluye un adaptador nativo para su ComfyUI
 administrado:
 
-- FLUX.1 Schnell FP8 para imagen mediante `comfyui-image`;
+- imagen mediante `comfyui-image`, con el modelo elegido en **Motores → Modelo
+  de imagen**: Z-Image-Turbo por defecto, o Qwen-Image 2.1 Turbo, MOSS-Image,
+  FLUX 3 Klein y FLUX.1 Schnell FP8. Cada uno se descarga desde ahí con sus
+  archivos fijados y comprobados. Si el elegido no está completo, se usa
+  FLUX.1 Schnell. La edición de imágenes usa siempre FLUX.1 Schnell;
 - Wan 2.1 T2V 1.3B para vídeo mediante `comfyui-video`;
 - workflows versionados en `config/comfyui/`;
 - medidas específicas para GB10 que desactivan pinned memory y cudaMalloc.

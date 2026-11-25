@@ -1,0 +1,159 @@
+{
+  "default": "z-image-turbo",
+  "models": [
+    {
+      "id": "z-image-turbo",
+      "name": "Z-Image-Turbo",
+      "workflow": "z-image-turbo-api.json",
+      "license": "Apache-2.0",
+      "size_gb": 12.2,
+      "seconds": 8,
+      "description": {
+        "es": "Recomendado. El que mejor escribe titulares en un DGX Spark, unos 8 s por imagen de 1024², sin restricciones de uso. El texto pequeño aún sale mal.",
+        "en": "Recommended. The best headline text on a DGX Spark, about 8 s per 1024² image, with no usage restrictions. Small text still comes out wrong."
+      },
+      "files": [
+        {
+          "repo": "Comfy-Org/Z-Image-Turbo",
+          "revision": "6fc90a3b1b653e935a0d175e260736de25b84df5",
+          "filename": "split_files/diffusion_models/z_image_turbo_int8_convrot.safetensors",
+          "folder": "diffusion_models",
+          "sha256": "be517ebd47c912a5626a588e1aeea43e6be4a43c0cdcd2b48a2a780d9f358635"
+        },
+        {
+          "repo": "Comfy-Org/Z-Image-Turbo",
+          "revision": "6fc90a3b1b653e935a0d175e260736de25b84df5",
+          "filename": "split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+          "folder": "text_encoders",
+          "sha256": "72450b19758172c5a7273cf7de729d1c17e7f434a104a00167624cba94f68f15"
+        },
+        {
+          "repo": "Comfy-Org/Z-Image-Turbo",
+          "revision": "6fc90a3b1b653e935a0d175e260736de25b84df5",
+          "filename": "split_files/vae/ae.safetensors",
+          "folder": "vae",
+          "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+        }
+      ]
+    },
+    {
+      "id": "qwen-image-turbo",
+      "name": "Qwen-Image 2.1 Turbo",
+      "workflow": "qwen-image-2.1-turbo-api.json",
+      "license": "Qwen Research",
+      "size_gb": 17.3,
+      "seconds": 10,
+      "description": {
+        "es": "El de más detalle y buen texto en titulares, unos 10 s por imagen. Licencia solo para investigación y uso no comercial.",
+        "en": "The most detail and good headline text, about 10 s per image. Licensed for research and non-commercial use only."
+      },
+      "files": [
+        {
+          "repo": "Comfy-Org/Qwen-Image-2.1",
+          "revision": "aacf31a6d48e707f352ecba714cee0680da3479b",
+          "filename": "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors",
+          "folder": "diffusion_models",
+          "sha256": "8144a0182964aa8403ad6dbc011db837304167d235161b9aabaa8532e967314c"
+        },
+        {
+          "repo": "Comfy-Org/Qwen-Image-2.1",
+          "revision": "aacf31a6d48e707f352ecba714cee0680da3479b",
+          "filename": "text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+          "folder": "text_encoders",
+          "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
+        },
+        {
+          "repo": "Comfy-Org/Qwen-Image-2.1",
+          "revision": "aacf31a6d48e707f352ecba714cee0680da3479b",
+          "filename": "vae/qwen_image_2.1_vae_bf16.safetensors",
+          "folder": "vae",
+          "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
+        }
+      ]
+    },
+    {
+      "id": "moss-image",
+      "name": "MOSS-Image SFT",
+      "workflow": "moss-image-sft-api.json",
+      "license": "Apache-2.0",
+      "size_gb": 13.0,
+      "seconds": 30,
+      "description": {
+        "es": "Pensado para mucho texto y maquetas: carteles, pizarras, infografías. Más lento (25 pasos). Sus cifras de texto son solo de sus autores.",
+        "en": "Built for lots of text and layouts: posters, whiteboards, infographics. Slower (25 steps). Its text scores come only from its authors."
+      },
+      "files": [
+        {
+          "repo": "Comfy-Org/MOSS-Image",
+          "revision": "2929efe3cdd506c0a430bcfca70a9a8d805cc095",
+          "filename": "diffusion_models/moss_image_sft_int8_convrot.safetensors",
+          "folder": "diffusion_models",
+          "sha256": "b4d1475bc7eeffd7b809e82ea13a1fba1fb85c4e18365af3813722faa5c0fe4f"
+        },
+        {
+          "repo": "Comfy-Org/MOSS-Image",
+          "revision": "2929efe3cdd506c0a430bcfca70a9a8d805cc095",
+          "filename": "text_encoders/qwen3.5_9b_w4a8_gptq.safetensors",
+          "folder": "text_encoders",
+          "sha256": "4cc6a1543ad2061806da46f35f90cadb4801dcba246c44782cf42ec0feb6407c"
+        },
+        {
+          "repo": "Comfy-Org/MOSS-Image",
+          "revision": "2929efe3cdd506c0a430bcfca70a9a8d805cc095",
+          "filename": "vae/flux2-vae_small.safetensors",
+          "folder": "vae",
+          "sha256": "d8d52ba036475f5fb07c8b435e176d3d97ebfa82f0d1a1c317f9cc1e25bd013b"
+        }
+      ]
+    },
+    {
+      "id": "flux3-klein",
+      "name": "FLUX 3 Image Klein",
+      "workflow": "flux3-klein-api.json",
+      "license": "FLUX Kommunity",
+      "gated": true,
+      "size_gb": 11.0,
+      "seconds": 8,
+      "description": {
+        "es": "Muy versátil en estilos, unos 8 s por imagen. Repositorio con acceso restringido: acepta la licencia en Hugging Face y configura HF_TOKEN. Uso comercial gratis solo por debajo de 5 M$ de ingresos.",
+        "en": "Very versatile across styles, about 8 s per image. Gated repository: accept the license on Hugging Face and set HF_TOKEN. Commercial use is free only under $5M revenue."
+      },
+      "files": [
+        {
+          "repo": "black-forest-labs/flux-3-image-klein-comfy",
+          "revision": "09192d1abae1e57e1a2fcbc5b701cd1d9e2abd51",
+          "filename": "diffusion_models/flux3-image-klein-int8-convrot.safetensors",
+          "folder": "diffusion_models",
+          "sha256": "847d8933548afd93df4af2cac2498e70891bf28d9dae06d695f536992e168fe2"
+        },
+        {
+          "repo": "black-forest-labs/flux-3-image-klein-comfy",
+          "revision": "09192d1abae1e57e1a2fcbc5b701cd1d9e2abd51",
+          "filename": "text_encoders/qwen3vl_4b_int8_convrot.safetensors",
+          "folder": "text_encoders",
+          "sha256": "32de113cbf8282b02cbff0794b637b9d6676da09314a1db5a30bcea9bf4ee01c"
+        },
+        {
+          "repo": "black-forest-labs/flux-3-image-klein-comfy",
+          "revision": "09192d1abae1e57e1a2fcbc5b701cd1d9e2abd51",
+          "filename": "vae/flux2-vae.safetensors",
+          "folder": "vae",
+          "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
+        }
+      ]
+    },
+    {
+      "id": "flux1-schnell",
+      "name": "FLUX.1 Schnell FP8",
+      "workflow": "",
+      "license": "Apache-2.0",
+      "size_gb": 17.2,
+      "seconds": 5,
+      "description": {
+        "es": "El modelo original de MyDGX: rápido, pero no sabe escribir texto. También lo usa la edición de imágenes.",
+        "en": "MyDGX's original model: fast, but cannot write text. Image editing also uses it."
+      },
+      "files": []
+    }
+  ]
+}

@@ -28,7 +28,6 @@ from starlette.datastructures import UploadFile
 
 from backend.i18n import DEFAULT_LANGUAGE, request_language, translate_text
 from backend.main import (
-    COMFYUI_MANAGED_MODELS,
     MultimodalRunRequest,
     active_profile,
     benchmark_gate_active,
@@ -44,6 +43,7 @@ from backend.main import (
     grounding_prompt_active,
     grounding_prompt_text,
     managed_comfyui_enabled,
+    managed_comfyui_models,
     SEARXNG_URL,
     mark_gateway_inference,
     model_reasoning_capability,
@@ -192,7 +192,7 @@ def active_routes() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
         route_keys.add(assistant_model.casefold())
         managed_assistant = True
     if managed_comfyui_enabled():
-        for alias, source in COMFYUI_MANAGED_MODELS.items():
+        for alias, source in managed_comfyui_models().items():
             if alias.casefold() not in route_keys:
                 routes[alias] = {**source, "_profile_id": "managed-comfyui"}
                 route_keys.add(alias.casefold())

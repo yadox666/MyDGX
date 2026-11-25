@@ -61,13 +61,25 @@ comprar:
   DGX OS            NVIDIA DGX OS 7
   Kernel            7.0.0-1025-nvidia
   Arch              aarch64
-  CPU               0xd87 · 20 threads
+  CPU               Cortex-X925 + Cortex-A725 · 20 threads
   Memory            118.8 GiB free of 121.7 GiB unified
   Disk /            45.9 GiB used of 3.7 TiB (2%)
   Load              0.31 0.26 0.14
   Uptime            8m
   Address           [REDACTED]
   Host key          SHA256:[REDACTED]  ED25519
+
+  Identity
+  ────────────────────────────────────────────────────────────────────
+  DGX serial        [REDACTED]
+  System serial     [REDACTED] (matches DGX serial)
+  Board serial      [REDACTED] (matches DGX serial)
+  Chassis serial    [REDACTED] (matches DGX serial)
+  System UUID       [REDACTED]
+  Read via          sudo -n
+  CPU ID            MIDR_EL1 0x00000000410fd851, 0x00000000410fd871
+  SoC               jep106:0426:8901 rev 0x00000000
+  GPU UUID          [REDACTED]
 
   GPU
   ────────────────────────────────────────────────────────────────────
@@ -131,6 +143,18 @@ Antes de comprar, presta especial atención a **Manufacturer**, **Product**,
 desgaste, apagados inseguros, errores de medios y el resultado final. Las horas
 de uso no deben confundirse con `Uptime`: `Power-on time` es el uso acumulado
 del SSD, mientras que `Uptime` solo mide el tiempo desde el último arranque.
+
+La sección **Identity** sirve para comparar el equipo con la factura y la
+garantía. `DGX serial` sale de `/etc/dgx-release`. Los seriales de sistema,
+placa y chasis y el `System UUID` vienen del firmware (DMI) y solo los puede
+leer root: el test los lee con `sudo -n` (o `dmidecode`) únicamente si no pide
+contraseña; si no, muestra `root-only; sudo -n unavailable`. En el Spark
+probado, los tres seriales DMI coinciden con el DGX serial; si no coinciden,
+conviene preguntar al vendedor. `CPU ID` es el
+equivalente Arm de `cpuid` (`MIDR_EL1`, uno por tipo de núcleo); en x86 usa
+`cpuid` o la firma de `/proc/cpuinfo`. La GB10 no informa serial de GPU, solo
+UUID. Todos estos valores identifican la unidad: tápalos antes de compartir la
+salida.
 
 ## Verifica primero la identidad del equipo
 

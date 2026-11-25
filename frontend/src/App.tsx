@@ -70,7 +70,7 @@ import DgxOfflineNotice from "./DgxOfflineNotice";
 import DialogHost from "./DialogHost";
 import { confirmDialog, promptDialog } from "./dialogs";
 import { DgxOfflineError, fetchDgx, useDgxConnection } from "./connection";
-import { language, languageHeader, locale, setLanguagePreference, storedLanguagePreference, t, type LanguagePreference } from "./i18n";
+import { language, languageHeader, locale, setLanguagePreference, storedLanguagePreference, t, translateServerText, type LanguagePreference } from "./i18n";
 import {
   Area,
   AreaChart,
@@ -1928,7 +1928,7 @@ type SystemLogsResponse = {
 };
 
 const activeJobStatuses = new Set(["queued", "running", "cancelling"]);
-const downloadJobKinds = new Set(["huggingface.download", "huggingface.files.download", "ollama.pull", "ollama.update", "profile.download"]);
+const downloadJobKinds = new Set(["huggingface.download", "huggingface.files.download", "ollama.pull", "ollama.update", "profile.download", "comfyui.download"]);
 
 function useDownloadTracker(jobs: Job[], onFinished?: () => void) {
   const [requested, setRequested] = useState<Record<string, { jobId?: string; at: number }>>({});
@@ -1974,6 +1974,7 @@ function jobLabel(kind: string): string {
     "model.quick.start": t("Encendiendo modelo"),
     "model.default.start": t("Cargando modelo en Default"),
     "profile.download": t("Descargando modelo del perfil"),
+    "comfyui.download": t("Descargando modelo de imagen"),
     "ollama.pull": t("Descargando modelo Ollama"),
     "ollama.update": t("Actualizando modelo Ollama"),
     "huggingface.download": t("Descargando repositorio Hugging Face"),
@@ -6615,8 +6616,121 @@ function EnginesView({ notify }: { notify: (message: string, error?: boolean) =>
         {engine.models.length > 0 && <div className="engine-models">{engine.models.slice(0, 8).map((model) => <span key={model}>{model}</span>)}</div>}
       </Card>)}
     </div>
+    <ComfyUIImageModelsPanel notify={notify} />
     <ProfileAppsPanel notify={notify} />
   </div>;
+}
+
+type ComfyUIImageModel = {
+  id: string;
+  name: string;
+  license: string;
+  gated: boolean;
+  size_gb: number;
+  seconds: number;
+  description: Partial<Record<"es" | "en", string>>;
+  installed: boolean;
+  downloadable: boolean;
+};
+
+type ComfyUIImageModels = {
+  enabled: boolean;
+  default: string;
+  selected: string;
+  active: string;
+  models: ComfyUIImageModel[];
+};
+
+function ComfyUIImageModelsPanel({ notify }: { notify: (message: string, error?: boolean) => void }) {
+  const [data, setData] = useState<ComfyUIImageModels | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [downloads, setDownloads] = useState<Record<string, { job: string; message: string }>>({});
+  const load = useCallback(async () => {
+    try {
+      setData(await api<ComfyUIImageModels>("/api/comfyui/image-models"));
+    } catch (error) {
+      notify((error as Error).message, true);
+    }
+  }, [notify]);
+  useEffect(() => { void load(); }, [load]);
+  const pending = Object.keys(downloads).length > 0;
+  useEffect(() => {
+    if (!pending) return;
+    const timer = window.setInterval(() => {
+      void Promise.all(Object.entries(downloads).map(async ([id, entry]) => {
+        const job = await api<Job>(`/api/jobs/${entry.job}`).catch(() => null);
+        return [id, job] as const;
+      })).then((results) => {
+        let finished = false;
+        setDownloads((current) => {
+          const next = { ...current };
+          for (const [id, job] of results) {
+            if (!job || !next[id]) continue;
+            if (activeJobStatuses.has(job.status)) next[id] = { ...next[id], message: job.message };
+            else {
+              finished = true;
+              delete next[id];
+              notify(job.status === "completed" ? t("{name} descargado", { name: id }) : translateServerText(job.message), job.status !== "completed");
+            }
+          }
+          return next;
+        });
+        if (finished) void load();
+      });
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [pending, downloads, load, notify]);
+
+  async function download(model: ComfyUIImageModel) {
+    setBusy(model.id);
+    try {
+      const result = await api<{ job_id: string }>(`/api/comfyui/image-models/${encodeURIComponent(model.id)}/download`, { method: "POST" });
+      setDownloads((current) => ({ ...current, [model.id]: { job: result.job_id, message: t("En cola") } }));
+      notify(t("Descarga de {name} añadida a la cola", { name: model.name }));
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function choose(model: ComfyUIImageModel) {
+    setBusy(model.id);
+    try {
+      setData(await api<ComfyUIImageModels>("/api/comfyui/image-model", { method: "PUT", body: JSON.stringify({ id: model.id }) }));
+      notify(t("{name} genera ahora las imágenes de comfyui-image", { name: model.name }));
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!data?.enabled) return null;
+  return <>
+    <SectionHeading eyebrow={t("COMFYUI")} title={t("Modelo de imagen")} action={<button className="icon-button" onClick={() => void load()} title={t("Comprobar estado")}><RefreshCw size={16} /></button>} />
+    <Card className="engine-card comfyui-image-models">
+      <small>{t("El modelo elegido responde como comfyui-image en el gateway, en Open WebUI y en el Laboratorio IA. ComfyUI lo carga al generar; al cambiarlo se libera la memoria del anterior.")}</small>
+      {data.selected !== data.active && <small className="engine-protection warning"><TriangleAlert size={12} />{" "}{t("El modelo guardado no está completo; mientras tanto se usa {name}.", { name: data.models.find((model) => model.id === data.active)?.name ?? data.active })}</small>}
+      <div className="comfyui-image-model-list">
+        {data.models.map((model) => {
+          const active = model.id === data.active;
+          const progress = downloads[model.id];
+          return <div className={`comfyui-image-model${active ? " active" : ""}`} key={model.id}>
+            <span>
+              <strong>{model.name}{model.id === data.default && <span className="badge live">{t("Recomendado")}</span>}{active && <span className="badge running">{t("En uso")}</span>}</strong>
+              <small>{model.description[language] || model.description.en || model.description.es}</small>
+              <small>{model.license} · {model.size_gb.toLocaleString(locale, { maximumFractionDigits: 1 })} GB{model.seconds ? ` · ${t("~{value} s por imagen", { value: model.seconds })}` : ""}{model.gated ? ` · ${t("requiere HF_TOKEN")}` : ""}</small>
+              {progress && <small><RefreshCw className="spin" size={11} />{" "}{translateServerText(progress.message)}</small>}
+            </span>
+            {model.installed
+              ? <button className={active ? "secondary" : "primary-action"} disabled={active || busy !== null} onClick={() => void choose(model)}>{active ? t("En uso") : t("Usar")}</button>
+              : model.downloadable && <button className="secondary" disabled={busy !== null || Boolean(progress)} onClick={() => void download(model)}><Download size={13} />{" "}{progress ? t("Descargando…") : t("Descargar")}</button>}
+          </div>;
+        })}
+      </div>
+    </Card>
+  </>;
 }
 
 type ProfileAppsOverview = {

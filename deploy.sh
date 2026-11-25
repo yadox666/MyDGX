@@ -1736,7 +1736,8 @@ if [[ -d /run/systemd/system ]] &&
           "$app_root/scripts/install-systemd.sh" \
           "$app_root/scripts/system-repair.sh" \
           "$app_root/scripts/nvme-smart-reader.sh" \
-          "$app_root/scripts/duckdns-update.sh"; do
+          "$app_root/scripts/duckdns-update.sh" \
+          "$app_root/scripts/gb10-clock-cap.sh"; do
           sha256sum "$fingerprint_file" | awk '{print $1}'
         done
         printf 'root=%s\nuser=%s\nllama=%s\nsearxng=%s\ncomfyui=%s\nduckdns=%s\n' \

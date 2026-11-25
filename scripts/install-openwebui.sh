@@ -108,6 +108,12 @@ from contextlib import closing
 
 # Bump when the chat defaults below change, so existing installs receive them once.
 CHAT_DEFAULTS_VERSION = "1"
+# Bump when the image defaults below change.
+IMAGE_DEFAULTS_VERSION = "1"
+# Open WebUI generates through the gateway alias, so the model chosen in MyDGX → Engines applies here too.
+IMAGE_CONNECTION_ID = "mydgx-gateway"
+IMAGE_MODEL = "comfyui-image"
+LEGACY_IMAGE_MODEL = "flux1-schnell-fp8.safetensors"
 
 
 def json_object(raw: object) -> dict:
@@ -149,6 +155,74 @@ def apply_chat_defaults(database: pathlib.Path, web_search: bool) -> None:
                 ui = json_object(settings.get("ui"))
                 settings["ui"] = with_tool_approval(ui)
                 connection.execute("UPDATE user SET settings=? WHERE id=?", (json.dumps(settings), user_id))
+        connection.commit()
+
+
+def gateway_image_connection(gateway_url: str) -> dict:
+    return {
+        "id": IMAGE_CONNECTION_ID,
+        "name": "MyDGX",
+        "type": "openai",
+        "url": gateway_url,
+        "key": "",
+        "config": {
+            "enable": True,
+            "capabilities": {"image_generation": True, "image_edit": False},
+            "model_ids": [IMAGE_MODEL],
+            "access_grants": [{"principal_type": "user", "principal_id": "*", "permission": "read"}],
+            "auth_type": "none",
+            "headers": {},
+            "size": "1024x1024",
+            "edit_size": "",
+            "steps": None,
+            "api_version": "",
+            "params": {},
+            "endpoint_method": "",
+            "workflow": "",
+            "nodes": [],
+            "edit_workflow": "",
+            "edit_nodes": [],
+        },
+    }
+
+
+def apply_image_defaults(database: pathlib.Path, gateway_url: str) -> None:
+    """Move MyDGX's own FLUX.1 ComfyUI connection to the gateway; connections an admin added stay as they are."""
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "config" not in tables:
+            return
+        def read(key: str):
+            row = connection.execute("SELECT value FROM config WHERE key=?", (key,)).fetchone()
+            try:
+                return json.loads(row[0]) if row else None
+            except ValueError:
+                return None
+
+        def write(key: str, value) -> None:
+            connection.execute("UPDATE config SET value=? WHERE key=?", (json.dumps(value), key))
+
+        connections = read("images.connections")
+        if isinstance(connections, list):
+            ours = [
+                item for item in connections
+                if isinstance(item, dict) and item.get("type") == "comfyui"
+                and str(item.get("url") or "").rstrip("/") == "http://127.0.0.1:8188"
+            ]
+            for item in ours:
+                item.setdefault("config", {})["enable"] = False
+            connections = [item for item in connections if not (isinstance(item, dict) and item.get("id") == IMAGE_CONNECTION_ID)]
+            connections.append(gateway_image_connection(gateway_url))
+            write("images.connections", connections)
+            default = str(read("image_generation.default_model") or "")
+            if not default or default.endswith(f":{LEGACY_IMAGE_MODEL}") or default.split(":", 1)[0] in {item.get("id") for item in ours}:
+                write("image_generation.default_model", f"{IMAGE_CONNECTION_ID}:{IMAGE_MODEL}")
+        elif read("image_generation.model") in {LEGACY_IMAGE_MODEL, ""}:
+            # Not migrated to connections yet: Open WebUI builds them from these keys on its next start.
+            write("image_generation.engine", "openai")
+            write("image_generation.model", IMAGE_MODEL)
+            write("image_generation.openai.api_base_url", gateway_url)
+            write("image_generation.openai.api_key", "")
         connection.commit()
 
 
@@ -217,7 +291,10 @@ image_keys = {
     "COMFYUI_API_KEY",
     "COMFYUI_WORKFLOW",
     "COMFYUI_WORKFLOW_NODES",
+    "IMAGES_OPENAI_API_BASE_URL",
+    "IMAGES_OPENAI_API_KEY",
     "ENABLE_CHAT_RESPONSE_BASE64_IMAGE_URL_CONVERSION",
+    "MYDGX_IMAGE_DEFAULTS",
 }
 if comfyui_workflow_file and comfyui_nodes_file:
     workflow = json.loads(pathlib.Path(comfyui_workflow_file).read_text(encoding="utf-8"))
@@ -228,19 +305,22 @@ if comfyui_workflow_file and comfyui_nodes_file:
             if os.environ.get("MYDGX_LANGUAGE") == "es"
             else "The ComfyUI configuration does not have the expected format."
         )
+    for key in ("COMFYUI_BASE_URL", "COMFYUI_API_KEY", "COMFYUI_WORKFLOW", "COMFYUI_WORKFLOW_NODES", "IMAGE_STEPS"):
+        values.pop(key, None)
     values.update({
         "ENABLE_IMAGE_GENERATION": "True",
-        "IMAGE_GENERATION_ENGINE": "comfyui",
-        "IMAGE_GENERATION_MODEL": "flux1-schnell-fp8.safetensors",
+        "IMAGE_GENERATION_ENGINE": "openai",
+        "IMAGE_GENERATION_MODEL": IMAGE_MODEL,
+        "IMAGES_OPENAI_API_BASE_URL": f"http://127.0.0.1:{gateway_port}/v1",
+        "IMAGES_OPENAI_API_KEY": "",
         "IMAGE_SIZE": "1024x1024",
-        "IMAGE_STEPS": "4",
-        "COMFYUI_BASE_URL": "http://127.0.0.1:8188",
-        "COMFYUI_API_KEY": "",
-        "COMFYUI_WORKFLOW": json.dumps(workflow, separators=(",", ":")),
-        "COMFYUI_WORKFLOW_NODES": json.dumps(nodes, separators=(",", ":")),
-        # Chatting with the FLUX model returns the image inline; store it as a file, not in the chat JSON.
+        # Chatting with the image model returns the image inline; store it as a file, not in the chat JSON.
         "ENABLE_CHAT_RESPONSE_BASE64_IMAGE_URL_CONVERSION": "True",
     })
+    database = data_dir / "webui.db"
+    if existing.get("MYDGX_IMAGE_DEFAULTS") != IMAGE_DEFAULTS_VERSION and database.is_file():
+        apply_image_defaults(database, f"http://127.0.0.1:{gateway_port}/v1")
+    values["MYDGX_IMAGE_DEFAULTS"] = IMAGE_DEFAULTS_VERSION
 else:
     for key in image_keys:
         values.pop(key, None)

@@ -2110,5 +2110,9 @@
   "Heredar de Configuración": "Inherit from Settings",
   "Prompt anti-alucinación": "Anti-hallucination prompt",
   "El gateway lo añade a los modelos de chat del perfil cuando la petición no trae mensaje de sistema. Cada modelo puede cambiarlo; el texto se edita en Configuración.": "The gateway adds it to the profile's chat models when the request has no system message. Each model can override it; the text is edited in Settings.",
-  "En este perfil": "In this profile"
+  "En este perfil": "In this profile",
+  "Recomendados": "Recommended",
+  "Seleccionar": "Select",
+  "Selección rápida": "Quick selection",
+  "ComfyUI, Whisper y TTS CUDA: no hacen falta para servir modelos LLM. Los perfiles, el gateway y Open WebUI siguen en marcha.": "ComfyUI, Whisper, and TTS CUDA: not needed to serve LLM models. Profiles, the gateway, and Open WebUI keep running."
 }

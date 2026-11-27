@@ -1751,6 +1751,70 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Returns true once SSH answers again, so the caller can rebuild the tunnel.
+    func reboot() async -> Bool {
+        guard !operationInProgress else { return false }
+        operationInProgress = true
+        defer { operationInProgress = false }
+        let alias = configuration.activeConnection.alias
+        do {
+            let result = try await self.runSSH(arguments: ["sudo", "-n", "/usr/sbin/shutdown", "-r", "now"])
+            guard result == 0 else {
+                throw RemoteActionError.commandFailed(result)
+            }
+            statusMessage = String(localized: "Reiniciando…")
+            AppNotifications.send(
+                title: String(localized: "Reinicio solicitado"),
+                body: String(localized: "Esperando a que \(alias) vuelva a responder.")
+            )
+            var wentDown = false
+            for _ in 0..<40 {
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+                if ((try? await runSSH(arguments: ["true"])) ?? -1) != 0 {
+                    wentDown = true
+                    break
+                }
+            }
+            guard wentDown else {
+                statusMessage = String(localized: "Reinicio no confirmado")
+                AppNotifications.send(
+                    title: String(localized: "Reinicio no confirmado"),
+                    body: String(localized: "\(alias) continúa respondiendo por SSH.")
+                )
+                return false
+            }
+            overview = nil
+            profiles = []
+            runtime = nil
+            notifyConnectionState(.disconnected)
+            for _ in 0..<60 {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                if ((try? await runSSH(arguments: ["true"])) ?? -1) == 0 {
+                    statusMessage = String(localized: "Reiniciado")
+                    lastError = nil
+                    AppNotifications.send(
+                        title: String(localized: "Equipo reiniciado"),
+                        body: String(localized: "\(alias) vuelve a responder por SSH.")
+                    )
+                    return true
+                }
+            }
+            statusMessage = String(localized: "Sin respuesta tras reiniciar")
+            AppNotifications.send(
+                title: String(localized: "Sin respuesta tras reiniciar"),
+                body: String(localized: "\(alias) no ha vuelto a responder por SSH en 5 minutos.")
+            )
+        } catch {
+            lastError = error.localizedDescription
+            statusMessage = String(localized: "Error al reiniciar")
+            AppNotifications.send(
+                title: String(localized: "Error al reiniciar"),
+                body: String(localized: "No se pudo confirmar la orden para \(alias).")
+            )
+        }
+        return false
+    }
+
     private func updateObservedProfileJob(
         _ jobs: [JobStatus],
         profiles: [InferenceProfile]

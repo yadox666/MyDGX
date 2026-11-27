@@ -10,6 +10,7 @@
 "%@ está listo en %@." = "%@ está listo en %@.";
 "%@ ha dejado de responder por API y SSH." = "%@ ha dejado de responder por API y SSH.";
 "%@ no disponible" = "%@ no disponible";
+"%@ no ha vuelto a responder por SSH en 5 minutos." = "%@ no ha vuelto a responder por SSH en 5 minutos.";
 "%@ no responde en el puerto %@ del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app." = "%@ no responde en el puerto %@ del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app.";
 "%@ no responde en el puerto %@. Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac." = "%@ no responde en el puerto %@. Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac.";
 "%@ no responde por API ni SSH." = "%@ no responde por API ni SSH.";
@@ -20,6 +21,7 @@
 "%@ se detuvo en %@." = "%@ se detuvo en %@.";
 "%@ se está quedando sin memoria; para un modelo o cancela el trabajo de ComfyUI." = "%@ se está quedando sin memoria; para un modelo o cancela el trabajo de ComfyUI.";
 "%@ seleccionado (%@)" = "%@ seleccionado (%@)";
+"%@ vuelve a responder por SSH." = "%@ vuelve a responder por SSH.";
 "%@ · cargado · %@" = "%@ · cargado · %@";
 "%@ · edición (--active)" = "%@ · edición (--active)";
 "%@ · encendido desde Modelos" = "%@ · encendido desde Modelos";
@@ -70,8 +72,8 @@
 "Apagando…" = "Apagando…";
 "Apagar %@" = "Apagar %@";
 "Apagar equipo" = "Apagar equipo";
-"Apagar equipo…" = "Apagar equipo…";
 "Apagar modelo" = "Apagar modelo";
+"Apagar…" = "Apagar…";
 "API MyDGX" = "API MyDGX";
 "Aplicación" = "Aplicación";
 "Arrancar MyDGX" = "Arrancar MyDGX";
@@ -228,11 +230,13 @@
 "Equipo apagado" = "Equipo apagado";
 "Equipo desconectado" = "Equipo desconectado";
 "Equipo detectado" = "Equipo detectado";
+"Equipo reiniciado" = "Equipo reiniciado";
 "Equipo seleccionado automáticamente" = "Equipo seleccionado automáticamente";
 "Error al apagar" = "Error al apagar";
 "Error al cargar %@" = "Error al cargar %@";
 "Error al cargar el perfil" = "Error al cargar el perfil";
 "Error al cargar perfil" = "Error al cargar perfil";
+"Error al reiniciar" = "Error al reiniciar";
 "Error de conexión" = "Error de conexión";
 "Error de despliegue" = "Error de despliegue";
 "Es normal en un alquiler nuevo (AxForge) o en un equipo reinstalado. Si no es tu caso, cancela: alguien podría estar interceptando la conexión.\n\nGuardada: %@\nActual: %@\n\nCompara la actual con la que muestra la consola del proveedor o del equipo antes de sustituirla." = "Es normal en un alquiler nuevo (AxForge) o en un equipo reinstalado. Si no es tu caso, cancela: alguien podría estar interceptando la conexión.\n\nGuardada: %@\nActual: %@\n\nCompara la actual con la que muestra la consola del proveedor o del equipo antes de sustituirla.";
@@ -242,6 +246,7 @@
 "Escuchando anuncios Bonjour…" = "Escuchando anuncios Bonjour…";
 "Ese archivo no es una clave SSH privada. Elige, por ejemplo, ~/.ssh/id_ed25519." = "Ese archivo no es una clave SSH privada. Elige, por ejemplo, ~/.ssh/id_ed25519.";
 "Espera a que termine la operación en curso para abrir %@" = "Espera a que termine la operación en curso para abrir %@";
+"Esperando a que %@ vuelva a responder." = "Esperando a que %@ vuelva a responder.";
 "Esperando confirmación de %@." = "Esperando confirmación de %@.";
 "Esperando para reconectar…" = "Esperando para reconectar…";
 "Esperando red para reconectar…" = "Esperando red para reconectar…";
@@ -460,8 +465,14 @@
 "Recuperando seguimiento · intento %lld/10" = "Recuperando seguimiento · intento %lld/10";
 "Red disponible · reconectando…" = "Red disponible · reconectando…";
 "Red local" = "Red local";
+"Reiniciado" = "Reiniciado";
 "Reiniciando servicios" = "Reiniciando servicios";
+"Reiniciando…" = "Reiniciando…";
 "Reiniciar ahora" = "Reiniciar ahora";
+"Reiniciar equipo" = "Reiniciar equipo";
+"Reiniciar…" = "Reiniciar…";
+"Reinicio no confirmado" = "Reinicio no confirmado";
+"Reinicio solicitado" = "Reinicio solicitado";
 "Reinstalar" = "Reinstalar";
 "Reintentando conexión…" = "Reintentando conexión…";
 "Reintentar" = "Reintentar";
@@ -475,6 +486,7 @@
 "Se descargará %@ desde GitHub, se comprobará su SHA-256 y su firma, y la versión %@ irá a la Papelera. MyDGXTray se reiniciará; el túnel SSH y la configuración se conservan." = "Se descargará %@ desde GitHub, se comprobará su SHA-256 y su firma, y la versión %@ irá a la Papelera. MyDGXTray se reiniciará; el túnel SSH y la configuración se conservan.";
 "Se descargarán sus modelos y se parará su app si tiene una. No volverá a arrancar en el próximo inicio." = "Se descargarán sus modelos y se parará su app si tiene una. No volverá a arrancar en el próximo inicio.";
 "Se desplegará el último commit de main en origin, no los cambios locales sin publicar. Se hace copia de seguridad, se reinician los servicios y, si algo falla, se restaura la versión anterior." = "Se desplegará el último commit de main en origin, no los cambios locales sin publicar. Se hace copia de seguridad, se reinician los servicios y, si algo falla, se restaura la versión anterior.";
+"Se detendrán los modelos y servicios del equipo y se reiniciará. La aplicación esperará a que vuelva a responder y reconectará el túnel. ¿Está seguro de que desea continuar?" = "Se detendrán los modelos y servicios del equipo y se reiniciará. La aplicación esperará a que vuelva a responder y reconectará el túnel. ¿Está seguro de que desea continuar?";
 "Se detendrán los modelos y servicios del equipo. La aplicación comprobará después que el apagado se haya completado. ¿Está seguro de que desea continuar?" = "Se detendrán los modelos y servicios del equipo. La aplicación comprobará después que el apagado se haya completado. ¿Está seguro de que desea continuar?";
 "Se guarda en el Llavero de macOS para que el túnel se reconecte solo." = "Se guarda en el Llavero de macOS para que el túnel se reconecte solo.";
 "Se instalará el panel MyDGX, el motor de IA optimizado para la GPU GB10, Open WebUI, ComfyUI y Whisper. La primera vez tarda entre 20 y 40 minutos. Puedes seguir usando el Mac; no apagues el Spark." = "Se instalará el panel MyDGX, el motor de IA optimizado para la GPU GB10, Open WebUI, ComfyUI y Whisper. La primera vez tarda entre 20 y 40 minutos. Puedes seguir usando el Mac; no apagues el Spark.";
@@ -491,6 +503,7 @@
 "Selecciona un volumen montado, escribible y etiquetado exactamente OEMDATA." = "Selecciona un volumen montado, escribible y etiquetado exactamente OEMDATA.";
 "Si no los guardas, se perderán y MyDGX seguirá usando la configuración anterior." = "Si no los guardas, se perderán y MyDGX seguirá usando la configuración anterior.";
 "Sin clave" = "Sin clave";
+"Sin respuesta tras reiniciar" = "Sin respuesta tras reiniciar";
 "Sincronizando proyecto" = "Sincronizando proyecto";
 "Sistema" = "Sistema";
 "Sobrescribir" = "Sobrescribir";
@@ -549,6 +562,7 @@
 "¿Eliminar %@?" = "¿Eliminar %@?";
 "¿Guardar los cambios de Preferencias?" = "¿Guardar los cambios de Preferencias?";
 "¿No aparece? Escribe su dirección" = "¿No aparece? Escribe su dirección";
+"¿Reiniciar %@?" = "¿Reiniciar %@?";
 "¿Sobrescribir los archivos cloud-init?" = "¿Sobrescribir los archivos cloud-init?";
 "¿Tienes otro Spark? Abre Preferencias y pulsa el botón del asistente." = "¿Tienes otro Spark? Abre Preferencias y pulsa el botón del asistente.";
 "¿Tu Spark es nuevo y aún no lo has encendido?" = "¿Tu Spark es nuevo y aún no lo has encendido?";

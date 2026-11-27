@@ -10,6 +10,7 @@
 "%@ está listo en %@." = "%@ is ready on %@.";
 "%@ ha dejado de responder por API y SSH." = "%@ stopped responding over API and SSH.";
 "%@ no disponible" = "%@ unavailable";
+"%@ no ha vuelto a responder por SSH en 5 minutos." = "%@ hasn't responded over SSH for 5 minutes.";
 "%@ no responde en el puerto %@ del DGX. Revisa en Perfiles que el puerto web coincida con el que usa la app." = "%@ is not responding on DGX port %@. Check in Profiles that the web port matches the one the app uses.";
 "%@ no responde en el puerto %@. Comprueba que su start.sh use MYDGX_APP_PORT y que el puerto local esté libre en el Mac." = "%@ is not responding on port %@. Check that its start.sh uses MYDGX_APP_PORT and that the local port is free on the Mac.";
 "%@ no responde por API ni SSH." = "%@ isn’t responding over API or SSH.";
@@ -20,6 +21,7 @@
 "%@ se detuvo en %@." = "%@ stopped on %@.";
 "%@ se está quedando sin memoria; para un modelo o cancela el trabajo de ComfyUI." = "%@ is running out of memory; stop a model or cancel the ComfyUI job.";
 "%@ seleccionado (%@)" = "%@ selected (%@)";
+"%@ vuelve a responder por SSH." = "%@ is responding over SSH again.";
 "%@ · cargado · %@" = "%@ · loaded · %@";
 "%@ · edición (--active)" = "%@ · edit (--active)";
 "%@ · encendido desde Modelos" = "%@ · started from Models";
@@ -70,8 +72,8 @@
 "Apagando…" = "Shutting down…";
 "Apagar %@" = "Stop %@";
 "Apagar equipo" = "Shut down device";
-"Apagar equipo…" = "Shut down device…";
 "Apagar modelo" = "Stop model";
+"Apagar…" = "Shut down…";
 "API MyDGX" = "MyDGX API";
 "Aplicación" = "App";
 "Arrancar MyDGX" = "Start MyDGX";
@@ -228,11 +230,13 @@
 "Equipo apagado" = "Device off";
 "Equipo desconectado" = "Device disconnected";
 "Equipo detectado" = "Detected device";
+"Equipo reiniciado" = "Device restarted";
 "Equipo seleccionado automáticamente" = "Device selected automatically";
 "Error al apagar" = "Couldn’t shut down";
 "Error al cargar %@" = "Couldn’t load %@";
 "Error al cargar el perfil" = "Couldn’t load the profile";
 "Error al cargar perfil" = "Couldn’t load profile";
+"Error al reiniciar" = "Couldn’t restart";
 "Error de conexión" = "Connection error";
 "Error de despliegue" = "Deployment error";
 "Es normal en un alquiler nuevo (AxForge) o en un equipo reinstalado. Si no es tu caso, cancela: alguien podría estar interceptando la conexión.\n\nGuardada: %@\nActual: %@\n\nCompara la actual con la que muestra la consola del proveedor o del equipo antes de sustituirla." = "This is expected on a new rental (AxForge) or a reinstalled machine. Otherwise, cancel: someone could be intercepting the connection.\n\nStored: %@\nCurrent: %@\n\nCompare the current one with the fingerprint shown by the provider or machine console before replacing it.";
@@ -242,6 +246,7 @@
 "Escuchando anuncios Bonjour…" = "Listening for Bonjour announcements…";
 "Ese archivo no es una clave SSH privada. Elige, por ejemplo, ~/.ssh/id_ed25519." = "That file isn’t a private SSH key. Choose one such as ~/.ssh/id_ed25519.";
 "Espera a que termine la operación en curso para abrir %@" = "Wait for the current operation to finish to open %@";
+"Esperando a que %@ vuelva a responder." = "Waiting for %@ to respond again.";
 "Esperando confirmación de %@." = "Waiting for confirmation from %@.";
 "Esperando para reconectar…" = "Waiting to reconnect…";
 "Esperando red para reconectar…" = "Waiting for network to reconnect…";
@@ -460,8 +465,14 @@
 "Recuperando seguimiento · intento %lld/10" = "Resuming tracking · attempt %lld/10";
 "Red disponible · reconectando…" = "Network available · reconnecting…";
 "Red local" = "Local Network";
+"Reiniciado" = "Restarted";
 "Reiniciando servicios" = "Restarting services";
+"Reiniciando…" = "Restarting…";
 "Reiniciar ahora" = "Restart now";
+"Reiniciar equipo" = "Restart device";
+"Reiniciar…" = "Restart…";
+"Reinicio no confirmado" = "Restart not confirmed";
+"Reinicio solicitado" = "Restart requested";
 "Reinstalar" = "Reinstall";
 "Reintentando conexión…" = "Retrying connection…";
 "Reintentar" = "Retry";
@@ -475,6 +486,7 @@
 "Se descargará %@ desde GitHub, se comprobará su SHA-256 y su firma, y la versión %@ irá a la Papelera. MyDGXTray se reiniciará; el túnel SSH y la configuración se conservan." = "%@ will be downloaded from GitHub and its SHA-256 and signature verified, and version %@ will be moved to the Trash. MyDGXTray will restart; the SSH tunnel and settings are kept.";
 "Se descargarán sus modelos y se parará su app si tiene una. No volverá a arrancar en el próximo inicio." = "Its models will be unloaded and its app stopped, if it has one. It won't start again on next boot.";
 "Se desplegará el último commit de main en origin, no los cambios locales sin publicar. Se hace copia de seguridad, se reinician los servicios y, si algo falla, se restaura la versión anterior." = "The latest commit of main on origin will be deployed, not unpublished local changes. A backup is made, services are restarted, and if anything fails, the previous version is restored.";
+"Se detendrán los modelos y servicios del equipo y se reiniciará. La aplicación esperará a que vuelva a responder y reconectará el túnel. ¿Está seguro de que desea continuar?" = "The device's models and services will be stopped and it will restart. The app will wait for it to respond again and reconnect the tunnel. Are you sure you want to continue?";
 "Se detendrán los modelos y servicios del equipo. La aplicación comprobará después que el apagado se haya completado. ¿Está seguro de que desea continuar?" = "The device's models and services will be stopped. The app will then check that the shutdown has completed. Are you sure you want to continue?";
 "Se guarda en el Llavero de macOS para que el túnel se reconecte solo." = "Saved in the macOS Keychain so the tunnel can reconnect automatically.";
 "Se instalará el panel MyDGX, el motor de IA optimizado para la GPU GB10, Open WebUI, ComfyUI y Whisper. La primera vez tarda entre 20 y 40 minutos. Puedes seguir usando el Mac; no apagues el Spark." = "This installs the MyDGX dashboard, the AI engine optimized for the GB10 GPU, Open WebUI, ComfyUI, and Whisper. The first time takes 20 to 40 minutes. You can keep using your Mac; don’t turn off the Spark.";
@@ -491,6 +503,7 @@
 "Selecciona un volumen montado, escribible y etiquetado exactamente OEMDATA." = "Select a mounted, writable volume labeled exactly OEMDATA.";
 "Si no los guardas, se perderán y MyDGX seguirá usando la configuración anterior." = "If you don't save them, they'll be lost and MyDGX will keep using the previous settings.";
 "Sin clave" = "No key";
+"Sin respuesta tras reiniciar" = "No response after restart";
 "Sincronizando proyecto" = "Syncing project";
 "Sistema" = "System";
 "Sobrescribir" = "Overwrite";
@@ -549,6 +562,7 @@
 "¿Eliminar %@?" = "Delete %@?";
 "¿Guardar los cambios de Preferencias?" = "Save your changes to Settings?";
 "¿No aparece? Escribe su dirección" = "Not listed? Enter its address";
+"¿Reiniciar %@?" = "Restart %@?";
 "¿Sobrescribir los archivos cloud-init?" = "Overwrite the cloud-init files?";
 "¿Tienes otro Spark? Abre Preferencias y pulsa el botón del asistente." = "Have another Spark? Open Settings and click the assistant button.";
 "¿Tu Spark es nuevo y aún no lo has encendido?" = "Is your Spark new and not started yet?";

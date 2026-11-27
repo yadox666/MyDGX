@@ -6100,31 +6100,37 @@ function ProfilesView({ jobs, notify }: { jobs: Job[]; notify: (message: string,
             const kvCache = model.cache_type_k && model.cache_type_k === model.cache_type_v ? model.cache_type_k : [model.cache_type_k, model.cache_type_v].filter(Boolean).join("/");
             const plannedMemory = profile.memory_plan.models?.find((item) => item.model_id === model.id);
             const memoryMb = model.estimated_memory_mb || plannedMemory?.estimated_memory_mb || plannedMemory?.weight_mb || 0;
-            const details = [
-              identity.quant,
-              memoryMb > 0 ? `≈${(memoryMb / 1024).toFixed(1)} GB` : "",
-              ["chat", "vision", "embeddings"].includes(model.task) ? `${(effectiveContext / 1024).toLocaleString(locale)}K ctx${effectiveContext !== model.context_size ? ` ${t("(ajustado)")}` : ""}` : "",
-              kvCache ? `KV ${kvCache}` : "",
-              model.spec_type ? SPEC_LABELS[model.spec_type] ?? model.spec_type : "",
-              model.task !== "chat" && model.task !== "vision" ? model.task : "",
-              `${model.engine} :${model.port}`,
-            ].filter(Boolean);
+            const specs: { label: string; value: string }[] = [];
+            if (identity.quant) specs.push({ label: t("Cuantización"), value: identity.quant });
+            if (memoryMb > 0) specs.push({ label: t("Memoria"), value: `≈${(memoryMb / 1024).toFixed(1)} GB` });
+            if (["chat", "vision", "embeddings"].includes(model.task)) {
+              specs.push({
+                label: t("Contexto"),
+                value: `${(effectiveContext / 1024).toLocaleString(locale)}K${effectiveContext !== model.context_size ? ` ${t("(ajustado)")}` : ""}`,
+              });
+            }
+            if (kvCache) specs.push({ label: "KV", value: kvCache });
+            if (model.spec_type) specs.push({ label: t("Especulativa"), value: SPEC_LABELS[model.spec_type] ?? model.spec_type });
+            if (model.task !== "chat" && model.task !== "vision") specs.push({ label: t("Tarea"), value: model.task });
+            specs.push({ label: t("Motor"), value: `${model.engine} :${model.port}` });
             const modelDisabled = model.enabled === false;
-            if (modelDisabled) details.unshift(t("desactivado"));
-            return <div key={model.id} className={modelDisabled ? "disabled" : undefined}>
+            return <div key={model.id} className={`profile-model-row${modelDisabled ? " disabled" : ""}`}>
               <span className={`status-dot ${modelDisabled ? "off" : modelRunning ? "ok" : model.downloaded ? "online" : "warn"}`} />
-              <span className="profile-model-id">
-                <span className="profile-model-name">
+              <div className="profile-model-body">
+                <div className="profile-model-name">
                   <strong title={[identity.file || model.model_repo || model.model_ref, model.spec_type ? `${SPEC_LABELS[model.spec_type] ?? model.spec_type}: ${model.draft_filename || t("MTP integrado en el GGUF")}` : ""].filter(Boolean).join("\n")}>{identity.name}</strong>
+                  {modelDisabled && <span className="badge">{t("desactivado")}</span>}
                   <UncensoredBadge name={`${model.uncensored ?? ""} ${identity.name}`} flagged={Boolean(model.uncensored)} showKind />
                   {profileModelHasVision(model) && <VisionBadge />}
                   <ReasoningBadge mode={model.reasoning} />
                   <ParallelBadge parallel={model.parallel} />
                   <GroundingBadge active={model.grounding_prompt_active} />
-                </span>
-                {aliases.length > 0 && <small>{aliases.join(" · ")}</small>}
-              </span>
-              <small className="profile-model-meta">{details.join(" · ")}</small>
+                </div>
+                {aliases.length > 0 && <small className="profile-model-alias">{aliases.join(" · ")}</small>}
+                <div className="profile-model-specs">
+                  {specs.map((spec) => <span className="profile-model-spec" key={spec.label}><span>{spec.label}</span><b>{spec.value}</b></span>)}
+                </div>
+              </div>
               {!model.downloaded && ((model.engine === "llama.cpp" && model.model_repo) || model.engine === "ollama" || (model.engine === "comfyui" && model.comfyui?.files.length)) && <button className="profile-model-download" disabled={downloads.isDownloading(profileDownloadTarget(model))} onClick={() => void downloadMissingModel(profile, model)}>{downloads.isDownloading(profileDownloadTarget(model)) ? <><RefreshCw className="spin" size={13} />{" "}{t("Descargando…")}</> : <><Download size={13} />{" "}{t("Descargar modelo")}</>}</button>}
             </div>;
           })}
@@ -6441,10 +6447,12 @@ type MemoryModeStatus = {
   errors?: string[];
 };
 
+const MEMORY_MODE_RECOMMENDED = new Set(["comfyui", "whisper", "tts"]);
+
 function MemoryModePanel({ notify, onChange }: { notify: (message: string, error?: boolean) => void; onChange: () => void }) {
   const [status, setStatus] = useState<MemoryModeStatus | null>(null);
-  const [selected, setSelected] = useState<Set<string> | null>(null);
-  const [stopProfiles, setStopProfiles] = useState(true);
+  const [chosen, setChosen] = useState<Set<string>>(() => new Set());
+  const [stopProfiles, setStopProfiles] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const load = useCallback(async () => {
     try {
@@ -6458,8 +6466,21 @@ function MemoryModePanel({ notify, onChange }: { notify: (message: string, error
     return () => window.clearTimeout(timer);
   }, [load]);
   const active = status?.services.filter((service) => service.active) ?? [];
-  const chosen = selected ?? new Set(active.filter((service) => service.id !== "gateway").map((service) => service.id));
   const profiles = status?.profiles ?? [];
+  const recommendedIds = active.filter((service) => MEMORY_MODE_RECOMMENDED.has(service.id)).map((service) => service.id);
+  const sameSelection = (ids: string[], withProfiles: boolean) => (
+    (stopProfiles && profiles.length > 0) === withProfiles
+    && active.filter((service) => chosen.has(service.id)).length === ids.length
+    && ids.every((id) => chosen.has(id))
+  );
+  const presets = [
+    { key: "all", label: t("Todos"), ids: active.map((service) => service.id), withProfiles: profiles.length > 0 },
+    { key: "none", label: t("Ninguno"), ids: [] as string[], withProfiles: false },
+    { key: "recommended", label: t("Recomendados"), ids: recommendedIds, withProfiles: false },
+  ].map((preset) => {
+    const empty = preset.key !== "none" && !preset.ids.length && !preset.withProfiles;
+    return { ...preset, empty, pressed: !empty && sameSelection(preset.ids, preset.withProfiles) };
+  });
   const profileBytes = profiles.reduce((sum, profile) => sum + profile.bytes, 0);
   const chosenBytes = active.filter((service) => chosen.has(service.id)).reduce((sum, service) => sum + service.bytes, 0)
     + (status?.ollama_bytes ?? 0) + (stopProfiles ? profileBytes : 0);
@@ -6468,7 +6489,8 @@ function MemoryModePanel({ notify, onChange }: { notify: (message: string, error
     try {
       const result = await api<MemoryModeStatus>(path, { method: "POST", body: JSON.stringify(body) });
       setStatus(result);
-      setSelected(null);
+      setChosen(new Set());
+      setStopProfiles(false);
       notify(result.errors?.length ? result.errors.join(" · ") : success(result), Boolean(result.errors?.length));
       onChange();
     } catch (error) {
@@ -6480,7 +6502,7 @@ function MemoryModePanel({ notify, onChange }: { notify: (message: string, error
   function toggle(id: string) {
     const next = new Set(chosen);
     if (next.has(id)) next.delete(id); else next.add(id);
-    setSelected(next);
+    setChosen(next);
   }
   async function releaseAll() {
     const names = [
@@ -6515,6 +6537,18 @@ function MemoryModePanel({ notify, onChange }: { notify: (message: string, error
         <small>{t("Detén lo opcional para cargar un modelo grande (≈100 GB). La memoria libre real ahora:")}{" "}<b>{bytes(status.memory.free ?? 0)}</b> {t("de")} {bytes(status.memory.total ?? 0)}.</small>
       </span>
       {stoppedNames.length > 0 && <span className="badge running">{t("Modo memoria activo")}</span>}
+    </div>
+    <div className="memory-mode-presets" role="group" aria-label={t("Selección rápida")}>
+      <span>{t("Seleccionar")}</span>
+      {presets.map((preset) => <button
+        key={preset.key}
+        type="button"
+        className={preset.pressed ? "active" : undefined}
+        aria-pressed={preset.pressed}
+        disabled={busy !== null || preset.empty}
+        title={preset.key === "recommended" ? t("ComfyUI, Whisper y TTS CUDA: no hacen falta para servir modelos LLM. Los perfiles, el gateway y Open WebUI siguen en marcha.") : undefined}
+        onClick={() => { setChosen(new Set(preset.ids)); setStopProfiles(preset.withProfiles); }}
+      >{preset.label}</button>)}
     </div>
     <div className="memory-mode-list">
       <div className={`memory-mode-row ${profiles.length ? "" : "is-stopped"}`}>

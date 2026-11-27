@@ -122,10 +122,19 @@ struct MenuContentView: View {
         }
         .disabled(!model.canToggleConnection)
 
-        Button {
-            confirmShutdown()
+        Menu {
+            Button {
+                confirmShutdown()
+            } label: {
+                Label("Apagar…", systemImage: "power")
+            }
+            Button {
+                confirmReboot()
+            } label: {
+                Label("Reiniciar…", systemImage: "arrow.clockwise")
+            }
         } label: {
-            Label("Apagar equipo…", systemImage: "power")
+            Label("Apagar equipo", systemImage: "power")
         }
         .disabled(!model.canShutdown)
 
@@ -356,6 +365,24 @@ struct MenuContentView: View {
         alert.addButton(withTitle: String(localized: "Cancelar"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { await model.shutdown() }
+    }
+
+    private func confirmReboot() {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = String(localized: "¿Reiniciar \(model.configuration.activeConnection.alias)?")
+        alert.informativeText = String(localized: """
+        Se detendrán los modelos y servicios del equipo y se reiniciará. La aplicación \
+        esperará a que vuelva a responder y reconectará el túnel. ¿Está seguro de que desea continuar?
+        """)
+        alert.addButton(withTitle: String(localized: "Reiniciar equipo"))
+        alert.addButton(withTitle: String(localized: "Cancelar"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task {
+            if await model.reboot() {
+                model.startConnection()
+            }
+        }
     }
 
     private func preflightAndConfirmProfile(_ profile: InferenceProfile) async {

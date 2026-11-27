@@ -221,9 +221,10 @@ La guía completa para usuarios nuevos está en
 - **Copia de Seguridad DGX** crea en `~/.MyDGX/backups/<alias>/<fecha>/` una
   instantánea consistente de `mydgx.db` y de los datos de Open WebUI. No copia
   `.env`, claves SSH, modelos ni cachés.
-- **Apagar** usa `/usr/bin/ssh` en modo no interactivo y autenticación por clave.
-  Requiere una regla sudoers limitada al comando `/usr/sbin/shutdown -h now`; no
-  concedas `NOPASSWD: ALL`.
+- **Apagar equipo** es un submenú con **Apagar** y **Reiniciar**; ambos piden
+  confirmación. Usan `/usr/bin/ssh` en modo no interactivo y autenticación por
+  clave. Requieren una regla sudoers limitada a `/usr/sbin/shutdown -h now` y
+  `/usr/sbin/shutdown -r now`; no concedas `NOPASSWD: ALL`.
 
 Para restaurar una base MyDGX durante el despliegue:
 

@@ -1302,5 +1302,9 @@
   "La GPU y la CPU vuelven a sus relojes de fábrica, también después de reiniciar.": "The GPU and CPU return to their factory clocks, including after a reboot.",
   "Límite activo. El próximo arranque lo vuelve a aplicar": "Limit active. The next boot applies it again",
   "Límite guardado para el próximo arranque": "Limit saved for the next boot",
-  "Relojes de fábrica. Un arranque no volverá a limitar": "Factory clocks. A boot will not apply the limit"
+  "Relojes de fábrica. Un arranque no volverá a limitar": "Factory clocks. A boot will not apply the limit",
+  "Pega en el mensaje el texto que quieres anonimizar": "Paste the text you want to anonymize in the message",
+  "El texto supera el límite de Privacy Filter": "The text exceeds the Privacy Filter limit",
+  "Privacy Filter no pudo procesar el texto": "Privacy Filter could not process the text",
+  "Privacy Filter devolvió una respuesta inválida": "Privacy Filter returned an invalid response"
 }

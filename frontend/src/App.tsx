@@ -7278,6 +7278,8 @@ function ChatView({ models, config, notify, onClose }: { models: Models | null; 
   );
 }
 
+const STORAGE_TILE_TONES = ["red", "blue", "amber", "green", "purple", "slate"] as const;
+
 function StorageView({ notify }: { notify: (message: string, error?: boolean) => void }) {
   type NvmeDevice = {
     name: string;
@@ -7393,20 +7395,24 @@ function StorageView({ notify }: { notify: (message: string, error?: boolean) =>
       </Card>
       <SectionHeading eyebrow={t("CAPACIDAD")} title={t("Almacenamiento")} />
       <div className="storage-grid">
-        {storage.partitions.map((partition) => {
+        {storage.partitions.map((partition, index) => {
           const percent = Number(partition.percent);
           const kind = String(partition.kind);
           const mountpoint = String(partition.mountpoint);
+          const tone = STORAGE_TILE_TONES[index % STORAGE_TILE_TONES.length];
           return (
-            <Card className="storage-card" key={mountpoint}>
-              <div className="card-kicker">
-                <HardDrive size={16} />
-                {mountpoint === "/" ? t("Disco del sistema") : mountpoint}
+            <Card className={`storage-card storage-tile tone-${tone}`} key={mountpoint}>
+              <div className="storage-tile-head">
+                <span className="storage-tile-icon"><HardDrive size={20} /></span>
+                <span className="storage-tile-title">{mountpoint === "/" ? t("Disco del sistema") : mountpoint}</span>
                 <span className={`storage-kind ${kind}`}>{kind === "virtual" ? t("Virtual") : kind === "physical" ? t("Físico") : t("Sistema")}</span>
               </div>
               <strong>{bytes(Number(partition.used))} <small>{t("de")} {bytes(Number(partition.total))}</small></strong>
               <div className="storage-bar"><span style={{ width: `${percent}%` }} /></div>
               <small>{percent}{t("% utilizado ·")}{" "}{String(partition.filesystem)} · {String(partition.device)}</small>
+              <svg className="storage-tile-wave" viewBox="0 0 200 60" preserveAspectRatio="none" aria-hidden="true">
+                <path d="M0 48 C 30 46, 45 30, 75 34 S 120 52, 145 30 S 185 8, 200 12 L 200 60 L 0 60 Z" />
+              </svg>
             </Card>
           );
         })}

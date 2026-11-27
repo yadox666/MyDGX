@@ -8206,6 +8206,63 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(empty.status_code, 400)
         self.assertFalse(supports_endpoint(model, "/v1/chat/completions"))
 
+    def test_chatting_with_privacy_filter_returns_the_text_with_placeholders(self) -> None:
+        model = {
+            "id": "privacy-filter",
+            "engine": "privacy-filter",
+            "model_ref": "openai/privacy-filter",
+            "model_alias": "privacy-filter",
+            "endpoint_url": "http://127.0.0.1:8190",
+            "api_protocol": "openai",
+            "task": "redaction",
+        }
+        upstream = httpx.Response(200, json={"data": [{
+            "redacted_text": "Soy <PRIVATE_PERSON>. Clave AKIAIOSFODNN7EXAMPLE, token ghp_abcdefghijklmnopqrstuvwxyz0123456789.",
+            "spans": [{"label": "private_person", "start": 4, "end": 14, "placeholder": "<PRIVATE_PERSON>"}],
+        }]}, request=httpx.Request("POST", "http://127.0.0.1:8190/v1/redact"))
+        post = AsyncMock(return_value=upstream)
+        with (
+            patch(
+                "backend.gateway.loaded_routes",
+                new=AsyncMock(return_value=({"id": "profile"}, {"privacy-filter": model})),
+            ),
+            patch("backend.gateway.httpx.AsyncClient.post", new=post),
+            TestClient(gateway_app) as gateway,
+        ):
+            streamed = gateway.post("/v1/chat/completions", json={
+                "model": "privacy-filter", "stream": True,
+                "messages": [{"role": "user", "content": "Soy Juan Pérez. Clave AKIAIOSFODNN7EXAMPLE, token ghp_..."}],
+            })
+            plain = gateway.post("/v1/chat/completions", json={
+                "model": "privacy-filter",
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "Soy Juan Pérez."}]}],
+            })
+            title = gateway.post("/v1/chat/completions", json={
+                "model": "privacy-filter",
+                "messages": [{"role": "user", "content": "### Task:\nGenerate a concise title for the chat."}],
+            })
+            empty = gateway.post("/v1/chat/completions", json={
+                "model": "privacy-filter", "messages": [{"role": "user", "content": " "}],
+            })
+            post.return_value = httpx.Response(503, request=upstream.request)
+            failed = gateway.post("/v1/chat/completions", json={
+                "model": "privacy-filter", "messages": [{"role": "user", "content": "Soy Juan."}],
+            })
+        self.assertEqual(streamed.status_code, 200)
+        events = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
+        content = events[0]["choices"][0]["delta"]["content"]
+        self.assertTrue(content.startswith("```text\nSoy <PRIVATE_PERSON>. Clave <SECRET>, token <SECRET>.\n```"))
+        self.assertNotIn("AKIA", content)
+        self.assertIn("3 datos sustituidos: 1 persona, 2 secreto.", content)
+        self.assertEqual(plain.status_code, 200)
+        self.assertEqual(post.await_args_list[1].args[0], "http://127.0.0.1:8190/v1/redact")
+        self.assertEqual(post.await_args_list[1].kwargs["json"], {"model": "openai/privacy-filter", "input": "Soy Juan Pérez."})
+        self.assertEqual(title.json()["choices"][0]["message"]["content"], "{}")
+        self.assertEqual(post.await_count, 3)
+        self.assertEqual(empty.status_code, 400)
+        self.assertEqual(failed.status_code, 502)
+        self.assertNotIn("Juan", failed.text)
+
     def test_gateway_adapts_comfyui_image_edits_to_openai(self) -> None:
         model = {
             "id": "comfyui-image",

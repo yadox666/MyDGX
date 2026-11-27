@@ -1040,6 +1040,11 @@ def chat_draws_image(model: dict[str, Any], endpoint: str) -> bool:
     )
 
 
+def chat_redacts_text(model: dict[str, Any], endpoint: str) -> bool:
+    """Chat clients list Privacy Filter too; chatting with it returns the message with placeholders."""
+    return endpoint == "/v1/chat/completions" and model.get("task") == "redaction"
+
+
 def supports_gateway_protocol(model: dict[str, Any], endpoint: str) -> bool:
     protocol = str(model.get("api_protocol") or "openai")
     if protocol in {"openai", "ollama"}:
@@ -1066,7 +1071,7 @@ async def resolve_route(model_alias: str, endpoint: str) -> dict[str, Any] | JSO
             404,
             "model_not_found",
         )
-    if not supports_endpoint(model, endpoint) and not chat_draws_image(model, endpoint):
+    if not supports_endpoint(model, endpoint) and not chat_draws_image(model, endpoint) and not chat_redacts_text(model, endpoint):
         return openai_error(
             f"El modelo '{model_alias}' no admite este endpoint",
             400,
@@ -1189,6 +1194,83 @@ async def managed_comfyui_chat_response(model: dict[str, Any], payload: dict[str
         return openai_error("ComfyUI no devolvió una imagen", 502, "invalid_upstream_response")
     content_type = str(result.get("content_type") or "image/png")
     return chat_completion_response(payload, alias, f"![{alias}](data:{content_type};base64,{encoded})")
+
+
+# Privacy Filter misses credentials with an unambiguous shape, so the chat adapter masks them as well.
+SECRET_PATTERNS = (
+    re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----", re.S),
+    re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA)[0-9A-Z]{16}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b"),
+    re.compile(r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"(?<=\bBearer )[A-Za-z0-9._~+/-]{16,}=*", re.I),
+)
+REDACTION_LABELS = {
+    "private_person": "persona",
+    "private_email": "email",
+    "private_phone": "teléfono",
+    "private_address": "dirección",
+    "private_url": "URL",
+    "private_date": "fecha",
+    "account_number": "número de cuenta",
+    "secret": "secreto",
+}
+
+
+def mask_known_secrets(text: str) -> tuple[str, int]:
+    count = 0
+    for pattern in SECRET_PATTERNS:
+        text, replaced = pattern.subn("<SECRET>", text)
+        count += replaced
+    return text, count
+
+
+def redaction_chat_content(redacted: str, labels: dict[str, int]) -> str:
+    longest_run = max((len(run) for run in re.findall(r"`+", redacted)), default=0)
+    fence = "`" * max(3, longest_run + 1)
+    if labels:
+        found = ", ".join(f"{count} {REDACTION_LABELS.get(label, label)}" for label, count in labels.items())
+        summary = f"{sum(labels.values())} datos sustituidos: {found}."
+    else:
+        summary = "No se detectaron datos privados."
+    return f"{fence}text\n{redacted}\n{fence}\n\n_{summary}_"
+
+
+async def redaction_chat_response(model: dict[str, Any], payload: dict[str, Any]) -> Response:
+    alias = str(model.get("model_alias") or model["model_ref"])
+    text, background_task = chat_image_prompt(payload)
+    if background_task:
+        return chat_completion_response(payload, alias, "{}")
+    if not text:
+        return openai_error("Pega en el mensaje el texto que quieres anonimizar", 400, "input_required")
+    config = gateway_runtime_config()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(float(config["request_timeout_seconds"]))) as client:
+            upstream = await client.post(
+                upstream_url(model, "/v1/redact"),
+                json={"model": upstream_model_id(model), "input": text},
+            )
+    except (httpx.HTTPError, ValueError):
+        return openai_error("El modelo dejó de estar disponible", 503, "upstream_unavailable")
+    if upstream.status_code == 413:
+        return openai_error("El texto supera el límite de Privacy Filter", 413, "request_too_large")
+    if upstream.status_code >= 400:
+        return openai_error("Privacy Filter no pudo procesar el texto", 502, "invalid_upstream_response")
+    try:
+        result = upstream.json()["data"][0]
+        redacted = str(result["redacted_text"])
+    except (ValueError, KeyError, IndexError, TypeError):
+        return openai_error("Privacy Filter devolvió una respuesta inválida", 502, "invalid_upstream_response")
+    labels: dict[str, int] = {}
+    for span in result.get("spans") or []:
+        label = str(span.get("label") or "")
+        labels[label] = labels.get(label, 0) + 1
+    redacted, extra = mask_known_secrets(redacted)
+    if extra:
+        labels["secret"] = labels.get("secret", 0) + extra
+    return chat_completion_response(payload, alias, redaction_chat_content(redacted, labels))
 
 
 async def managed_comfyui_response(
@@ -1448,6 +1530,8 @@ async def proxy_openai_request(request: Request, endpoint: str) -> Response:
     model = await resolve_route(requested, endpoint)
     if isinstance(model, JSONResponse):
         return model
+    if chat_redacts_text(model, endpoint):
+        return await redaction_chat_response(model, payload)
     protocol = str(model.get("api_protocol") or "openai")
     if protocol == "comfyui":
         try:

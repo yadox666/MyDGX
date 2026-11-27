@@ -264,7 +264,7 @@ Detalle en [Asistente MyDGX](asistente-mydgx.md).
 | POST | `/v1/messages/count_tokens` | Recuento de tokens estilo Anthropic. |
 | POST | `/v1/embeddings` | Embeddings. |
 | POST | `/v1/rerank` | Reranking de documentos. |
-| POST | `/v1/redact` | Redacción de datos personales con un perfil de Privacy Filter. |
+| POST | `/v1/redact` | Redacción de datos personales con un perfil de Privacy Filter. También se puede chatear con ese modelo (por ejemplo desde Open WebUI): `/v1/chat/completions` devuelve el último mensaje del usuario con marcadores como `<PRIVATE_EMAIL>` o `<SECRET>` en un bloque de código y un resumen de lo sustituido. En el chat se enmascaran además credenciales con formato inequívoco (claves AWS, tokens de GitHub, OpenAI o Slack, JWT, claves privadas PEM y `Bearer …`). |
 | POST | `/v1/images/generations` | Generación de imagen (ComfyUI). |
 | POST | `/v1/images/edits` | Edición img2img o inpainting mediante ComfyUI. Acepta JSON con data URLs o multipart; no descarga imágenes remotas. |
 | POST | `/v1/audio/transcriptions` | Transcripción (Whisper). |
